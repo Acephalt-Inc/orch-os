@@ -28,6 +28,8 @@ class Parser {
   line = 1;
   /** Every [table] header, in file order: its dotted name and the offset of its line. */
   headers: TableHeader[] = [];
+  /** How each key=value line was written: the table it is under, its key parts, an inline-table value. */
+  assignments: Assignment[] = [];
   constructor(readonly s: string) {}
 
   err(msg: string): never {
@@ -223,9 +225,13 @@ class Parser {
     const root: Table = {};
     const defined = new Set<string>();
     let cur = root;
+    let table: string[] = [];
     for (;;) {
       this.skipAll();
-      if (this.eof()) return root;
+      if (this.eof()) {
+        Object.defineProperty(root, ASSIGNMENTS, { value: this.assignments, enumerable: false });
+        return root;
+      }
       if (this.peek() === "[") {
         if (this.s[this.i + 1] === "[") this.err("arrays of tables are not supported");
         const start = this.s.lastIndexOf("\n", this.i - 1) + 1;
@@ -237,6 +243,7 @@ class Parser {
         if (defined.has(id)) this.err(`duplicate table [${k.join(".")}]`);
         defined.add(id);
         this.headers.push({ name: k, start });
+        table = k;
         cur = root;
         for (const part of k) {
           if (UNSAFE_KEYS.has(part)) this.err(`key ${part} is not allowed`);
@@ -251,11 +258,25 @@ class Parser {
       this.skipWs();
       if (this.peek() !== "=") this.err("expected = after key");
       this.i++;
-      this.assign(cur, k, this.value());
+      const v = this.value();
+      this.assign(cur, k, v);
+      this.assignments.push({ table, key: k, inline: typeof v === "object" && v !== null && !Array.isArray(v) });
       this.endOfLine();
     }
   }
 }
+
+export interface Assignment {
+  /** the [table] the line is under ([] = before any header) */
+  table: string[];
+  /** key parts: more than one = a dotted key */
+  key: string[];
+  /** the value is an inline table */
+  inline: boolean;
+}
+
+/** A parsed root carries, as a hidden (non-enumerable) property, how each key was written. */
+export const ASSIGNMENTS = Symbol("toml assignments");
 
 export function parseToml(text: string): Record<string, any> {
   return new Parser(text).parse();
@@ -296,9 +317,11 @@ function leadInStart(seg: string): number {
  */
 export function replaceTables(text: string, target: (name: string[]) => boolean, block: string): string {
   const ranges = tableRanges(text, target);
+  const nl = eolOf(text);
+  block = block.replace(/\r?\n/g, nl);
   if (!ranges.length) {
     if (!block) return text;
-    const sep = text === "" || text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+    const sep = text === "" || text.endsWith(nl + nl) ? "" : text.endsWith(nl) ? nl : nl + nl;
     return text + sep + block;
   }
   let out = "";
@@ -308,6 +331,12 @@ export function replaceTables(text: string, target: (name: string[]) => boolean,
     pos = e;
   });
   return out + text.slice(pos);
+}
+
+/** The line ending a text uses: CRLF when its first line ends in CRLF, else LF. */
+export function eolOf(text: string): string {
+  const i = text.indexOf("\n");
+  return i > 0 && text[i - 1] === "\r" ? "\r\n" : "\n";
 }
 
 /** The [start, end) offsets of every table matching `target`, as replaceTables() cuts them. */

@@ -12,7 +12,7 @@
  * agents, not a security boundary. With no [profile] table none of this code runs.
  */
 import { ConfigError } from "./config.js";
-import { replaceTables, tableRanges, tomlKey, tomlValue } from "./toml.js";
+import { ASSIGNMENTS, type Assignment, replaceTables, tableRanges, tomlKey, tomlValue } from "./toml.js";
 import { isPlainObject, validName } from "./util.js";
 
 export type Compute = "one" | "same-vendor" | "multi-vendor";
@@ -75,7 +75,8 @@ export function cellOf(compute: Compute, people: People): Cell {
  */
 export function policy(p: PolicyInput, tier: Tier): Policy {
   const cell = cellOf(p.compute, p.people);
-  let { needAgent, needTeammate, authority } = TABLE[cell][tier];
+  // anything but "low" (a typo, a missing value) is the fail-closed tier
+  let { needAgent, needTeammate, authority } = TABLE[cell][tier === "low" ? "low" : "high"];
   if (p.degraded && authority === "auto") {
     authority = p.people === "solo" ? "owner" : "teammate";
     needTeammate = authority === "teammate";
@@ -128,16 +129,53 @@ function oneOf<T extends string>(v: unknown, allowed: T[], key: string, dflt?: T
   return v as T;
 }
 
-function nameMap(v: unknown, table: string, what: string): Record<string, string> {
+/** `lower`: values are compared case-insensitively (vendor names), so they are trimmed and lower-cased. */
+function nameMap(v: unknown, table: string, what: string, lower = false): Record<string, string> {
   if (v === undefined) return {};
   if (!isPlainObject(v)) bad(`[${table}] must be a table`);
   const out: Record<string, string> = {};
   for (const [k, x] of Object.entries(v)) {
     if (!validName(k)) bad(`[${table}] '${k}' is not a valid name: use letters, digits, . @ _ -`);
-    if (typeof x !== "string" || !validName(x)) bad(`[${table}] ${k} must be ${what} (got ${JSON.stringify(x)})`);
-    out[k] = x;
+    const val = typeof x === "string" && lower ? vendorKey(x) : x;
+    if (typeof val !== "string" || !validName(val)) bad(`[${table}] ${k} must be ${what} (got ${JSON.stringify(x)})`);
+    out[k] = val;
   }
   return out;
+}
+
+/** Vendor names compare trimmed and case-insensitively: "Claude" and "claude" are one vendor. */
+export function vendorKey(v: string): string {
+  return v.trim().normalize("NFC").toLowerCase();
+}
+
+/**
+ * high_paths globs are repository-relative: a leading "/" (a CODEOWNERS or gitignore habit) is
+ * dropped, so "/migrations/**" means "migrations/**". A glob that is empty after that is an error.
+ */
+function globList(v: unknown): string[] {
+  return strList(v, "high_paths").map((g) => {
+    const s = g.replace(/^\/+/, "");
+    if (!s) bad(`[profile] high_paths: '${g}' matches no file`);
+    return s;
+  });
+}
+
+/**
+ * The profile must be written as [profile], [profile.accounts] and [profile.agents] tables with
+ * plain keys: no dotted keys, no inline tables, nothing under another table. Only that form can
+ * be rewritten in place by `profile update`. Checked when the config came from parseToml.
+ */
+export function checkForm(cfg: Record<string, any>): void {
+  const form: Assignment[] | undefined = (cfg as any)[ASSIGNMENTS];
+  if (!form) return;
+  for (const a of form) {
+    const path = [...a.table, ...a.key];
+    if (path[0] !== "profile") continue;
+    const shown = path.join(".");
+    if (a.table[0] !== "profile") bad(`[profile] must be written as [profile] tables; found '${shown}' under ${a.table.length ? `[${a.table.join(".")}]` : "the top level"}`);
+    if (a.key.length > 1) bad(`[profile] must be written with plain keys; found the dotted key '${a.key.join(".")}' in [${a.table.join(".")}] (use a [${[...a.table, ...a.key.slice(0, -1)].join(".")}] table)`);
+    if (a.inline) bad(`[profile] must be written without inline tables; found '${shown}' (use a [${shown}] table)`);
+  }
 }
 
 /** The validated profile, or null when config.toml has no [profile] table. Throws ConfigError. */
@@ -145,8 +183,9 @@ export function readProfile(cfg: Record<string, any>): Profile | null {
   const raw = cfg.profile;
   if (raw === undefined) return null;
   if (!isPlainObject(raw)) bad("[profile] must be a table");
+  checkForm(cfg);
   for (const k of Object.keys(raw)) if (!KEYS.includes(k)) bad(`[profile] unknown key '${k}' (known: ${KEYS.join(", ")})`);
-  const accounts = nameMap(raw.accounts, "profile.accounts", "a vendor name, e.g. \"claude\"");
+  const accounts = nameMap(raw.accounts, "profile.accounts", "a vendor name, e.g. \"claude\"", true);
   const byName = nameMap(raw.agents, "profile.agents", "an account id");
   const agents: Record<string, string> = {};
   for (const [name, acct] of Object.entries(byName)) {
@@ -165,7 +204,7 @@ export function readProfile(cfg: Record<string, any>): Profile | null {
     people: oneOf(raw.people, PEOPLE, "people"),
     lead_account: lead,
     default_tier: oneOf(raw.default_tier, TIERS, "default_tier", "high"),
-    high_paths: strList(raw.high_paths, "high_paths"),
+    high_paths: globList(raw.high_paths),
     teammates: strList(raw.teammates, "teammates"),
     max_workers: count(raw.max_workers, 0, "max_workers"),
     workers_per_account: count(raw.workers_per_account, 2, "workers_per_account"),
@@ -379,7 +418,7 @@ export function capabilityRows(p: Profile, env: Env): CapRow[] {
   }
   for (const v of vendors) {
     const ids = accts.filter((a) => p.accounts[a] === v);
-    const where = env.found.includes(v) ? "CLI found" : env.configured.includes(v) ? `[agents.${v}] configured` : "";
+    const where = env.found.some((f) => vendorKey(f) === v) ? "CLI found" : env.configured.some((c) => vendorKey(c) === v) ? `[agents.${v}] configured` : "";
     rows.push(where ? [true, `profile vendor ${v}`, where]
       : [false, `profile vendor ${v}`, `${ids.length > 1 ? "accounts" : "account"} ${ids.join(", ")} ${ids.length > 1 ? "are" : "is"} on '${v}', ` +
         `but no ${v} CLI was found and no [agents.${v}] is configured`]);

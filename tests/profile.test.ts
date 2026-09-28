@@ -55,6 +55,13 @@ describe("ProfilePolicy", () => {
     }
   });
 
+  it("an_unknown_tier_is_treated_as_high", () => {
+    for (const row of ROWS.filter((x) => x.tier === "high")) {
+      const want = P.policy(input(row.compute, row.people), "high");
+      for (const t of ["medium", "HIGH", "LOW", "", undefined]) expect(P.policy(input(row.compute, row.people), t as P.Tier), `${row.cell} ${t}`).toEqual(want);
+    }
+  });
+
   it("a_degrade_never_gives_auto", () => {
     for (const row of ROWS) {
       const got = P.policy(input(row.compute, row.people, { degraded: true }), row.tier);
@@ -92,6 +99,16 @@ describe("ProfileDegrade", () => {
       const pol = P.policyFor(p, "low");
       expect([pol.cell, pol.declaredCell, pol.authority]).toEqual([people === "solo" ? "A" : "D", people === "solo" ? "B" : "E", people === "solo" ? "owner" : "teammate"]);
     }
+  });
+
+  it("vendor_names_are_trimmed_and_lower_cased", () => {
+    const p = prof(C_SOLO.replace('c2 = "claude"', 'c2 = "Claude "').replace('x1 = "codex"', 'x1 = "CODEX"'));
+    expect(p.accounts).toEqual({ c1: "claude", c2: "claude", x1: "codex" });
+    expect(P.effective(p)).toEqual({ compute: "multi-vendor", degraded: [] });
+    expect(P.grade(p, "lead", ["w1"])).toBe("cross-account");
+    const same = prof(C_SOLO.replace('x1 = "codex"', 'x1 = "Claude"'));
+    expect(P.effective(same)).toEqual({ compute: "same-vendor", degraded: ["no-second-vendor"] });
+    expect(P.grade(same, "rx", ["w1"])).toBe("cross-account");
   });
 
   it("one_vendor_drops_multi_vendor_to_same_vendor_without_auto", () => {
@@ -167,6 +184,14 @@ describe("ProfileTier", () => {
     expect(P.chooseTier(prof('[profile]\ncompute = "one"\npeople = "solo"\ndefault_tier = "low"\n'), null, null)).toEqual({ tier: "low", source: "default" });
   });
 
+  it("a_leading_slash_in_high_paths_is_dropped", () => {
+    const p = prof('[profile]\ncompute = "one"\npeople = "solo"\ndefault_tier = "low"\nhigh_paths = ["/migrations/**", "//infra/*.tf"]\n');
+    expect(p.high_paths).toEqual(["migrations/**", "infra/*.tf"]);
+    expect(P.chooseTier(p, null, ["migrations/0042.sql"])).toEqual({ tier: "high", source: "path: migrations/0042.sql" });
+    expect(P.chooseTier(p, null, ["infra/dns.tf"]).tier).toBe("high");
+    expect(() => prof('[profile]\ncompute = "one"\npeople = "solo"\nhigh_paths = ["/"]\n')).toThrow("high_paths: '/' matches no file");
+  });
+
   it("globs", () => {
     const m = (g: string, f: string) => P.globRe(g).test(f);
     expect([m("src/*.ts", "src/a.ts"), m("src/*.ts", "src/x/a.ts"), m("src/**", "src/x/a.ts"), m("src/**", "src/a.ts")]).toEqual([true, false, true, true]);
@@ -177,7 +202,10 @@ describe("ProfileTier", () => {
   it("changed_files_are_read_or_null", () => {
     expect(M.changedFiles(M.loadFixture("high-path"))).toEqual(["src/app.ts", "migrations/0042_add_index.sql"]);
     expect(M.changedFiles(M.loadFixture("approved"))).toBeNull();
-    expect(M.changedFiles({ files: [{ path: 3 }] })).toBeNull();
+    expect(M.changedFiles({ files: [{ path: 3 }], changedFiles: 1 })).toBeNull();
+    expect(M.changedFiles({ files: [{ path: "a" }] })).toBeNull(); // no count: cannot tell it is complete
+    expect(M.changedFiles({ files: [{ path: "a" }], changedFiles: 2 })).toBeNull(); // a partial list
+    expect(M.changedFiles({ files: [{ path: "a" }], changedFiles: 1 })).toEqual(["a"]);
   });
 });
 
@@ -324,6 +352,18 @@ nice = 5
     const out = P.writeProfileText(split, raw);
     expect(out).toBe(P.renderProfile(raw) + '\n[merge]\nrepo = "o/n"\n\n');
     expect(parseToml(out).merge).toEqual({ repo: "o/n" });
+  });
+
+  it("writer_keeps_crlf", () => {
+    const crlf = TEXT.replace(/\n/g, "\r\n");
+    const raw = { compute: "one", people: "solo", accounts: { a1: "claude" }, agents: {} };
+    const out = P.writeProfileText(crlf, raw);
+    expect(out.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(out.startsWith(crlf.slice(0, crlf.indexOf("[profile]")))).toBe(true);
+    expect(out.endsWith(crlf.slice(crlf.indexOf("\r\n# about workers")))).toBe(true);
+    expect(parseToml(out).profile).toEqual(raw);
+    const noProfile = '[orch]\r\nteam = "x"\r\n';
+    expect(P.writeProfileText(noProfile, raw)).toBe(noProfile + "\r\n" + P.renderProfile(raw).replace(/\n/g, "\r\n"));
   });
 
   it("profile_block_is_verbatim", () => {

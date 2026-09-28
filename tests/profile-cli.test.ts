@@ -83,7 +83,8 @@ describe("NoProfileUnchanged", () => {
     await run("init", "--no-handbook");
     process.env.ORCH_TEST_OUT = join(d.bins, "argv.txt");
     process.env.ORCH_TEST_JSON = join(ROOT, "fixtures", "approved.json");
-    fakeBin(d.bins, "gh", 'printf "%s\\n" "$@" > "$ORCH_TEST_OUT"; cat "$ORCH_TEST_JSON"');
+    // records the argv of `gh pr view` only; `gh api` prints nothing
+    fakeBin(d.bins, "gh", '[ "$1" = api ] && exit 0; printf "%s\\n" "$@" > "$ORCH_TEST_OUT"; cat "$ORCH_TEST_JSON"');
     const fields = () => readFileSync(process.env.ORCH_TEST_OUT!, "utf8").split("\n").at(-2);
     await run("merge-gate", "5", "--repo", "o/n");
     expect(fields()).toBe("author,headRefOid,reviews,labels,statusCheckRollup");
@@ -92,7 +93,7 @@ describe("NoProfileUnchanged", () => {
     expect(fields()).toBe("author,headRefOid,reviews,labels,statusCheckRollup");
     expect((await run("profile", "update", "--high-path", "migrations/**"))[0]).toBe(0);
     await run("merge-gate", "5", "--repo", "o/n");
-    expect(fields()).toBe("author,headRefOid,reviews,labels,statusCheckRollup,files");
+    expect(fields()).toBe("author,headRefOid,reviews,labels,statusCheckRollup,files,changedFiles,number");
   });
 });
 
@@ -248,8 +249,44 @@ describe("ProfileCommand", () => {
     writeFileSync(cfgPath(d.home), text);
     const [code, , err] = await run("profile", "update", "--people", "team");
     expect(code).toBe(2);
-    expect(err).toContain("could not be rewritten as [profile] tables in place");
+    expect(err).toContain("found 'profile' under the top level");
+    expect(err).toContain("nothing written");
     expect(readCfg(d.home)).toBe(text);
+  });
+
+  it("dotted_keys_and_inline_tables_in_the_profile_are_config_errors", async () => {
+    await run("init", "--no-handbook");
+    const base = readCfg(d.home);
+    for (const [block, msg] of [
+      ['[profile]\ncompute = "one"\npeople = "solo"\naccounts.a1 = "claude"\n', "found the dotted key 'accounts.a1' in [profile]"],
+      ['[profile]\ncompute = "one"\npeople = "solo"\naccounts = { a1 = "claude" }\n', "found 'profile.accounts' (use a [profile.accounts] table)"],
+      ['[profile]\ncompute = "one"\npeople = "solo"\n[profile.accounts]\na1 = "claude"\n[profile.agents]\nr1.x = "a1"\n', "found the dotted key 'r1.x' in [profile.agents]"],
+      ['profile.compute = "one"\nprofile.people = "solo"\n', "found 'profile.compute' under the top level"],
+    ] as [string, string][]) {
+      const text = block.startsWith("profile.") ? block + base : base + "\n" + block;
+      writeFileSync(cfgPath(d.home), text);
+      const [c1, , e1] = await run("merge-gate", "101", "--fixture", "approved");
+      expect([c1, e1.includes(msg)], block).toEqual([2, true]);
+      const [c2, , e2] = await run("profile", "update", "--people", "team");
+      expect([c2, e2.includes(msg), e2.includes("nothing written")], block).toEqual([2, true, true]);
+      expect(readCfg(d.home)).toBe(text);
+      expect((await run("doctor"))[1]).toContain("FAIL  profile");
+    }
+  });
+
+  it("a_crlf_config_stays_crlf", async () => {
+    await run("init", "--no-handbook");
+    const crlf = readCfg(d.home).replace(/\n/g, "\r\n");
+    writeFileSync(cfgPath(d.home), crlf);
+    expect((await run("profile", "update", "--compute", "one", "--people", "solo", "--account", "a1=claude"))[0]).toBe(0);
+    const once = readCfg(d.home);
+    expect(once.startsWith(crlf)).toBe(true);
+    expect(once.replace(/\r\n/g, "")).not.toContain("\n"); // no bare LF anywhere
+    expect((await run("profile", "update", "--teammate", "carol"))[0]).toBe(0);
+    const twice = readCfg(d.home);
+    expect(twice.startsWith(crlf)).toBe(true);
+    expect(twice.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(parseToml(twice).profile.teammates).toEqual(["carol"]);
   });
 
   it("show_text_and_json", async () => {
@@ -393,6 +430,67 @@ describe("ProfileMergeGate", () => {
     expect((await run("merge-gate", "101", "--fixture", fx, "--tier", "high"))[1]).toContain("review=none needed=cross-account teammate=approved");
     expect((await run("merge-gate", "101", "--fixture", "teammate-approved", "--tier", "high", "--auto"))[0]).toBe(1);
     expect((await run("merge-gate", "101", "--fixture", "teammate-approved", "--tier", "low", "--auto"))[0]).toBe(0);
+  });
+});
+
+describe("ProfileFileList", () => {
+  const d = useBins();
+  const files = (n: number) => Array.from({ length: n }, (_, i) => (i === 100 ? "migrations/0042_add_index.sql" : `src/f${String(i).padStart(3, "0")}.ts`));
+
+  /** fake gh: `pr view` prints PR data with the first 100 files and changedFiles=101; `api` prints `apiFiles` (or fails). */
+  function fakeGh(apiFiles: string[] | "fail") {
+    const pr = structuredClone(JSON.parse(readFileSync(join(ROOT, "fixtures", "approved.json"), "utf8")));
+    Object.assign(pr, { number: 7, changedFiles: 101, files: files(101).slice(0, 100).map((path) => ({ path })) });
+    writeFileSync(join(d.bins, "pr.json"), JSON.stringify(pr));
+    writeFileSync(join(d.bins, "api.txt"), apiFiles === "fail" ? "" : apiFiles.join("\n") + "\n");
+    fakeBin(d.bins, "gh", apiFiles === "fail" ? `[ "$1" = api ] && { echo "HTTP 502" >&2; exit 1; }; cat "${d.bins}/pr.json"`
+      : `if [ "$1" = api ]; then printf "%s\\n" "$@" > "${d.bins}/api-argv.txt"; cat "${d.bins}/api.txt"; else cat "${d.bins}/pr.json"; fi`);
+  }
+
+  const setup = async () => {
+    await run("init", "--no-handbook");
+    expect((await run("profile", "update", "--compute", "same-vendor", "--people", "solo", "--default-tier", "low", "--high-path", "migrations/**",
+      "--account", "c1=claude", "--account", "c2=claude", "--agent", "alice=c1", "--agent", "bob=c2"))[0]).toBe(0);
+  };
+
+  it("a_path_past_the_first_100_files_is_not_missed", async () => {
+    await setup();
+    // the paginated list is also cut at 100: the count does not match changedFiles, so the list is unreadable
+    fakeGh(files(101).slice(0, 100));
+    const [code, out] = await run("merge-gate", "7", "--repo", "o/n", "--auto");
+    expect(code).toBe(1);
+    expect(out).toContain("profile=B tier=high(files unreadable) review=cross-account needed=cross-account teammate=n/a authority=owner\n");
+    expect(out).toContain("=> BLOCKED (--auto: merge authority is owner, not auto)");
+    // the full paginated list finds file #101
+    fakeGh(files(101));
+    const [code2, out2] = await run("merge-gate", "7", "--repo", "o/n", "--auto");
+    expect(code2).toBe(1);
+    expect(out2).toContain("tier=high(path: migrations/0042_add_index.sql)");
+    expect(readFileSync(join(d.bins, "api-argv.txt"), "utf8").split("\n").slice(0, -1)).toEqual(["api", "--paginate", "repos/o/n/pulls/7/files", "--jq", ".[].filename"]);
+    // a failed fetch is unreadable too
+    fakeGh("fail");
+    expect((await run("merge-gate", "7", "--repo", "o/n", "--auto"))[1]).toContain("tier=high(files unreadable)");
+    // control: 101 files without a high path, all listed: the default tier (low) holds and auto may merge
+    fakeGh(files(100).concat(["src/f100.ts"]));
+    const pr = JSON.parse(readFileSync(join(d.bins, "pr.json"), "utf8"));
+    expect(pr.changedFiles).toBe(101);
+    expect(await run("merge-gate", "7", "--repo", "o/n", "--auto")).toEqual([0, "#7 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=0 label=off\n" +
+      "profile=B tier=low(default) review=cross-account needed=cross-account teammate=n/a authority=auto\n=> PASS\n", ""]);
+  });
+});
+
+describe("ProfileVendorCase", () => {
+  const d = useBins();
+
+  it("vendor_names_differing_in_case_are_one_vendor", async () => {
+    await run("init", "--no-handbook");
+    writeFileSync(cfgPath(d.home), readCfg(d.home) + '\n[profile]\ncompute = "multi-vendor"\npeople = "team"\nteammates = ["carol"]\n\n' +
+      '[profile.accounts]\nc1 = "claude"\nc2 = "Claude"\n\n[profile.agents]\nalice = "c1"\nbob = "c2"\n');
+    const [code, out] = await run("merge-gate", "7", "--fixture", "approved", "--tier", "low", "--auto");
+    expect(code).toBe(1);
+    expect(out).toContain("profile=E tier=low(flag) review=cross-account needed=cross-account teammate=missing authority=teammate degraded=no-second-vendor\n");
+    expect(out).toContain("=> BLOCKED (");
+    expect((await run("doctor"))[1]).toMatch(/SKIP {2}profile vendors +multi-vendor declared, but every account is on 'claude'/);
   });
 });
 

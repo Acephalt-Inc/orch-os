@@ -820,6 +820,12 @@ const cmdProfile: Run = (a, io) => {
     return 2;
   };
   if (cfg.profile !== undefined && !isPlainObject(cfg.profile)) return fail("[profile] is not a table");
+  try {
+    P.checkForm(cfg); // only [profile] tables with plain keys can be rewritten in place
+  } catch (e) {
+    if (e instanceof C.ConfigError) return fail(e.message);
+    throw e;
+  }
   if (cfg.profile === undefined && !(a.compute && a.people)) return fail("no [profile] yet: creating one needs both --compute and --people");
   const raw: Record<string, any> = structuredClone(cfg.profile ?? {});
   try {

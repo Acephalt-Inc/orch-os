@@ -182,10 +182,15 @@ export function prAuthor(info: unknown): string {
   return login(obj(info, "PR data").author);
 }
 
-/** Profiles: the changed file paths (`gh pr view --json files`), or null when they cannot be read. */
+/**
+ * Profiles: the changed file paths, or null when the full list cannot be read. `files` must be
+ * a list of {path} and `changedFiles` (the PR's own count) must be a number equal to its length:
+ * `gh pr view --json files` stops at 100 files, and a partial list is not a list that was read.
+ */
 export function changedFiles(info: unknown): string[] | null {
   const f = isPlainObject(info) ? info.files : undefined;
-  if (!Array.isArray(f)) return null;
+  const n = isPlainObject(info) ? info.changedFiles : undefined;
+  if (!Array.isArray(f) || typeof n !== "number" || f.length !== n) return null;
   const paths = f.map((x) => (isPlainObject(x) && typeof x.path === "string" ? x.path : null));
   return paths.some((x) => x === null) ? null : (paths as string[]);
 }
@@ -255,10 +260,10 @@ function evaluateComments(pr: Record<string, any>, res: Record<string, any>, hea
 
 /**
  * The `gh pr view --json` field list. The github source is unchanged from v2.0; comments adds
- * `comments`; `files` is added only for a profile with path rules.
+ * `comments`; `files,changedFiles,number` are added only for a profile with path rules.
  */
 export function liveFields(source: ReviewSource = "github", files = false): string {
-  return "author,headRefOid,reviews,labels,statusCheckRollup" + (source === "comments" ? ",comments" : "") + (files ? ",files" : "");
+  return "author,headRefOid,reviews,labels,statusCheckRollup" + (source === "comments" ? ",comments" : "") + (files ? ",files,changedFiles,number" : "");
 }
 
 export function fetchLive(pr: string, repo: string, source: ReviewSource = "github", files = false): unknown {
@@ -268,7 +273,24 @@ export function fetchLive(pr: string, repo: string, source: ReviewSource = "gith
     liveFields(source, files)], { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || "gh pr view failed");
-  return JSON.parse(out.stdout);
+  const info = JSON.parse(out.stdout);
+  if (files && isPlainObject(info)) info.files = allFiles(repo, info.number);
+  return info;
+}
+
+/**
+ * Every changed file, through the paginated REST list (`gh pr view` stops at 100). Any error
+ * gives null, so the file list reads as unreadable and the tier is high; changedFiles() then
+ * also checks the count against the PR's `changedFiles`.
+ */
+function allFiles(repo: string, number: unknown): { path: string }[] | null {
+  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) return null;
+  try {
+    const out = gh(["api", "--paginate", `repos/${repo}/pulls/${number}/files`, "--jq", ".[].filename"]);
+    return out.split("\n").filter((l) => l !== "").map((path) => ({ path }));
+  } catch {
+    return null;
+  }
 }
 
 function gh(args: string[]): string {
