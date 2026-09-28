@@ -34,6 +34,20 @@ orch mem add review-at-head -t rule -d "只有针对当前 head 提交的批准�
 
 需要 Node.js 20 及以上,macOS 或 Linux。运行时零依赖。从克隆安装见[安装](#安装)。
 
+### 单人流程:一个 GitHub 账号,多个代理
+
+GitHub 不允许 PR 作者批准自己的 PR,所以所有代理都用同一个账号推送和审查时,正常的批准无法产生,默认闸门永远不会通过。这时把闸门切换到**审查评论**:一条 PR 评论,第一行是 `ORCH-REVIEW APPROVE <完整 head sha> by <代理名>`。它只对 PR 当前的 head 提交有效,并且只有当 `<代理名>` 不是该 PR 对应任务在 `orch task` 里的持有者时才算数。
+
+```sh
+orch task claim parser-fix --as w1             # w1 写代码并开 PR 101
+orch review approve 101 --as r1                # r1 审查了 head;通过 gh 发出审查评论
+orch merge-gate 101 --reviews comments --task parser-fix   # PASS:CI 绿、r1 不是 w1、审查评论针对当前 head
+```
+
+`orch review changes` 和 `orch review reject` 发出阻断评论。在 `~/.orch/config.toml` 里设 `[review] source = "comments"` 可设为默认。离线演示:`orch task claim demo --as w1 && orch merge-gate 101 --fixture comment-approved --reviews comments --task demo`。
+
+**这是流程闸门,不是安全边界。** 它让互相配合的代理对"谁在哪个提交上审查了什么"保持诚实,但挡不住持有账号令牌的人:他可以用任何代理名发审查评论。如果需要作者无法伪造的批准,请给审查代理单独的 GitHub 账号或 App 身份,并保留默认的 `github` 来源。
+
 ## 它做什么,帮谁
 
 ORCH-os 面向已经在用命令行编程代理(Claude Code、Codex CLI、Gemini CLI 等)、并且开始**在同一个仓库里同时跑多个代理**的人。多个代理会带来单个代理没有的问题:

@@ -34,6 +34,20 @@ orch mem add review-at-head -t rule -d "Approvals count only for the current hea
 
 Node.js 20 or newer, macOS or Linux. No runtime dependencies. Installing from a clone is under [Install](#install).
 
+### Solo flow: one GitHub account, several agents
+
+GitHub does not let a PR's author approve it, so when every agent pushes and reviews as the same account, a normal approval is impossible and the default gate never passes. Switch the gate to **review comments**: a PR comment whose first line is `ORCH-REVIEW APPROVE <full head sha> by <agent>`. It counts only for the PR's current head commit, and only when `<agent>` is not the holder of the PR's task in `orch task`.
+
+```sh
+orch task claim parser-fix --as w1             # w1 writes the change and opens PR 101
+orch review approve 101 --as r1                # r1 reviewed the head; posts the review comment through gh
+orch merge-gate 101 --reviews comments --task parser-fix   # PASS: CI green, r1 != w1, review comment is for the head
+```
+
+`orch review changes` and `orch review reject` post the blocking forms. Set `[review] source = "comments"` in `~/.orch/config.toml` to make it the default. Offline demo: `orch task claim demo --as w1 && orch merge-gate 101 --fixture comment-approved --reviews comments --task demo`.
+
+**This is a process gate, not a security boundary.** It keeps cooperating agents honest about who reviewed what and at which commit. It does not stop anyone who holds the account's token: they can post a review comment under any agent name. If you need an approval that an author cannot produce, give the reviewer its own GitHub account or app identity and keep the default `github` source.
+
 ## What it does, and who it helps
 
 ORCH-os is for people who already use a CLI coding agent (Claude Code, Codex CLI, Gemini CLI, …) and now run **more than one at a time on the same repository**. That brings problems a single agent does not have:
@@ -44,7 +58,7 @@ ORCH-os is for people who already use a CLI coding agent (Claude Code, Codex CLI
 | Questions between agents get lost; nobody knows what was answered | **Addressed messages** (`orch msg`): `QUESTION`, `ANSWER`, `DONE`, `BLOCKED`, sent to a name or to everyone, with a read cursor and acks per reader, and `msg watch` to wait for the next one. |
 | Two workers pick up the same task | **Task claims** (`orch task`): exactly one holder per task, fenced by an epoch; a claimed task cannot be taken until it is released or expires. |
 | Workers overwrite each other's files | **A git worktree per worker**: `orch worker start --worktree` gives each worker its own branch and directory; `stop` removes it only if it is clean. |
-| A PR merges on an approval of an older commit, or on the author's own say-so | A **merge gate** on GitHub reviews: CI green, enough non-author approvals of the PR's current head commit, and no outstanding "changes requested". |
+| A PR merges on an approval of an older commit, or on the author's own say-so | A **merge gate** on GitHub reviews: CI green, enough non-author approvals of the PR's current head commit, and no outstanding "changes requested". Agents that share one GitHub account use review comments instead (see [Solo flow](#solo-flow-one-github-account-several-agents)). |
 | Background agents are orphaned, run forever, or cannot be stopped cleanly | **Workers**: each is a detached process in its own process group, with a time limit, a nice level, a log directory, and a stop that reaches the whole group. |
 | Many agents plus test runs overload the machine | A **load governor**: per-core load and swap (and optionally temperature) map to four tiers with hysteresis. New workers are refused while load is HIGH. |
 | Every session starts from zero | **Long-lived notes** (`orch mem`): one Markdown file per rule or lesson, a capped index read at session start, and retire-with-successor instead of delete. |
@@ -62,7 +76,8 @@ ORCH-os does not replace your agent. It decides who leads, how agents talk, who 
 | Mailbox | `orch mailbox post\|read` | Broadcast notes in one Markdown file; a section per role; locked posts. |
 | Messages | `orch msg send\|read\|ack\|watch` | Addressed, typed, per-reader cursor and ack; JSON-lines storage that a message body cannot forge. |
 | Task claims | `orch task claim\|renew\|release\|status\|list` | One lease per task: exclusive, epoch-fenced, no double claim. |
-| Merge gate | `orch merge-gate <pr>` | CI + non-author approvals at the live head + no changes requested; optional required label. Live via `gh`, or offline via bundled fixtures. |
+| Merge gate | `orch merge-gate <pr>` | CI + non-author approvals at the live head + no changes requested; optional required label. Live via `gh`, or offline via bundled fixtures. `--reviews comments --task ID` reads review comments instead of GitHub reviews. |
+| Review comments | `orch review approve\|changes\|reject <pr> --as NAME` | Posts `ORCH-REVIEW <verdict> <head sha> by NAME` as a PR comment, for the comments review source. |
 | Workers | `orch worker start\|list\|stop` | Detached process group, time limit, nice, task on stdin, logs; optional git worktree per worker. |
 | Load governor | `orch load` | NORMAL/BUSY/HIGH/CRITICAL with hysteresis; never kills. |
 | Notes | `orch mem add\|search\|retire` | One file per entry with frontmatter; generated, capped `INDEX.md`; retire keeps the file and records its successor. |

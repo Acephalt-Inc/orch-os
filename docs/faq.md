@@ -13,7 +13,9 @@ The same way: `export ORCH_AGENT=w1`, start `codex`, and say "Read ~/.orch/handb
 No. With Node.js ≥ 20 and git on a POSIX system, the doctor passes. Agents, `gh`, `timeout` and the handbook show as SKIP when absent. `merge-gate --fixture` works fully offline.
 
 **All my agents use one GitHub account. Why does the merge gate never pass?**
-GitHub does not let a PR's author approve it, and the gate ignores author reviews as well. Give the reviewing agent its own GitHub account or a GitHub App identity, and have it submit a normal approving review.
+GitHub does not let a PR's author approve it, and the default gate ignores author reviews as well. Use review comments instead: the reviewing agent runs `orch review approve PR --as r1`, which posts a comment whose first line is `ORCH-REVIEW APPROVE <full head sha> by r1`, and you check with `orch merge-gate PR --reviews comments --task ID` (or set `[review] source = "comments"`). A review comment counts only for the PR's current head commit and only when its agent is not the holder of task `ID` in `orch task`; a later `CHANGES` or `REJECT` review comment at the head blocks, and CI must still be green. See the solo flow in the README.
+
+Know what this is: a process gate between cooperating agents on one account, **not a security boundary**. Anyone who holds the account's token can post a review comment under any agent name, and GitHub cannot tell the agents apart. If you need an approval that the author cannot produce, give the reviewing agent its own GitHub account or a GitHub App identity, have it submit a normal approving review, and keep the default `github` source.
 
 **Can I use the merge gate without GitHub?**
 Not live: the live mode reads GitHub through `gh`. The rule it applies is plain, though (CI green, N non-author approvals at the current head, no changes requested), and `protocols.md` writes it so a lead can apply it by hand on any other forge. `--fixture PATH` accepts any JSON file in the `gh pr view --json` shape, so a small adapter can feed it data from elsewhere.

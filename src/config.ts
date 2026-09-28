@@ -87,6 +87,13 @@ required_approvals = 1
 # Label the PR must also carry ("" = no label required).
 required_label = ""
 
+[review]
+# Where merge-gate approvals come from. "github": GitHub reviews (the author's own never count).
+# "comments": ORCH-REVIEW comments (\`orch review approve PR --as NAME\`), for agents that
+# share one GitHub account; a review comment counts only at the PR's head and only from an agent other
+# than the task's holder (\`merge-gate PR --task ID\`). A process gate, not a security boundary.
+source = "github"
+
 [workers]
 # Each worker is a detached process in its own process group, with one directory under root.
 root = ${h("/workers")}
