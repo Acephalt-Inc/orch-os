@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 // Review source "comments": ORCH-REVIEW comments for agents that share one GitHub account.
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as M from "../src/mergegate.js";
+import { Lease } from "../src/lease.js";
 import { Tasks } from "../src/tasks.js";
 import { fakeBin, keepEnv, ROOT, run, tmp, useTmpHome } from "./_helpers.js";
 
@@ -93,10 +94,12 @@ describe("ReviewComments", () => {
       `ORCH-REVIEW APPROVE ${HEAD} by r1 and r2`, // trailing words
       `ORCH-REVIEW APPROVE ${HEAD} by r/1`, // agent name with a bad character
       `ORCH-REVIEW  APPROVE ${HEAD} by r1`, // two spaces
+      ` ORCH-REVIEW APPROVE ${HEAD} by r1`, // leading space
+      `orch-review APPROVE ${HEAD} by r1`, // prefix case
     ].map((body) => ({ body }));
     const notReviewLines = [
-      { body: ` ORCH-REVIEW APPROVE ${HEAD} by r1` }, // leading space: not a review comment at all
-      { body: `LGTM\nORCH-REVIEW APPROVE ${HEAD} by r1` }, // review comment on line 2
+      { body: `LGTM\nORCH-REVIEW APPROVE ${HEAD} by r1` }, // review line on line 2
+      { body: `\nORCH-REVIEW APPROVE ${HEAD} by r1` }, // empty first line
       { body: "" },
     ];
     const r = gate(withComments(...bad, ...notReviewLines));
@@ -104,6 +107,9 @@ describe("ReviewComments", () => {
     // trailing whitespace (e.g. \r from a CRLF body) is tolerated; text after line 1 is free
     expect(gate(withComments({ body: `ORCH-REVIEW APPROVE ${HEAD} by r1 \r\nnotes` })).ok).toBe(true);
     expect(M.parseReviewLine(`ORCH-REVIEW CHANGES ${HEAD} by r2`)).toEqual({ verdict: "CHANGES", sha: HEAD, agent: "r2" });
+    // a hand-typed block in the wrong case is shown as malformed, never counted (neither way)
+    const lc = gate(withComments(review("APPROVE", "r1"), { body: `  orch-review CHANGES ${HEAD} by r2` }));
+    expect([lc.ok, lc.approvals, lc.changes_requested, lc.malformed]).toEqual([true, 1, 0, 1]);
   });
 
   it("no_author_agent_blocks", () => {
@@ -192,6 +198,61 @@ describe("ReviewCli", () => {
     const [code2, out2] = await run("merge-gate", "101", "--fixture", fx, "--reviews", "comments", "--task", "fix-2");
     expect(code2).toBe(1);
     expect(out2).toContain("self=1");
+  });
+
+  it("every_past_holder_is_an_author", async () => {
+    // r1 writes the PR and hands the task on twice: r1 -> alice -> carol. r1's own approval must not count.
+    const t = new Tasks(join(ctx.home, "tasks"));
+    for (const who of ["r1", "alice"]) {
+      expect(t.claim("t3", who)[0]).toBe(0);
+      expect(t.release("t3", who)[0]).toBe(0);
+    }
+    expect(t.claim("t3", "carol")[0]).toBe(0);
+    expect(t.holders("t3")).toEqual(["r1", "alice", "carol"]);
+    const [code, out] = await run("merge-gate", "101", "--fixture", "comment-approved", "--reviews", "comments", "--task", "t3");
+    expect([code, out]).toEqual([1, "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1,alice,carol approvals=0/1 (stale=0 self=1 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n"]);
+  });
+
+  it("holder_history_reads_old_task_files_and_stays_off_the_role_lease", () => {
+    const dir = join(ctx.home, "tasks");
+    mkdirSync(dir, { recursive: true });
+    // a task file written before `holders` existed: previous_owner + session_id are both authors
+    writeFileSync(join(dir, "old.json"), JSON.stringify({ acquired_at: 1, previous_owner: "w0", epoch: 2, state: "RELEASED", session_id: "w1", lease_expires_at: 0 }));
+    const t = new Tasks(dir);
+    expect(t.holders("old")).toEqual(["w0", "w1"]);
+    expect(t.claim("old", "w2")[0]).toBe(0);
+    expect(t.holders("old")).toEqual(["w0", "w1", "w2"]);
+    // re-claiming your own task does not repeat you
+    expect(t.claim("old", "w2")[0]).toBe(0);
+    expect(t.holders("old")).toEqual(["w0", "w1", "w2"]);
+    // the role lease file layout is unchanged: no holders key
+    const [, r] = new Lease(join(ctx.home, "lease.json")).run("acquire", "a");
+    expect("holders" in r.state).toBe(false);
+  });
+
+  it("large_gh_output_is_read_not_blocked", async () => {
+    // > 1 MiB of PR JSON (a long comment thread) must not hit Node's default spawnSync buffer
+    const big = structuredClone(M.loadFixture("comment-approved") as Record<string, any>);
+    big.comments.unshift({ body: "long discussion " + "x".repeat(1_100_000) });
+    const fx = join(bins, "big.json");
+    writeFileSync(fx, JSON.stringify(big));
+    expect(statSync(fx).size).toBeGreaterThan(1_100_000);
+    process.env.ORCH_TEST_JSON = fx;
+    claim("fix-1", "w1");
+    const [code, out] = await run("merge-gate", "5", "--repo", "o/n", "--reviews", "comments", "--task", "fix-1");
+    expect([code, out.split("\n").at(-2)]).toEqual([0, "=> PASS"]);
+  });
+
+  it("malformed_lines_warn_on_stderr", async () => {
+    claim("fix-1", "w1");
+    const info = structuredClone(M.loadFixture("comment-approved") as Record<string, any>);
+    info.comments.push({ body: `orch-review CHANGES ${HEAD} by r2` });
+    const fx = join(bins, "lc.json");
+    writeFileSync(fx, JSON.stringify(info));
+    const [code, out, err] = await run("merge-gate", "101", "--fixture", fx, "--reviews", "comments", "--task", "fix-1");
+    expect(code).toBe(0);
+    expect(out).toContain("malformed=1");
+    expect(err).toBe("merge-gate: warning: 1 comment(s) look like ORCH-REVIEW lines but are malformed; they were not counted\n");
   });
 
   it("merge_gate_comments_mode_fails_closed_without_a_task_author", async () => {

@@ -16,8 +16,8 @@
  * all share one code-host account, so no agent can approve on GitHub. Rule 2 and 3 then read
  * review comments: PR comments whose FIRST line is exactly
  *     ORCH-REVIEW APPROVE|CHANGES|REJECT <40-char head sha> by <agent>
- * A review comment counts only for the current head sha, and only when <agent> is not the task's
- * author agent (from the task store; never the GitHub login). Per agent the latest review comment
+ * A review comment counts only for the current head sha, and only when <agent> is not one of the
+ * task's author agents (every holder in the task store; never the GitHub login). Per agent the latest review comment
  * counts; CHANGES and REJECT block. GitHub CHANGES_REQUESTED reviews still block; GitHub
  * approvals do not count. This is a process gate between cooperating agents, not a security
  * boundary: anyone holding the account's token can post a review comment.
@@ -29,6 +29,8 @@ import { dumps } from "./pyjson.js";
 import { isPlainObject, validName, which } from "./util.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
+/** gh output limit. Node's 1 MiB default is too small for long comment threads (ENOBUFS = BLOCKED forever). */
+export const GH_MAX_BUFFER = 64 * 1024 * 1024;
 const CI_OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 export const FIXTURE_DIR = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -79,13 +81,14 @@ export function reviewLine(verdict: Verdict, sha: string, agent: string): string
 }
 
 /**
- * Read a comment body. null = not a review comment (first line does not start with ORCH-REVIEW);
- * "malformed" = starts with ORCH-REVIEW but is not exactly an ORCH-REVIEW line. Only the first line
+ * Read a comment body. null = not a review comment (first line, after leading spaces, does not
+ * start with ORCH-REVIEW in any case); "malformed" = looks like one but is not exactly an
+ * ORCH-REVIEW line (e.g. lower case, a leading space): shown, never counted. Only the first line
  * is read; trailing whitespace on it is ignored.
  */
 export function parseReviewLine(body: string): ReviewLine | "malformed" | null {
   const first = body.split("\n", 1)[0].replace(/\s+$/, "");
-  if (!first.startsWith(REVIEW_PREFIX)) return null;
+  if (!first.trimStart().toUpperCase().startsWith(REVIEW_PREFIX)) return null;
   const m = REVIEW_RE.exec(first);
   if (!m || !validName(m[3])) return "malformed";
   return { verdict: m[1] as Verdict, sha: m[2], agent: m[3] };
@@ -240,14 +243,14 @@ export function fetchLive(pr: string, repo: string, source: ReviewSource = "gith
   if (!which("gh")) throw new Error("live mode needs the GitHub CLI `gh` (or use --fixture)");
   if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
   const out = spawnSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json",
-    liveFields(source)], { encoding: "utf8", timeout: 60_000 });
+    liveFields(source)], { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || "gh pr view failed");
   return JSON.parse(out.stdout);
 }
 
 function gh(args: string[]): string {
-  const out = spawnSync("gh", args, { encoding: "utf8", timeout: 60_000 });
+  const out = spawnSync("gh", args, { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || `gh ${args[0]} ${args[1]} failed`);
   return out.stdout;

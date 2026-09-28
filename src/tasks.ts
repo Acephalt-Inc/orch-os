@@ -11,7 +11,7 @@
  * only in case can never be two tasks on a case-insensitive file system.
  */
 import { existsSync, readdirSync } from "node:fs";
-import { Lease } from "./lease.js";
+import { holderHistory, Lease } from "./lease.js";
 import { validName } from "./util.js";
 
 export class TaskError extends Error {
@@ -46,7 +46,7 @@ export class Tasks {
 
   private run(action: string, id: string, holder: string | null, opts: { seconds?: number | null; expectedEpoch?: number | null; now?: number | null } = {}): [number, Record<string, any>] {
     if (action !== "status" && !validName(holder)) throw new TaskError(`bad holder '${holder}': use letters, digits, . @ _ -`);
-    const [code, r] = this.lease(id).run(action, holder, { leaseSeconds: opts.seconds, expectedEpoch: opts.expectedEpoch, now: opts.now });
+    const [code, r] = this.lease(id).run(action, holder, { leaseSeconds: opts.seconds, expectedEpoch: opts.expectedEpoch, now: opts.now, trackHolders: true });
     r.task = Tasks.key(id);
     r.status = STATUS_NAMES[r.status] ?? r.status;
     return [code, r];
@@ -66,6 +66,12 @@ export class Tasks {
 
   status(id: string, now?: number | null) {
     return this.run("status", id, null, { now });
+  }
+
+  /** Every agent that has ever held the task, oldest first (the `holders` list; older files: previous_owner, holder). */
+  holders(id: string): string[] {
+    const [, r] = this.status(id);
+    return holderHistory(r.state ?? {});
   }
 
   list(now?: number | null): TaskRow[] {

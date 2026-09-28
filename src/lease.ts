@@ -22,6 +22,16 @@ export interface LeaseRunOptions {
   force?: boolean;
   expectedEpoch?: number | null;
   now?: number | null;
+  /** Keep an append-only `holders` list (every session that ever held it). Task claims use it. */
+  trackHolders?: boolean;
+}
+
+/** Every distinct holder on record, oldest first. Files written before `holders` existed give previous_owner, session_id. */
+export function holderHistory(state: Record<string, any>): string[] {
+  const seen: string[] = [];
+  const raw = Array.isArray(state.holders) ? state.holders : [state.previous_owner, state.session_id];
+  for (const h of raw) if (typeof h === "string" && h !== "" && !seen.includes(h)) seen.push(h);
+  return seen;
 }
 
 export type LeaseResult = Record<string, any>;
@@ -123,8 +133,12 @@ export class Lease {
         }
         if (owner !== session || state.state !== "ACTIVE" || !fresh) {
           const prevEpoch = Number(state.epoch || 0);
+          const history = holderHistory(state);
           state = { acquired_at: now, previous_owner: owner ?? null, epoch: Math.trunc(prevEpoch) + 1, state: "ACTIVE" };
           if (opts.force && owner && owner !== session) state.forced_takeover = true;
+          if (opts.trackHolders) state.holders = history.includes(session!) ? history : [...history, session];
+        } else if (opts.trackHolders && !Array.isArray(state.holders)) {
+          state.holders = holderHistory(state); // an old file, re-claimed by its holder
         }
       }
       const effective = Math.max(Math.trunc(req), this.minSeconds);

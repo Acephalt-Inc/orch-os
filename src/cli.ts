@@ -352,14 +352,9 @@ function reviewSource(cfg: Record<string, any>, a: Args): M.ReviewSource {
   return v;
 }
 
-/**
- * comments mode: the task's author agent(s) from the task store: the recorded holder, and the
- * holder before it if the task changed hands. Never the GitHub login.
- */
+/** comments mode: the task's author agents from the task store: every agent that has held it. Never the GitHub login. */
 function taskAuthors(cfg: Record<string, any>, id: string): string[] {
-  const [, r] = tasks(cfg).status(id);
-  const st = r.state ?? {};
-  return [st.session_id, st.previous_owner].filter((x): x is string => typeof x === "string" && x !== "");
+  return tasks(cfg).holders(id);
 }
 
 const cmdMergeGate: Run = (a, io) => {
@@ -402,6 +397,7 @@ const cmdMergeGate: Run = (a, io) => {
     println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
     return 1;
   }
+  if (r.malformed) eprintln(io, `merge-gate: warning: ${r.malformed} comment(s) look like ORCH-REVIEW lines but are malformed; they were not counted`);
   println(io, a.json ? dumps(r) : M.render(a.pr, r));
   return r.ok ? 0 : 1;
 };
