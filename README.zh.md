@@ -83,7 +83,7 @@ npm i -g orch-os
 
 | 功能 | 命令或文件 | 状态 |
 |---|---|---|
-| 单人和团队账号配置设计 | `docs/profiles.md` | 审查中（[PR #5](https://github.com/Acephalt-Inc/orch-os/pull/5)） |
+| 单人和团队账号配置设计 | `docs/profiles.md` | 已提供 |
 | 配置档命令和评审强度规则 | `orch profile`、`src/profile.ts` | 审查中（[PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)） |
 
 ### 笔记生命周期
@@ -179,6 +179,7 @@ orch mem search review                      # 搜索长期笔记
 
 - [概念](docs/concepts.md) — 角色、租约、消息、认领、工作进程和笔记。
 - [命令](docs/commands.md) — 子命令、参数、退出码和配置。
+- [配置档](docs/profiles.md) — 设计稿（尚未实现）：按账号与人员划分的配置档、按风险档位的评审策略、每次判定报告实际达到的评审强度。
 - [常见问题](docs/faq.md) — Claude Code 与 Codex CLI 的设置、GitHub 身份和常见疑问。
 - [架构](docs/architecture.md) — 模块、本地状态文件和进程模型。
 - [迁移](docs/migration.md) — 从 v1.1 迁移到 v2。
