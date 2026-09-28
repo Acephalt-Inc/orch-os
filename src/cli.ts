@@ -16,6 +16,7 @@ import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
+import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
@@ -378,6 +379,10 @@ const cmdDoctor: Run = (_a, io) => {
       add(false, "profile", String(e.message ?? e));
     }
     if (prof) for (const [ok, name, detail] of P.capabilityRows(prof, profileEnv(cfg))) add(ok, name, detail, true);
+    // review watch rows only with [review.agents] or a watch state directory: otherwise none
+    check("review watch", () => {
+      for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
+    });
   }
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [s, n, d] of rows) println(io, `${padEnd(s, 4)}  ${padEnd(n, w)}  ${d}`);
@@ -559,6 +564,50 @@ const cmdReview: Run = (a, io) => {
   }
   println(io, `posted on #${a.pr}: ${line}`);
   return 0;
+};
+
+/** `orch review watch`: 0 = reviewed, or (with --once / --dry-run) still waiting or dispatched; 1 = blocked, stale, error, timeout. */
+const cmdReviewWatch: Run = async (a, io) => {
+  const cfg = C.loadOrDefault();
+  const prof = P.readProfile(cfg);
+  if (!prof && a.tier) {
+    eprintln(io, "review watch: --tier needs a [profile] table in config.toml, and none is set (see `orch profile update`)");
+    return 2;
+  }
+  if (!/^[1-9][0-9]*$/.test(a.pr)) {
+    eprintln(io, `review watch: bad PR number '${a.pr}'`);
+    return 2;
+  }
+  const agents = RW.readAgents(cfg);
+  const settings = RW.readSettings(cfg);
+  if (!a.task) {
+    println(io, `#${a.pr} => BLOCKED (review watch needs --task ID: the task whose holder authored this PR, so the author is never its reviewer)`);
+    return 1;
+  }
+  let authors: string[];
+  try {
+    authors = taskAuthors(cfg, a.task);
+  } catch (e: any) {
+    println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
+    return 1;
+  }
+  const host = RW.override.host ?? RW.realHost((d) => {
+    const m = workers(cfg).start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
+    return { pid: typeof m.pid === "number" ? m.pid : null };
+  });
+  const inp: RW.WatchInput = {
+    pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings,
+    tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
+  };
+  const emit = (r: RW.WatchResult) => println(io, a.json ? dumps(r) : RW.renderResult(r));
+  let r: RW.WatchResult;
+  if (a.once || a.dry_run) {
+    r = RW.watchOnce(inp, host);
+    emit(r);
+    return r.outcome === "REVIEWED" || r.outcome === "WAITING" || r.outcome === "DISPATCHED" ? 0 : 1;
+  }
+  r = await RW.watchLoop(inp, host, emit, { intervalS: a.interval ?? settings.pollSeconds, timeoutS: a.timeout ?? null });
+  return r.outcome === "REVIEWED" ? 0 : 1;
 };
 
 const cmdWorker: Run = async (a, io) => {
@@ -1031,7 +1080,7 @@ export function buildTree(): CmdSpec<Run> {
       },
       {
         name: "review", help: "post a review comment (ORCH-REVIEW line) as a PR comment, for merge-gate --reviews comments",
-        sub: (["approve", "changes", "reject"] as const).map((v) => ({
+        sub: (["approve", "changes", "reject"] as const).map((v): CmdSpec<Run> => ({
           name: v, help: `post 'ORCH-REVIEW ${VERDICT_OF[v]} <head sha> by <me>' on the PR`, run: cmdReview,
           usage: `orch review ${v} PR [--as NAME] [--head SHA] [--repo OWNER/NAME] [-m TEXT] [--dry-run]`,
           pos: [{ dest: "pr" }],
@@ -1042,7 +1091,23 @@ export function buildTree(): CmdSpec<Run> {
             opt("message", ["-m", "--message"], "str", "text after the review comment line"),
             opt("dry_run", ["--dry-run"], "bool", "print the comment instead of posting it"),
           ],
-        })),
+        })).concat([{
+          name: "watch", help: "when CI is green at the PR's head, start one reviewer agent that posts its review comment; never merges",
+          run: cmdReviewWatch,
+          usage: "orch review watch PR --task ID [--repo OWNER/NAME] [--tier low|high] [--once] [--dry-run] [--force] [--interval S] [--timeout S] [--json]",
+          pos: [{ dest: "pr" }],
+          opts: [
+            opt("task", ["--task"], "str", "the task whose holders wrote the PR (they are never chosen as reviewer)", { metavar: "ID" }),
+            opt("repo", ["--repo"], "str", "owner/name (default [merge] repo)"),
+            opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
+            opt("once", ["--once"], "bool", "one pass, then exit (for cron)"),
+            opt("dry_run", ["--dry-run"], "bool", "one pass; print the chosen reviewer and its command; start nothing, write nothing"),
+            opt("force", ["--force"], "bool", "start a reviewer even though this head already had one"),
+            opt("interval", ["--interval"], "float", "seconds between passes (default [review.watch] poll_seconds)"),
+            opt("timeout", ["--timeout"], "float", "stop after this many seconds (default: until reviewed, stale or blocked)"),
+            JSON_OPT,
+          ],
+        }]),
       },
       {
         name: "worker", help: "detached agent workers",

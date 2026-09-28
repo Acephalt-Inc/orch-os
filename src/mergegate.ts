@@ -283,7 +283,7 @@ export function fetchLive(pr: string, repo: string, source: ReviewSource = "gith
  * gives null, so the file list reads as unreadable and the tier is high; changedFiles() then
  * also checks the count against the PR's `changedFiles`.
  */
-function allFiles(repo: string, number: unknown): { path: string }[] | null {
+export function allFiles(repo: string, number: unknown): { path: string }[] | null {
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1) return null;
   try {
     const out = gh(["api", "--paginate", `repos/${repo}/pulls/${number}/files`, "--jq", ".[].filename"]);
@@ -293,7 +293,8 @@ function allFiles(repo: string, number: unknown): { path: string }[] | null {
   }
 }
 
-function gh(args: string[]): string {
+/** Run `gh` without a shell; its stdout, or an Error with its stderr. */
+export function gh(args: string[]): string {
   const out = spawnSync("gh", args, { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || `gh ${args[0]} ${args[1]} failed`);

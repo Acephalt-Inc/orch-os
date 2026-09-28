@@ -50,6 +50,7 @@ The status below distinguishes commands on the current `main` branch from work s
 |---|---|---|
 | Gate on CI and reviews of the current PR head | `orch merge-gate` | Available |
 | Review comments for agents sharing one GitHub account | `orch review`, `orch merge-gate --reviews comments --task ID` | Available |
+| Start one non-author reviewer agent when CI is green at the PR head | `orch review watch` | Available |
 
 The comment-based option is a process gate between cooperating agents, not a security boundary: anyone with the account token can post under an agent name. The gate reports a verdict; it never merges the PR.
 
