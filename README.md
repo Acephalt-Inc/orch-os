@@ -189,8 +189,8 @@ The subsystems above rest on a few invariants. Each one names the mechanism that
 | One owner per task. A claimed task cannot be taken until it is released or expires. | `orch task` | Available |
 | A message is data, not authority. Sender and type are stored outside the body, so a body cannot forge them. | `orch msg` | Available |
 | An approval binds to a commit. Reviews count only for the PR's current head, after CI at that head. | `orch merge-gate` | Available |
-| The gate reports; people merge. No command in ORCH-os merges a PR. | `orch merge-gate` | Available |
-| Reviewer strength is explicit. Each reviewer is graded against the authors (other vendor, other account, or same agent in a fresh context); a weaker reviewer is never substituted, the request is blocked instead. Vendors and accounts are declared, not verified. | `orch review watch`, `orch profile` | Available |
+| The gate reports; people merge. No `orch` command merges a PR. | `orch merge-gate` | Available |
+| Reviewer strength is explicit. Each reviewer is graded against the authors (other vendor, other account, or same agent in a fresh context); with a profile set, a weaker reviewer is never substituted, the request is blocked instead. Vendors and accounts are declared, not verified. | `orch review watch`, `orch profile` | Available |
 | Unknown fails closed. A missing or unrecognized risk tier is treated as high. | `orch profile` | Available |
 | Protect the machine, never kill work. High load refuses new workers; running ones are left alone. | `orch load`, `orch worker start` | Available |
 | Cleanup never destroys work. A worktree is removed only when Git reports nothing changed, untracked or ignored. | `orch worker stop` | Available |
