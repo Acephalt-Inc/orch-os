@@ -16,7 +16,7 @@ export const RECOMMENDATIONS: Recommendation[] = [
   { name: "Anthropic document skills", url: "https://github.com/anthropics/skills", license: "mixed; check each skill", value: "Official document skills", commands: [["plugin", "marketplace", "add", "anthropics/skills"], ["plugin", "install", "document-skills@anthropic-agent-skills"]] },
   { name: "Superpowers", url: "https://github.com/obra/superpowers", license: "MIT", value: "Structured development workflows", commands: [["plugin", "marketplace", "add", "obra/superpowers"], ["plugin", "install", "superpowers@superpowers-dev"]] },
   { name: "I Have ADHD", url: "https://github.com/ayghri/i-have-adhd", license: "MIT", value: "Task focus and continuity", commands: [["plugin", "marketplace", "add", "ayghri/i-have-adhd"], ["plugin", "install", "i-have-adhd@i-have-adhd"]] },
-  { name: "Caveman", url: "https://github.com/JuliusBrussee/caveman", license: "non-standard, read before use", value: "Plain-language software planning", commands: [["plugin", "marketplace", "add", "JuliusBrussee/caveman"], ["plugin", "install", "caveman@caveman"]] },
+  { name: "Caveman", url: "https://github.com/JuliusBrussee/caveman", license: "non-standard, read before use", value: "Terse, token-saving reply style", commands: [["plugin", "marketplace", "add", "JuliusBrussee/caveman"], ["plugin", "install", "caveman@caveman"]] },
 ];
 
 export type Runner = (bin: string, args: string[]) => number;

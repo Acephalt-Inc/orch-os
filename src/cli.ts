@@ -255,6 +255,10 @@ const cmdInit: Run = async (a, io) => {
   // The old non-TTY/no-flags path remains byte-for-byte identical, as do explicit old profile flags.
   if ((!io.isTTY?.() && !guidedFlags(a)) || (a.no_handbook && !guidedFlags(a)) ||
       (legacyProfileFlags(a) && !guidedFlags(a))) return cmdInitLegacy(a, io);
+  if (S.isHomeProject(process.cwd())) {
+    eprintln(io, "init: run from a project directory, not HOME; no files written");
+    return 2;
+  }
   if (legacyProfileFlags(a)) {
     eprintln(io, "init: guided flags cannot be combined with --compute/--people/--no-profile");
     return 2;
@@ -278,6 +282,10 @@ const cmdInit: Run = async (a, io) => {
 };
 
 const cmdSetup: Run = (a, io) => {
+  if (S.isHomeProject(process.cwd())) {
+    eprintln(io, "setup: run from a project directory, not HOME; no files written");
+    return 2;
+  }
   const path = C.configPath();
   if (!existsSync(path)) { eprintln(io, `setup: ${path} missing - run \`orch init\` first`); return 2; }
   const found = D.installed().map((x) => x.name);

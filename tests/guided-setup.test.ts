@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main, type IO } from "../src/cli.js";
 import { runRecommendations } from "../src/recommend.js";
+import { RECOMMENDATIONS } from "../src/recommend.js";
+import { collect } from "../src/setup.js";
 import { parseToml } from "../src/toml.js";
 import { keepEnv, useTmpHome } from "./_helpers.js";
 
 describe("guided setup", () => {
   const ctx = useTmpHome();
-  keepEnv(["PATH", "LANG", "ORCH_AGENT_DIRS"]);
+  keepEnv(["PATH", "LANG", "ORCH_AGENT_DIRS", "HOME"]);
 
   function env(): void {
     process.env.PATH = "/usr/bin:/bin";
@@ -64,6 +66,39 @@ describe("guided setup", () => {
     expect(out).not.toContain("claude plugin");
     expect(parseToml(config()).profile).toMatchObject({ compute: "one", people: "solo" });
     expect(parseToml(config()).setup).toMatchObject({ language: "en", level: "some", style: "standard" });
+  });
+
+  it("--yes default standard leaves a pre-existing Claude style untouched", async () => {
+    env();
+    const settings = join(ctx.home, ".claude/settings.local.json");
+    mkdirSync(join(ctx.home, ".claude"), { recursive: true });
+    writeFileSync(settings, '{"outputStyle":"Explanatory","model":"sonnet"}\n');
+    const [code, out] = await invoke(["init", "--yes"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ outputStyle: "Explanatory", model: "sonnet" });
+    expect(out).not.toContain(`updated ${realpathSync(settings)}`);
+  });
+
+  it("all-Enter first-run defaults leave a pre-existing Claude style untouched", async () => {
+    env();
+    const settings = join(ctx.home, ".claude/settings.local.json");
+    mkdirSync(join(ctx.home, ".claude"), { recursive: true });
+    writeFileSync(settings, '{"outputStyle":"Explanatory","model":"sonnet"}\n');
+    const [code, out] = await invoke(["init"], "\n\n\n\n\n", true);
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ outputStyle: "Explanatory", model: "sonnet" });
+    expect(out).not.toContain(`updated ${realpathSync(settings)}`);
+  });
+
+  it("typed standard is explicit and reports its Claude settings edit", async () => {
+    env();
+    const settings = join(ctx.home, ".claude/settings.local.json");
+    mkdirSync(join(ctx.home, ".claude"), { recursive: true });
+    writeFileSync(settings, '{"outputStyle":"Explanatory","model":"sonnet"}\n');
+    const [code, out] = await invoke(["init"], "\n\n\n\nstandard\n", true);
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ model: "sonnet" });
+    expect(out).toContain(`updated ${realpathSync(settings)}`);
   });
 
   it("asks six ordered questions and runs only selected add-ons", async () => {
@@ -158,6 +193,58 @@ describe("guided setup", () => {
     const [code, out] = await invoke(["init"], "\n\n\n\n\n4", true);
     expect(code).toBe(0);
     expect(out).toContain("claude plugin marketplace add ayghri/i-have-adhd");
+    expect(out).toContain("Claude CLI not found; commands were printed but not run.");
+    expect(out).not.toContain("command failed");
+  });
+
+  it("an empty add-on answer selects none even when a Claude runner is available", () => {
+    const answer = collect({}, {
+      out: () => {}, err: () => {}, isTTY: () => true, ask: () => "",
+    }, [], {});
+    expect(answer?.selected).toEqual([]);
+    const calls: string[] = [];
+    runRecommendations(answer!.selected, () => {}, "/fake/claude", (_bin, args) => {
+      calls.push(args.join(" ")); return 0;
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("never invokes a runner when Claude CLI is absent", () => {
+    const messages: string[] = [], calls: string[] = [];
+    runRecommendations([0], (s) => messages.push(s), null, (_bin, args) => {
+      calls.push(args.join(" ")); return 1;
+    });
+    expect(calls).toEqual([]);
+    expect(messages).toContain("Claude CLI not found; commands were printed but not run.");
+    expect(messages.join("\n")).not.toContain("command failed");
+  });
+
+  it("refuses guided init from HOME before writing user-level style files or config", async () => {
+    env();
+    process.env.HOME = ctx.home;
+    const [code, , err] = await invoke(["init", "--yes", "--style", "concise-tables"]);
+    expect(code).toBe(2);
+    expect(err).toContain("project directory");
+    expect(existsSync(join(ctx.home, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(ctx.home, ".claude/output-styles/orch-concise.md"))).toBe(false);
+    expect(existsSync(join(ctx.home, "config.toml"))).toBe(false);
+  });
+
+  it("also refuses HOME through a symlink alias before writing", async () => {
+    env();
+    const alias = join(ctx.home, "home-alias");
+    symlinkSync(ctx.home, alias, "dir");
+    process.env.HOME = alias;
+    const [code, , err] = await invoke(["init", "--yes", "--style", "concise-tables"]);
+    expect(code).toBe(2);
+    expect(err).toContain("project directory");
+    expect(existsSync(join(ctx.home, "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(ctx.home, ".claude"))).toBe(false);
+    expect(existsSync(join(ctx.home, "config.toml"))).toBe(false);
+  });
+
+  it("describes Caveman as terse token-saving replies", () => {
+    expect(RECOMMENDATIONS.find((r) => r.name === "Caveman")?.value).toMatch(/terse.*token|token.*terse/i);
   });
 
   it("runs only selected add-on commands, prints first, and continues after failure", () => {
@@ -274,6 +361,23 @@ describe("guided setup", () => {
     const [code] = await invoke(["setup", "--style", "standard", "--no-recommend"]);
     expect(code).toBe(0);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ model: "sonnet" });
+  });
+
+  it("explicit standard selects Claude Default after a managed concise style had a prior user style", async () => {
+    env();
+    const path = join(ctx.home, ".claude/settings.local.json");
+    mkdirSync(join(ctx.home, ".claude"), { recursive: true });
+    writeFileSync(path, '{"outputStyle":"Explanatory","model":"sonnet"}\n');
+    expect((await invoke(["init", "--yes"]))[0]).toBe(0);
+    expect((await invoke(["setup", "--style", "concise-tables", "--no-recommend"]))[0]).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ outputStyle: "orch-concise", model: "sonnet" });
+    expect(parseToml(config()).setup).toMatchObject({ managed_style: true, prior_output_style: "Explanatory" });
+    const [code, out] = await invoke(["setup", "--style", "standard", "--no-recommend"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ model: "sonnet" });
+    expect(parseToml(config()).setup.managed_style).toBe(false);
+    expect(parseToml(config()).setup.prior_output_style).toBeUndefined();
+    expect(out).toContain(`updated ${realpathSync(path)}`);
   });
 
   it("localizes every owned role file in --dir and keeps customized files on rerun", async () => {

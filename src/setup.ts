@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Guided setup is additive: it never changes profile policy or removes user files. */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { ConfigError } from "./config.js";
 import { HANDBOOK, TEMPLATE_DIR, targetFile, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
@@ -19,7 +20,7 @@ export interface SetupIO {
 export type Language = "en" | "zh" | "other";
 export type Level = "new" | "some" | "developer";
 export type Style = "concise-tables" | "standard" | "skip";
-export interface Answers { language: Language; people: P.People; level: Level; style: Style; skipStyle: boolean; applyStyle: boolean; selected: number[] }
+export interface Answers { language: Language; people: P.People; level: Level; style: Style; skipStyle: boolean; applyStyle: boolean; explicitStandard: boolean; selected: number[] }
 export interface SetupFlags {
   yes?: boolean; lang?: string; solo?: boolean; team?: boolean;
   level?: string; style?: string; no_recommend?: boolean;
@@ -50,13 +51,13 @@ export function readSetup(cfg: Record<string, any>): SetupState | null {
 }
 
 function choose(io: SetupIO, number: number, prompt: string, def: string,
-                choices: Record<string, string>): string | null {
+                choices: Record<string, string>, onExplicit?: (explicit: boolean) => void): string | null {
   for (let tries = 0; tries < 3; tries++) {
     const raw = io.ask!(`Question ${number}/6 — ${prompt} [default: ${def}] `);
     if (raw === null) return null;
     const key = raw.trim().toLowerCase();
-    if (key === "") return def;
-    if (Object.hasOwn(choices, key)) return choices[key];
+    if (key === "") { onExplicit?.(false); return def; }
+    if (Object.hasOwn(choices, key)) { onExplicit?.(true); return choices[key]; }
     line(io, `  choose ${Object.keys(choices).join(", ")}`);
   }
   return null;
@@ -89,6 +90,7 @@ export function collect(flags: SetupFlags, io: SetupIO, found: string[], cfg: Re
   let answerLang = lang, answerPeople = people, answerLevel = level, answerStyle = style;
   let skipStyle = flags.style === "skip";
   let styleRequested = Boolean(flags.style && flags.style !== "skip");
+  let explicitStandard = flags.style === "standard";
   if (interactive) {
     if (!flags.lang) {
       const v = choose(io, 1, "Language for handbook and replies: en / zh / other?", lang, { en: "en", zh: "zh", other: "other" });
@@ -110,19 +112,31 @@ export function collect(flags: SetupFlags, io: SetupIO, found: string[], cfg: Re
     if (confirm !== "yes") return null;
     if (!flags.style) {
       const preferred = old?.style ?? (answerLevel === "new" ? "concise-tables" : "standard");
+      let typed = false;
       const v = choose(io, 5, "Reply style: concise-tables / standard / skip?", preferred,
-        { "concise-tables": "concise-tables", standard: "standard", skip: "skip" });
+        { "concise-tables": "concise-tables", standard: "standard", skip: "skip" }, (explicit) => { typed = explicit; });
       if (v === null) return null;
       answerStyle = v as Style;
       skipStyle = v === "skip";
-      styleRequested = v !== old?.style;
+      styleRequested = typed || v !== old?.style;
+      explicitStandard = typed && v === "standard";
     }
   }
   const selected = interactive && !flags.no_recommend ? addOns(io) : [];
   if (selected === null) return null;
   if (skipStyle && old) answerStyle = old.style;
   const applyStyle = !skipStyle && (!old || styleRequested || answerStyle !== old.style);
-  return { language: answerLang, people: answerPeople, level: answerLevel, style: answerStyle, skipStyle, applyStyle, selected };
+  return { language: answerLang, people: answerPeople, level: answerLevel, style: answerStyle, skipStyle, applyStyle, explicitStandard, selected };
+}
+
+/** A project-scoped setup must never treat the user's HOME as a project. */
+export function isHomeProject(projectDir: string): boolean {
+  const home = process.env.HOME || homedir();
+  const physical = (path: string): string => {
+    try { return realpathSync(path); }
+    catch { return resolve(path); }
+  };
+  return physical(projectDir) === physical(home);
 }
 
 const STYLE_TEXT = `---\nname: orch-concise\ndescription: ORCH-os verdict-first replies with concise status tables\nkeep-coding-instructions: true\n---\n\n# ORCH-os concise tables\n\nStart with the verdict. Use tables for status, short lines, and a plain-language gloss when a term first appears. Keep the answer useful without assuming software expertise.\n`;
@@ -241,6 +255,7 @@ function changeAgents(style: "concise-tables" | "standard", projectDir: string, 
 export function apply(answer: Answers, io: SetupIO, configPath: string, found: string[],
                       projectDir = process.cwd(), writeGuide = true,
                       handbookDir = join(dirname(configPath), "handbook"), layout: Layout = "flat"): void {
+  if (isHomeProject(projectDir)) throw new ConfigError("setup: run from a project directory, not HOME; no files written");
   const original = readFileSync(configPath, "utf8");
   const cfg = parseToml(original);
   const old = readSetup(cfg);
@@ -261,17 +276,11 @@ export function apply(answer: Answers, io: SetupIO, configPath: string, found: s
     if (!managed) prior = typeof settings.outputStyle === "string" && settings.outputStyle !== "orch-concise" ? settings.outputStyle : undefined;
     settings.outputStyle = "orch-concise";
     managed = true;
-  } else if (answer.applyStyle && answer.style === "standard" && !managed) {
+  } else if (answer.applyStyle && answer.style === "standard" && answer.explicitStandard) {
     const current = readSettings(settingsPath);
     if (current.outputStyle !== undefined) {
       delete current.outputStyle; // explicit standard selects Claude's documented Default style
       settings = current;
-    }
-  } else if (answer.applyStyle && answer.style === "standard" && managed) {
-    settings = readSettings(settingsPath);
-    if (settings.outputStyle === "orch-concise") {
-      if (prior !== undefined) settings.outputStyle = prior;
-      else delete settings.outputStyle;
     }
     managed = false;
     prior = undefined;
@@ -317,8 +326,11 @@ export function apply(answer: Answers, io: SetupIO, configPath: string, found: s
   if (settings !== null) {
     mkdirSync(dirname(settingsPath), { recursive: true });
     const output = JSON.stringify(settings, null, 2) + "\n";
-    if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== output)
-      atomicWrite(settingsPath, output, existsSync(settingsPath) ? { mode: statSync(settingsPath).mode & 0o777 } : {});
+    const existed = existsSync(settingsPath);
+    if (!existed || readFileSync(settingsPath, "utf8") !== output) {
+      atomicWrite(settingsPath, output, existed ? { mode: statSync(settingsPath).mode & 0o777 } : {});
+      line(io, `${existed ? "updated" : "wrote"} ${settingsPath}`);
+    }
   }
   if (answer.applyStyle && answer.style !== "skip" && (answer.style === "concise-tables" || old?.managed_style))
     changeAgents(answer.style, projectDir, io);
