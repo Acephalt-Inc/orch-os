@@ -84,7 +84,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file | Status |
 |---|---|---|
 | Design for solo and team account setups | `docs/profiles.md` | Available |
-| Profile commands and review-strength rules | `orch profile`, `src/profile.ts` | In review ([PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)) |
+| Profile commands and review-strength rules | `orch profile`, `src/profile.ts` | Available |
 
 ### Notes lifecycle
 
@@ -103,7 +103,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file | Status |
 |---|---|---|
 | Require a label and current-head approval before a positive gate verdict | `orch merge-gate --label NAME` | Available |
-| Select review rules from an account-and-people profile | `src/profile.ts` | In review ([PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)) |
+| Select review rules from an account-and-people profile | `src/profile.ts` | Available |
 
 ### Goals and verification
 

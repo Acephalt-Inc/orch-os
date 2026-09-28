@@ -84,7 +84,7 @@ npm i -g orch-os
 | 功能 | 命令或文件 | 状态 |
 |---|---|---|
 | 单人和团队账号配置设计 | `docs/profiles.md` | 已提供 |
-| 配置档命令和评审强度规则 | `orch profile`、`src/profile.ts` | 审查中（[PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)） |
+| 配置档命令和评审强度规则 | `orch profile`、`src/profile.ts` | 已提供 |
 
 ### 笔记生命周期
 
@@ -103,7 +103,7 @@ npm i -g orch-os
 | 功能 | 命令或文件 | 状态 |
 |---|---|---|
 | 闸门通过前要求标签和针对当前提交的批准 | `orch merge-gate --label NAME` | 已提供 |
-| 根据账号和人数配置档选择评审规则 | `src/profile.ts` | 审查中（[PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)） |
+| 根据账号和人数配置档选择评审规则 | `src/profile.ts` | 已提供 |
 
 ### 目标与验证
 
