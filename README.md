@@ -83,7 +83,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 
 | Feature | Command or file | Status |
 |---|---|---|
-| Design for solo and team account setups | `docs/profiles.md` | In review ([PR #5](https://github.com/Acephalt-Inc/orch-os/pull/5)) |
+| Design for solo and team account setups | `docs/profiles.md` | Available |
 | Profile commands and review-strength rules | `orch profile`, `src/profile.ts` | In review ([PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)) |
 
 ### Notes lifecycle
@@ -179,6 +179,7 @@ Full flags and exit codes: [Command reference](docs/commands.md).
 
 - [Concepts](docs/concepts.md) — roles, leases, messages, claims, workers, and notes.
 - [Commands](docs/commands.md) — subcommands, flags, exit codes, and configuration.
+- [Profiles](docs/profiles.md) — design (not implemented): profiles by accounts and people, a review policy per risk tier, and the review strength each verdict reports.
 - [FAQ](docs/faq.md) — Claude Code and Codex CLI setup, GitHub identity, and common questions.
 - [Architecture](docs/architecture.md) — modules, local state files, and process model.
 - [Migration](docs/migration.md) — moving from v1.1 to v2.
