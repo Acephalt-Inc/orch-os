@@ -1,6 +1,11 @@
-<h1 align="center">ORCH-os</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-banner-dark.svg">
+    <img src="assets/orch-os-banner-light.svg" alt="ORCH-OS" width="440">
+  </picture>
+</p>
 
-<p align="center">为命令行编程代理提供团队协作层。</p>
+<h3 align="center">ORCH-OS：命令行编程代理的团队协作层</h3>
 
 <p align="center"><a href="docs/concepts.md">文档</a> · <a href="docs/commands.md">命令</a> · <a href="docs/faq.md">常见问题</a> · <a href="README.md">English</a></p>
 
@@ -16,7 +21,7 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 ## 安装
 
-需要 Node.js 20 或更高版本，以及 macOS 或 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
+需要 Node.js 22 或更高版本（推荐 24 LTS），以及 macOS 或 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 
 ```sh
 npm i -g orch-os
@@ -45,6 +50,13 @@ npm i -g orch-os
 | 14 | 基础层 | 其余一切的底座 | 纯文件 · 加锁的原子写入 · 工作进程日志 · 统一证据历史 | 文件、锁、日志：已提供 · 证据历史：Coming soon |
 
 ## ORCH-os 提供什么
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-architecture-dark.svg">
+    <img src="assets/orch-os-architecture-light.svg" alt="ORCH-OS 架构：代理命令行工具、角色租约、信箱、任务板与认领、合并闸门、Git worktree 中的工作进程" width="860">
+  </picture>
+</p>
 
 下表区分当前 `main` 分支已有的命令、仍在审查中的改动和未来方向。“Coming soon”表示尚未发布。
 
