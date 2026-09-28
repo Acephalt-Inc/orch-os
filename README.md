@@ -1,6 +1,11 @@
-<h1 align="center">ORCH-os</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-banner-dark.svg">
+    <img src="assets/orch-os-banner-light.svg" alt="ORCH-OS" width="440">
+  </picture>
+</p>
 
-<p align="center">A team layer for CLI coding agents.</p>
+<h3 align="center">ORCH-OS: A Team Layer for CLI Coding Agents</h3>
 
 <p align="center"><a href="docs/concepts.md">Documentation</a> · <a href="docs/commands.md">Commands</a> · <a href="docs/faq.md">FAQ</a> · <a href="README.zh.md">中文</a></p>
 
@@ -16,7 +21,7 @@ Author: Winnicent Zuo
 
 ## Install
 
-Requires Node.js 20 or newer on macOS or Linux. Install the `orch` command globally, or run it once with `npx`:
+Requires Node.js 22 or newer (24 LTS recommended) on macOS or Linux. Install the `orch` command globally, or run it once with `npx`:
 
 ```sh
 npm i -g orch-os
@@ -45,6 +50,13 @@ One coding agent needs a prompt. A team of agents needs an operating layer: some
 | 14 | Substrate | Everything else stands on it | Plain files · lock-serialized atomic writes · worker logs · unified evidence history | Files, locks, logs: Available · Evidence history: Coming soon |
 
 ## What ORCH-os provides
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-architecture-dark.svg">
+    <img src="assets/orch-os-architecture-light.svg" alt="ORCH-OS architecture: agent CLIs, role lease, mailbox, task board with claims, merge gate, workers in Git worktrees" width="860">
+  </picture>
+</p>
 
 The status below distinguishes commands on the current `main` branch from work still under review and future directions. “Coming soon” means not yet released.
 
