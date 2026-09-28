@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-banner-dark.svg">
-    <img src="assets/orch-os-banner-light.svg" alt="ORCH-OS" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/acephalt-logo-white-text.png">
+    <img src="assets/acephalt-logo-dark-text.png" alt="Acephalt" width="360">
   </picture>
 </p>
 
@@ -17,7 +17,7 @@
 
 ORCH-os helps several CLI coding agents work in one repository. A lease-held lead, shared mailbox, task board with exclusive claims, review-based merge gate, and detached workers give the team a common operating layer. It works alongside Claude Code, Codex CLI, and other command-line agents.
 
-Author: Winnicent Zuo
+Author: [Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
 ## Install
 

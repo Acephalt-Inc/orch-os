@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/orch-os-banner-dark.svg">
-    <img src="assets/orch-os-banner-light.svg" alt="ORCH-OS" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/acephalt-logo-white-text.png">
+    <img src="assets/acephalt-logo-dark-text.png" alt="Acephalt" width="360">
   </picture>
 </p>
 
@@ -17,7 +17,7 @@
 
 ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的负责人、共享信箱、支持独占认领的任务板、基于评审的合并闸门和后台工作进程，为团队提供共同的运行层。它与 Claude Code、Codex CLI 等命令行代理配合使用。
 
-作者：Winnicent Zuo
+作者：[Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
 ## 安装
 
