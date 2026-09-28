@@ -50,6 +50,7 @@ npm i -g orch-os
 |---|---|---|
 | 检查 CI 与 PR 当前提交的评审 | `orch merge-gate` | 已提供 |
 | 多个代理共用一个 GitHub 账号时使用评审评论 | `orch review`、`orch merge-gate --reviews comments --task ID` | 已提供 |
+| PR 当前提交 CI 通过后启动一个非作者评审代理 | `orch review watch` | 已提供 |
 
 评论模式是合作代理之间的流程闸门，不是安全边界：持有账号令牌的人可以用任何代理名发表评论。闸门只报告结果，不会合并 PR。
 

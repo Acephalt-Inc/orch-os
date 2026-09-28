@@ -32,6 +32,7 @@ ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, No
 | `tasks.ts` | One `Lease` per task id; no force; `CLAIMED` status names | `tasks/ID.json` |
 | `messages.ts` | Append-only JSON-lines log, seq under the lock, per-reader cursors and acks | `messages.jsonl`, `cursors/NAME.json` |
 | `mailbox.ts` | Sectioned Markdown mailbox; locked insert-at-top; parsing and reading | `mailbox.md` |
+| `reviewwatch.ts` | `review watch`: CI rows of the head commit, the pure `chooseReviewer()` (author exclusion, strength grading, profile policy), one dispatch per head through `workers.ts`, the posted-line check, doctor rows | `review-watch/OWNER__NAME__PR.json`, `review-watch/*.prompt.md` |
 | `mergegate.ts` | Review evaluation against the head commit, CI and label rules, shape validation, `gh pr view` fetch, fixtures | none (reads GitHub or a fixture) |
 | `workers.ts` | Detached `spawn` in a new session, `timeout`/`nice` wrapping, per-worker directory, process-group stop, worktrees | `workers/NAME/`, `worktrees/NAME/` |
 | `load.ts` | Portable sampling, tier state machine with hysteresis, optional renice | `load.json` |
@@ -85,6 +86,10 @@ The absolute agent path in the config means a worker started from cron, with its
 With `--reviews comments` the field list gains `comments`, and the CLI first reads the author agents of `--task ID` from the task store; `evaluate()` then takes approvals and blocks from `ORCH-REVIEW` review comments instead of GitHub reviews. `orch review` is the only command that writes to GitHub: one `gh pr comment` per call.
 
 With a `[profile]` table, `evaluate()` still decides first. The CLI then calls the pure `gateProfile()` in `profile.ts` with the approvals that counted, the author agents, the GitHub approvals at the head (for teammates) and, when `high_paths` is set, the changed files (`files,changedFiles,number` join the field list only then, and the full list comes from the paginated `gh api .../pulls/N/files`; a list whose length is not `changedFiles` reads as unreadable, so the tier is `high`). It returns the tier, the achieved and needed review strength, the teammate state, the merge authority, and its own pass/fail; the combined `ok` decides the exit code, and `render()` inserts the strength line. Without a `[profile]` none of this runs, so the output is unchanged byte for byte (`tests/snapshots/merge-gate-pre-profiles.json`).
+
+## Review-watch data flow
+
+`review watch` reads through a small host interface (`pr`, `checks`, `which`, `dispatch`, `now`, `sleep`), so every decision is testable with a fake host. It reads the PR (`gh pr view --json headRefOid,state,comments`), then the check runs and status contexts of the head commit (`gh api .../commits/SHA/check-runs` and `.../status`). `ciAtHead()` keeps only rows whose sha is the head, so a green older commit never counts. `chooseReviewer()` is pure: it drops the task's holders, grades the rest against them with the same account and vendor data as `profile.ts`, and applies `policy()` for the tier. The dispatch and the state write happen under the lock of the PR's state file, after a re-read, so two watchers never start two reviewers for one head. The reviewer is an ordinary worker (`Workers.start` with an extra environment), so `orch worker list|stop` see it. Nothing here writes to GitHub: the reviewer posts its own review comment.
 
 ## Dependencies
 

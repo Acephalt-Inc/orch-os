@@ -71,6 +71,8 @@ export interface StartOptions {
   worktree?: boolean;
   branch?: string | null;
   base?: string | null;
+  /** extra environment variables for the worker (added to this process's environment) */
+  env?: Record<string, string>;
 }
 
 export class Workers {
@@ -205,7 +207,7 @@ export class Workers {
       fin = openSync(opts.task ? opts.task : "/dev/null", "r");
       fo = openSync(`${d}/stdout.log`, "a");
       fe = openSync(`${d}/stderr.log`, "a");
-      const child = spawn(argv[0], argv.slice(1), { cwd: wd, stdio: [fin, fo, fe], detached: true });
+      const child = spawn(argv[0], argv.slice(1), { cwd: wd, stdio: [fin, fo, fe], detached: true, ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) });
       child.on("error", () => { /* reported through the missing pid below */ });
       pid = child.pid;
       child.unref();
