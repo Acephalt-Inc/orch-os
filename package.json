@@ -1,0 +1,59 @@
+{
+  "name": "orch-os",
+  "version": "2.0.0",
+  "description": "Run several CLI coding agents as one team: role lease, mailbox, addressed messages, task claims, review-based merge gate, detached workers with git worktrees, load governor, long-lived notes.",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Winnicent Zuo, Acephalt Inc. <winnicent.zuo@acephalt.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Acephalt-Inc/orch-os.git"
+  },
+  "homepage": "https://github.com/Acephalt-Inc/orch-os#readme",
+  "bugs": {
+    "url": "https://github.com/Acephalt-Inc/orch-os/issues"
+  },
+  "type": "module",
+  "bin": {
+    "orch": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "fixtures/",
+    "templates/",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "LICENSE-INTERNAL-USE",
+    "LICENSE-NONCOMMERCIAL",
+    "NOTICE",
+    "AUTHORS"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && vitest run",
+    "prepack": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "agents",
+    "orchestration",
+    "multi-agent",
+    "cli"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

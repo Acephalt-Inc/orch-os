@@ -1,0 +1,23 @@
+ORCH-os
+Copyright 2026 Winnicent Zuo, Acephalt Inc.
+
+ORCH-os is licensed under EITHER of the following licenses, at your option:
+
+  * PolyForm Internal Use License 1.0.0
+    Full text: LICENSE-INTERNAL-USE
+    https://polyformproject.org/licenses/internal-use/1.0.0
+
+  * PolyForm Noncommercial License 1.0.0
+    Full text: LICENSE-NONCOMMERCIAL
+    https://polyformproject.org/licenses/noncommercial/1.0.0
+
+You may use ORCH-os under the terms of whichever one of these two licenses
+fits your use. You do not need to comply with both.
+
+SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
+
+Required Notice: Copyright 2026 Winnicent Zuo, Acephalt Inc. (https://github.com/Acephalt-Inc/orch-os)
+
+Any use that neither license permits (for example selling ORCH-os, or
+offering it to others as part of a product or hosted service) needs a
+separate commercial license from Acephalt Inc.: hello@acephalt.com
