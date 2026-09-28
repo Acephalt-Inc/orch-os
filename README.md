@@ -25,17 +25,28 @@ npm i -g orch-os
 
 ## Why ORCH-os
 
-- **One lead:** A role lease records the holder and fences a previous holder with an epoch.
-- **Clear ownership:** Each task has one claim holder until release or expiry.
-- **Messages that wait:** Addressed questions and answers have per-reader cursors and acknowledgements.
-- **Shared context:** A Markdown mailbox and a generated role handbook make team state visible.
-- **Separate workspaces:** Workers can run in their own Git worktrees and branches.
-- **Review at the current head:** The merge gate checks CI and non-author approvals for the live PR commit.
-- **Durable notes:** Rules and lessons stay in files; retiring one keeps its history.
+One coding agent needs a prompt. A team of agents needs an operating layer: someone leads, work has one owner, messages are delivered and answered, merges wait for independent review, and what the team learns survives the session. ORCH-os organizes that layer into 14 subsystems. Each has one job and a small set of rules it enforces.
+
+| # | Subsystem | Responsibility | Parts | Status |
+|---|---|---|---|---|
+| 1 | Control plane | Exactly one lead; the team stays alive | Role lease with epoch fencing · lease renewal · scheduled background jobs · liveness watchers · derived operating mode | Lease: Available · Scheduling: In review ([#6](https://github.com/Acephalt-Inc/orch-os/pull/6)) · Watchers, mode: Coming soon |
+| 2 | Goals and verification | A goal is written once; "done" is a runnable check | Goal registry · task templates · completion checks | Coming soon |
+| 3 | Work execution | Every task has one owner and a clean worker lifecycle | Exclusive task claims · detached workers · time limits · per-worker Git worktrees · run history with ordered terminal states | Claims, workers, worktrees: Available · Run history: Coming soon |
+| 4 | Agent messaging | Questions are delivered, answered and acknowledged | Typed, addressed messages · per-reader cursors · acknowledgements · wait for reply · shared mailbox | Available |
+| 5 | Review and merge gates | Merge only on an independent review of the exact commit | CI at the live head · non-author approvals · reviewer strength grading · reviewer dispatch when CI turns green | Available |
+| 6 | Policy and approvals | Which decisions agents make alone, and which need a person | Required labels · profile-based review rules · rule registry with scope and supersession · holds | Labels, profile rules: Available · Rule registry, holds: Coming soon |
+| 7 | Resources and accounts | Work stays within machine and account limits | Load governor with hysteresis · worker admission · account and people profiles · worker caps | Available |
+| 8 | Memory | The team's experience, with a lifecycle | Capture · index · recall · verify · supersede · expire · archive | Capture, capped index, recall, supersede with successor, archive: Available · Verify on recall, age-based expiry: Coming soon |
+| 9 | Knowledge base | One registry over the team's documents | Stable IDs across stores · status per item · search that reports what it did not search | Coming soon |
+| 10 | Learning and refinement | Turn incidents and corrections into changes that stick | Incident intake · proposals with a revert path · before/after measurement · escalation from note to check | Coming soon |
+| 11 | Measurement | Numbers about the team itself | Load samples · per-task cost · trace IDs · regression replay | Load samples: Available · Cost, tracing, replay: Coming soon |
+| 12 | Identity and isolation | Bound what any one agent can touch | Agent discovery · worktree isolation · per-agent identity · sandbox and egress checks | Discovery, worktrees: Available · Identity, sandbox: Coming soon |
+| 13 | Human interface | People see the team's state and decide what only they can decide | Generated role handbook · shared mailbox · decision inbox · digests | Handbook, mailbox: Available · Inbox, digests: Coming soon |
+| 14 | Substrate | Everything else stands on it | Plain files · lock-serialized atomic writes · worker logs · unified evidence history | Files, locks, logs: Available · Evidence history: Coming soon |
 
 ## What ORCH-os provides
 
-The status below distinguishes commands on the current `main` branch from work still under review and future directions. “Planned” is a category, not a shipped command.
+The status below distinguishes commands on the current `main` branch from work still under review and future directions. “Coming soon” means not yet released.
 
 ### Workflow and dispatch
 
@@ -72,7 +83,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file | Status |
 |---|---|---|
 | Worker output and process records | `orch worker`, `~/.orch/workers/` | Available |
-| A unified history of task outcomes | — | Planned |
+| A unified history of task outcomes | — | Coming soon |
 
 ### Agent communication
 
@@ -97,7 +108,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 
 | Feature | Command or file | Status |
 |---|---|---|
-| Suggest reusable lessons from completed work | — | Planned |
+| Suggest reusable lessons from completed work | — | Coming soon |
 
 ### Policy and approvals
 
@@ -111,21 +122,21 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file | Status |
 |---|---|---|
 | Check local prerequisites | `orch doctor` | Available |
-| Track goals through completion checks | — | Planned |
+| Track goals through completion checks | — | Coming soon |
 
 ### Telemetry and cost
 
 | Feature | Command or file | Status |
 |---|---|---|
 | Read local load samples | `orch load` | Available |
-| Record per-task cost | — | Planned |
+| Record per-task cost | — | Coming soon |
 
 ### Agent discovery and isolation
 
 | Feature | Command or file | Status |
 |---|---|---|
 | Find installed agent CLIs and place workers in separate Git worktrees | `orch agents`, `orch worker start --worktree` | Available |
-| Verify agent identity and sandbox boundaries | — | Planned |
+| Verify agent identity and sandbox boundaries | — | Coming soon |
 
 ### Version and configuration
 
@@ -170,11 +181,22 @@ Full flags and exit codes: [Command reference](docs/commands.md).
 
 ## Built for multi-agent work
 
-- **Lead and worker roles:** The generated handbook gives each session a starting protocol; the CLI records the lead lease and task claims.
-- **Addressed messages:** `msg` supports typed messages, acknowledgements, and waiting for replies; `mailbox` holds shared entries.
-- **Worker controls:** Detached processes have logs and support a time limit when `timeout` or `gtimeout` is installed; optional Git worktrees isolate file edits.
-- **Human-controlled merges:** `merge-gate` reports whether review conditions pass. It does not merge a PR.
-- **Solo review flow:** `orch review approve` posts a review comment, and `orch merge-gate --reviews comments --task ID` checks it against the current head and task holder.
+The subsystems above rest on a few invariants. Each one names the mechanism that enforces it.
+
+| Invariant | Enforced by | Status |
+|---|---|---|
+| One lead at a time. A new holder increments the epoch, and a renewal from a fenced holder is refused. | `orch lease` | Available |
+| One owner per task. A claimed task cannot be taken until it is released or expires. | `orch task` | Available |
+| A message is data, not authority. Sender and type are stored outside the body, so a body cannot forge them. | `orch msg` | Available |
+| An approval binds to a commit. Reviews count only for the PR's current head, after CI at that head. | `orch merge-gate` | Available |
+| The gate reports; people merge. No `orch` command merges a PR. | `orch merge-gate` | Available |
+| Reviewer strength is explicit. Each reviewer is graded against the authors (other vendor, other account, or same agent in a fresh context); with a profile set, a weaker reviewer is never substituted, the request is blocked instead. Vendors and accounts are declared, not verified. | `orch review watch`, `orch profile` | Available |
+| Unknown fails closed. A missing or unrecognized risk tier is treated as high. | `orch profile` | Available |
+| Protect the machine, never kill work. High load refuses new workers; running ones are left alone. | `orch load`, `orch worker start` | Available |
+| Cleanup never destroys work. A worktree is removed only when Git reports nothing changed, untracked or ignored. | `orch worker stop` | Available |
+| Knowledge is superseded, not deleted. Retiring a note records its successor and keeps the file. | `orch mem retire` | Available |
+| Every task reaches a recorded end state; "unknown" is a state, not a guess. | Run history | Coming soon |
+| The learner never grades itself. Learning cannot edit the checks it is measured against. | Learning and measurement | Coming soon |
 
 ## Documentation
 
