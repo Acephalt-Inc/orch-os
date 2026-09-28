@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** `orch`: command-line entry point for ORCH-os. */
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync, accessSync, constants } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./args.js";
 import * as C from "./config.js";
@@ -17,6 +17,7 @@ import { KINDS, MessageError, Messages, renderMessage, visible } from "./message
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
+import * as S from "./setup.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
@@ -166,7 +167,7 @@ function askProfile(io: IO, found: string[]): Record<string, any> | null {
   return P.initialProfile(compute as P.Compute, people as P.People, found);
 }
 
-const cmdInit: Run = (a, io) => {
+const cmdInitLegacy: Run = (a, io) => {
   if (Boolean(a.compute) !== Boolean(a.people)) {
     eprintln(io, "init: --compute and --people go together: give both, or neither");
     return 2;
@@ -240,6 +241,60 @@ const cmdInit: Run = (a, io) => {
     println(io, `boot: point each agent session at its role file, e.g. ${targetFile(dir, "lead-boot", layout)} (see docs/faq.md)`);
   }
   println(io, "next: orch doctor");
+  return 0;
+};
+
+const guidedFlags = (a: Args): boolean => Boolean(a.yes || a.lang || a.solo || a.team || a.level || a.style || a.no_recommend);
+const legacyProfileFlags = (a: Args): boolean => Boolean(a.compute || a.people || a.no_profile);
+const setupFlags = (a: Args): S.SetupFlags => ({
+  yes: a.yes, lang: a.lang, solo: a.solo, team: a.team,
+  level: a.level, style: a.style, no_recommend: a.no_recommend,
+});
+
+const cmdInit: Run = async (a, io) => {
+  // The old non-TTY/no-flags path remains byte-for-byte identical, as do explicit old profile flags.
+  if ((!io.isTTY?.() && !guidedFlags(a)) || (a.no_handbook && !guidedFlags(a)) ||
+      (legacyProfileFlags(a) && !guidedFlags(a))) return cmdInitLegacy(a, io);
+  if (S.isHomeProject(process.cwd())) {
+    eprintln(io, "init: run from a project directory, not HOME; no files written");
+    return 2;
+  }
+  if (legacyProfileFlags(a)) {
+    eprintln(io, "init: guided flags cannot be combined with --compute/--people/--no-profile");
+    return 2;
+  }
+  const found = D.installed();
+  if (a.agent && !found.some((x) => x.name === a.agent)) {
+    eprintln(io, `init: agent '${a.agent}' not found; detected: ${found.map((x) => x.name).join(", ") || "none"}`);
+    return 2;
+  }
+  const path = C.configPath();
+  const cfg = existsSync(path) ? parseToml(readFileSync(path, "utf8")) : {};
+  const answer = S.collect(setupFlags(a), io, found.map((x) => x.name), cfg);
+  if (!answer) { eprintln(io, "init: setup cancelled; nothing written"); return 2; }
+  const legacyIo: IO = { ...io, isTTY: () => false };
+  const code = await cmdInitLegacy(a, legacyIo);
+  if (code !== 0) return code;
+  const written = C.load();
+  const dir = resolve(a.dir ? C.expand(a.dir) : handbookDir(written));
+  S.apply(answer, io, path, found.map((x) => x.name), process.cwd(), !a.no_handbook, dir, (a.layout ?? "flat") as Layout);
+  return 0;
+};
+
+const cmdSetup: Run = (a, io) => {
+  if (S.isHomeProject(process.cwd())) {
+    eprintln(io, "setup: run from a project directory, not HOME; no files written");
+    return 2;
+  }
+  const path = C.configPath();
+  if (!existsSync(path)) { eprintln(io, `setup: ${path} missing - run \`orch init\` first`); return 2; }
+  const found = D.installed().map((x) => x.name);
+  const cfg = parseToml(readFileSync(path, "utf8"));
+  const answer = S.collect(setupFlags(a), io, found, cfg);
+  if (!answer) { eprintln(io, "setup: cancelled; nothing written"); return 2; }
+  const previous = S.readSetup(cfg);
+  S.apply(answer, io, path, found, process.cwd(), true,
+    resolve(previous?.handbook_dir ?? handbookDir(cfg)), previous?.handbook_layout ?? "flat");
   return 0;
 };
 
@@ -941,6 +996,15 @@ const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "floa
   ({ dest, flags, kind, help, ...extra });
 const JSON_OPT = opt("json", ["--json"], "bool", "machine-readable output");
 const AS_OPT = opt("as", ["--as"], "str", "my name (default $ORCH_AGENT, then $ORCH_SESSION_ID, then user@host)", { metavar: "NAME" });
+const GUIDED_OPTS = [
+  opt("yes", ["--yes"], "bool", "accept guided setup defaults without questions"),
+  opt("lang", ["--lang"], "str", "handbook and reply language", { choices: ["en", "zh", "other"] }),
+  opt("solo", ["--solo"], "bool", "set up for one person"),
+  opt("team", ["--team"], "bool", "set up for teammates"),
+  opt("level", ["--level"], "str", "technical background", { choices: ["new", "some", "developer"] }),
+  opt("style", ["--style"], "str", "reply style", { choices: ["concise-tables", "standard", "skip"] }),
+  opt("no_recommend", ["--no-recommend"], "bool", "skip optional add-on recommendations"),
+];
 
 export function buildTree(): CmdSpec<Run> {
   return {
@@ -959,8 +1023,10 @@ export function buildTree(): CmdSpec<Run> {
           opt("compute", ["--compute"], "str", "profile: the agent accounts (with --people; no questions)", { choices: P.COMPUTES }),
           opt("people", ["--people"], "str", "profile: who approves merges (with --compute)", { choices: P.PEOPLE }),
           opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
+          ...GUIDED_OPTS,
         ],
       },
+      { name: "setup", help: "rerun guided setup without deleting or replacing user files", run: cmdSetup, opts: GUIDED_OPTS },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },

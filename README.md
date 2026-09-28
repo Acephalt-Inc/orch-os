@@ -46,7 +46,7 @@ One coding agent needs a prompt. A team of agents needs an operating layer: some
 | 10 | Learning and refinement | Turn incidents and corrections into changes that stick | Incident intake · proposals with a revert path · before/after measurement · escalation from note to check | Coming soon |
 | 11 | Measurement | Numbers about the team itself | Load samples · per-task cost · trace IDs · regression replay | Load samples: Available · Cost, tracing, replay: Coming soon |
 | 12 | Identity and isolation | Bound what any one agent can touch | Agent discovery · worktree isolation · per-agent identity · sandbox and egress checks | Discovery, worktrees: Available · Identity, sandbox: Coming soon |
-| 13 | Human interface | People see the team's state and decide what only they can decide | Generated role handbook · shared mailbox · decision inbox · digests | Handbook, mailbox: Available · Inbox, digests: Coming soon |
+| 13 | Human interface | People see the team's state and decide what only they can decide | Guided setup · generated role handbook · shared mailbox · decision inbox · digests | Guided setup: Available once merged · Handbook, mailbox: Available · Inbox, digests: Coming soon |
 | 14 | Substrate | Everything else stands on it | Plain files · lock-serialized atomic writes · worker logs · unified evidence history | Files, locks, logs: Available · Evidence history: Coming soon |
 
 ## What ORCH-os provides
