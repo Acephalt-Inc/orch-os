@@ -5,6 +5,9 @@
  * integers (with _), floats, booleans, arrays (multi-line, trailing comma, comments) and
  * inline tables. Not supported, and reported as an error rather than guessed: multi-line
  * strings, dates/times, arrays of tables ([[x]]). Duplicate keys and tables are errors.
+ *
+ * It also has one writer, replaceTables(): it swaps whole tables (header line to the next header)
+ * for a new block of text and leaves every other byte of the file as it was.
  */
 
 export class TomlError extends Error {
@@ -23,6 +26,8 @@ const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 class Parser {
   i = 0;
   line = 1;
+  /** Every [table] header, in file order: its dotted name and the offset of its line. */
+  headers: TableHeader[] = [];
   constructor(readonly s: string) {}
 
   err(msg: string): never {
@@ -223,6 +228,7 @@ class Parser {
       if (this.eof()) return root;
       if (this.peek() === "[") {
         if (this.s[this.i + 1] === "[") this.err("arrays of tables are not supported");
+        const start = this.s.lastIndexOf("\n", this.i - 1) + 1;
         this.i++;
         const k = this.key();
         if (this.peek() !== "]") this.err("expected ] after table name");
@@ -230,6 +236,7 @@ class Parser {
         const id = JSON.stringify(k);
         if (defined.has(id)) this.err(`duplicate table [${k.join(".")}]`);
         defined.add(id);
+        this.headers.push({ name: k, start });
         cur = root;
         for (const part of k) {
           if (UNSAFE_KEYS.has(part)) this.err(`key ${part} is not allowed`);
@@ -252,4 +259,78 @@ class Parser {
 
 export function parseToml(text: string): Record<string, any> {
   return new Parser(text).parse();
+}
+
+export interface TableHeader {
+  name: string[];
+  /** offset of the first character of the header's line */
+  start: number;
+}
+
+/** The [table] headers of a valid TOML text, in order. Throws TomlError like parseToml. */
+export function tableHeaders(text: string): TableHeader[] {
+  const p = new Parser(text);
+  p.parse();
+  return p.headers;
+}
+
+/** Blank lines and comment lines at the end of `seg`: they introduce the next table, so they stay. */
+function leadInStart(seg: string): number {
+  const lines = seg.split(/(?<=\n)/);
+  let cut = seg.length;
+  for (let k = lines.length - 1; k > 0; k--) {
+    const t = lines[k].trim();
+    if (t !== "" && !t.startsWith("#")) break;
+    cut -= lines[k].length;
+  }
+  return cut;
+}
+
+/**
+ * Replace every table whose name matches `target` with `block`, and keep all other bytes.
+ *
+ * A matched table runs from its header line to the next header line. When the next header is not
+ * a match, the blank and comment lines just above it stay (they belong to that table). Matched
+ * tables are removed and `block` goes where the first one was; with no match, `block` is
+ * appended after one blank line. Throws TomlError when the text is not valid TOML.
+ */
+export function replaceTables(text: string, target: (name: string[]) => boolean, block: string): string {
+  const ranges = tableRanges(text, target);
+  if (!ranges.length) {
+    if (!block) return text;
+    const sep = text === "" || text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+    return text + sep + block;
+  }
+  let out = "";
+  let pos = 0;
+  ranges.forEach(([s, e], k) => {
+    out += text.slice(pos, s) + (k === 0 ? block : "");
+    pos = e;
+  });
+  return out + text.slice(pos);
+}
+
+/** The [start, end) offsets of every table matching `target`, as replaceTables() cuts them. */
+export function tableRanges(text: string, target: (name: string[]) => boolean): [number, number][] {
+  const hs = tableHeaders(text);
+  const ranges: [number, number][] = [];
+  hs.forEach((h, i) => {
+    if (!target(h.name)) return;
+    const next = hs[i + 1];
+    let end = next ? next.start : text.length;
+    if (!next || !target(next.name)) end = h.start + leadInStart(text.slice(h.start, end));
+    ranges.push([h.start, end]);
+  });
+  return ranges;
+}
+
+/** A TOML key: bare when it can be, else a basic string. */
+export function tomlKey(k: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k);
+}
+
+/** A TOML value for a string, integer or array of strings. */
+export function tomlValue(v: string | number | string[]): string {
+  if (Array.isArray(v)) return "[" + v.map((x) => JSON.stringify(x)).join(", ") + "]";
+  return typeof v === "number" ? String(v) : JSON.stringify(v);
 }

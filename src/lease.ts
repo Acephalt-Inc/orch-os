@@ -26,10 +26,14 @@ export interface LeaseRunOptions {
   trackHolders?: boolean;
 }
 
-/** Every distinct holder on record, oldest first. Files written before `holders` existed give previous_owner, session_id. */
+/**
+ * Every distinct holder on record, oldest first. Files written before `holders` existed give
+ * previous_owner, session_id. The current holder (session_id) is always included, even when a
+ * `holders` list exists but does not name it.
+ */
 export function holderHistory(state: Record<string, any>): string[] {
   const seen: string[] = [];
-  const raw = Array.isArray(state.holders) ? state.holders : [state.previous_owner, state.session_id];
+  const raw = Array.isArray(state.holders) ? [...state.holders, state.session_id] : [state.previous_owner, state.session_id];
   for (const h of raw) if (typeof h === "string" && h !== "" && !seen.includes(h)) seen.push(h);
   return seen;
 }

@@ -5,7 +5,8 @@
  * Usage errors raise UsageError; the CLI prints them argparse-style and exits 2.
  */
 
-export type Kind = "bool" | "str" | "int" | "float";
+/** "list": a string option that may repeat; the values collect in order. */
+export type Kind = "bool" | "str" | "int" | "float" | "list";
 
 export interface OptSpec {
   dest: string;
@@ -111,7 +112,7 @@ export function parse<R>(spec: CmdSpec<R>, argv: string[], path: string[] = [spe
   }
   const args: Args = { _path: path };
   const opts = spec.opts ?? [];
-  for (const o of opts) args[o.dest] = o.kind === "bool" ? false : null;
+  for (const o of opts) args[o.dest] = o.kind === "bool" ? false : o.kind === "list" ? [] : null;
   const pos: string[] = [];
   let onlyPos = false;
   for (let i = 0; i < argv.length; i++) {
@@ -147,7 +148,8 @@ export function parse<R>(spec: CmdSpec<R>, argv: string[], path: string[] = [spe
         if (i + 1 >= argv.length) throw new UsageError(`argument ${o.flags.join("/")}: expected one argument`, usage);
         raw = argv[++i];
       }
-      args[o.dest] = convert(o, raw, usage);
+      if (o.kind === "list") args[o.dest].push(convert(o, raw, usage));
+      else args[o.dest] = convert(o, raw, usage);
       continue;
     }
     pos.push(t);

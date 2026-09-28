@@ -127,20 +127,7 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
   }
   const head = live;
   if ((opts.reviewSource ?? "github") === "comments") return evaluateComments(pr, res, head, need, requiredLabel, opts.authorAgents ?? []);
-  const author = login(pr.author);
-  const latest = new Map<string, Record<string, any>>(); // reviewer -> latest decisive review
-  let selfReviews = 0;
-  for (const rvRaw of list(pr.reviews, "reviews")) {
-    const rv = obj(rvRaw, "review");
-    const who = login(rv.author);
-    const state = str(rv.state, "review state").toUpperCase();
-    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(state) || !who) continue;
-    if (who === author) {
-      selfReviews += 1;
-      continue;
-    }
-    latest.set(who, rv);
-  }
+  const { latest, self: selfReviews } = latestReviews(pr);
   let approvals = 0;
   let stale = 0;
   let blocking = 0;
@@ -160,6 +147,47 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
     approvals, stale, self: selfReviews, changes_requested: blocking,
   });
   return res;
+}
+
+/** Per non-author reviewer login, the latest decisive GitHub review; `self` counts the author's own. */
+function latestReviews(pr: Record<string, any>): { latest: Map<string, Record<string, any>>; self: number } {
+  const author = login(pr.author);
+  const latest = new Map<string, Record<string, any>>(); // reviewer -> latest decisive review
+  let self = 0;
+  for (const rvRaw of list(pr.reviews, "reviews")) {
+    const rv = obj(rvRaw, "review");
+    const who = login(rv.author);
+    const state = str(rv.state, "review state").toUpperCase();
+    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(state) || !who) continue;
+    if (who === author) {
+      self += 1;
+      continue;
+    }
+    latest.set(who, rv);
+  }
+  return { latest, self };
+}
+
+/** Profiles: GitHub logins (lower case, sorted) whose latest decisive review is APPROVED at the head. */
+export function githubApprovedAtHead(info: unknown): string[] {
+  const pr = obj(info, "PR data");
+  const head = str(pr.headRefOid, "headRefOid").toLowerCase();
+  return [...latestReviews(pr).latest.entries()]
+    .filter(([, rv]) => String(rv.state).toUpperCase() === "APPROVED" && str(obj(rv.commit, "review commit").oid, "commit oid").toLowerCase() === head)
+    .map(([who]) => who).sort();
+}
+
+/** Profiles: the PR author's login, lower case. */
+export function prAuthor(info: unknown): string {
+  return login(obj(info, "PR data").author);
+}
+
+/** Profiles: the changed file paths (`gh pr view --json files`), or null when they cannot be read. */
+export function changedFiles(info: unknown): string[] | null {
+  const f = isPlainObject(info) ? info.files : undefined;
+  if (!Array.isArray(f)) return null;
+  const paths = f.map((x) => (isPlainObject(x) && typeof x.path === "string" ? x.path : null));
+  return paths.some((x) => x === null) ? null : (paths as string[]);
 }
 
 function ciAndLabel(pr: Record<string, any>, requiredLabel: string) {
@@ -189,16 +217,7 @@ function evaluateComments(pr: Record<string, any>, res: Record<string, any>, hea
     return res;
   }
   // GitHub CHANGES_REQUESTED from a non-author login still blocks (fail closed); approvals there do not count
-  const prAuthor = login(pr.author);
-  const ghLatest = new Map<string, string>();
-  for (const rvRaw of list(pr.reviews, "reviews")) {
-    const rv = obj(rvRaw, "review");
-    const who = login(rv.author);
-    const state = str(rv.state, "review state").toUpperCase();
-    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(state) || !who || who === prAuthor) continue;
-    ghLatest.set(who, state);
-  }
-  const ghBlocking = [...ghLatest.values()].filter((s) => s === "CHANGES_REQUESTED").length;
+  const ghBlocking = [...latestReviews(pr).latest.values()].filter((rv) => String(rv.state).toUpperCase() === "CHANGES_REQUESTED").length;
   const latest = new Map<string, ReviewLine>(); // agent -> latest review comment at the head, in comment order
   let stale = 0;
   let self = 0;
@@ -234,16 +253,19 @@ function evaluateComments(pr: Record<string, any>, res: Record<string, any>, hea
   return res;
 }
 
-/** The `gh pr view --json` field list. The github source is unchanged from v2.0; comments adds `comments`. */
-export function liveFields(source: ReviewSource = "github"): string {
-  return "author,headRefOid,reviews,labels,statusCheckRollup" + (source === "comments" ? ",comments" : "");
+/**
+ * The `gh pr view --json` field list. The github source is unchanged from v2.0; comments adds
+ * `comments`; `files` is added only for a profile with path rules.
+ */
+export function liveFields(source: ReviewSource = "github", files = false): string {
+  return "author,headRefOid,reviews,labels,statusCheckRollup" + (source === "comments" ? ",comments" : "") + (files ? ",files" : "");
 }
 
-export function fetchLive(pr: string, repo: string, source: ReviewSource = "github"): unknown {
+export function fetchLive(pr: string, repo: string, source: ReviewSource = "github", files = false): unknown {
   if (!which("gh")) throw new Error("live mode needs the GitHub CLI `gh` (or use --fixture)");
   if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
   const out = spawnSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json",
-    liveFields(source)], { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
+    liveFields(source, files)], { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || "gh pr view failed");
   return JSON.parse(out.stdout);
@@ -286,8 +308,13 @@ export function fixtureNames(): string[] {
   }
 }
 
-export function render(pr: string, r: Record<string, any>): string {
+/**
+ * The text verdict. `profileLines`, when given, is [strength line, verdict line] from a profile
+ * (profile.ts); without it the output is the plain gate's, byte for byte.
+ */
+export function render(pr: string, r: Record<string, any>, profileLines?: [string, string]): string {
   if (!("checks" in r)) return `#${pr} => BLOCKED (${r.reason})`;
+  if (profileLines) return render(pr, r).replace(/\n=> (PASS|BLOCKED)$/, "\n" + profileLines.join("\n"));
   const ci = r.ci_ok ? "green" : "NOT green " + dumps(r.checks);
   const label = !r.label ? "off" : r.label_ok ? r.label : `MISSING '${r.label}'`;
   if (r.reviews === "comments") {

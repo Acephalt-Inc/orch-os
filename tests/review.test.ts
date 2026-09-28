@@ -230,6 +230,16 @@ describe("ReviewCli", () => {
     expect("holders" in r.state).toBe(false);
   });
 
+  it("the_current_holder_is_an_author_even_when_the_holders_list_omits_it", async () => {
+    // a task file whose holders list does not name its current holder: r1 still authored the PR
+    const dir = join(ctx.home, "tasks");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "odd.json"), JSON.stringify({ holders: ["q"], session_id: "r1", epoch: 1, state: "ACTIVE", lease_expires_at: 0 }));
+    expect(new Tasks(dir).holders("odd")).toEqual(["q", "r1"]);
+    const [code, out] = await run("merge-gate", "101", "--fixture", "comment-approved", "--reviews", "comments", "--task", "odd");
+    expect([code, out]).toEqual([1, "#101 head=4f2c9a1e7 ci=green reviews=comments author=q,r1 approvals=0/1 (stale=0 self=1 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n"]);
+  });
+
   it("large_gh_output_is_read_not_blocked", async () => {
     // > 1 MiB of PR JSON (a long comment thread) must not hit Node's default spawnSync buffer
     const big = structuredClone(M.loadFixture("comment-approved") as Record<string, any>);

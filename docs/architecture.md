@@ -24,7 +24,8 @@ ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, No
 |---|---|---|
 | `cli.ts` | One `cmd*` function per subcommand, exit codes, error mapping; everything after `--` in `worker start` is kept verbatim | none |
 | `args.ts` | argparse-style parsing: nested subcommands, typed options, `--opt=value`, `-n5`, `--`, `-h` | none |
-| `config.ts`, `toml.ts` | Default config template, `ORCH_HOME` resolution, TOML reading | `config.toml` |
+| `config.ts`, `toml.ts` | Default config template, `ORCH_HOME` resolution, TOML reading; `replaceTables()` swaps whole tables in the text and keeps every other byte | `config.toml` |
+| `profile.ts` | The `[profile]` tables: validation, degrade rules, the pure `policy()` table, grading of approvals, tier choice, doctor rows, rendering the tables | `config.toml` (`[profile]` tables, through `toml.ts`) |
 | `detect.ts` | Known agent CLIs and headless command templates; PATH plus fallback-dir search (`ORCH_AGENT_DIRS`) | none |
 | `lock.ts` | The cross-process lock (below) | `<file>.lock.d/` |
 | `lease.ts` | status / acquire / renew / release under the lock; epoch fencing; read-back | `lease.json` |
@@ -83,6 +84,8 @@ The absolute agent path in the config means a worker started from cron, with its
 
 With `--reviews comments` the field list gains `comments`, and the CLI first reads the author agents of `--task ID` from the task store; `evaluate()` then takes approvals and blocks from `ORCH-REVIEW` review comments instead of GitHub reviews. `orch review` is the only command that writes to GitHub: one `gh pr comment` per call.
 
+With a `[profile]` table, `evaluate()` still decides first. The CLI then calls the pure `gateProfile()` in `profile.ts` with the approvals that counted, the author agents, the GitHub approvals at the head (for teammates) and, when `high_paths` is set, the changed files (`files` joins the field list only then). It returns the tier, the achieved and needed review strength, the teammate state, the merge authority, and its own pass/fail; the combined `ok` decides the exit code, and `render()` inserts the strength line. Without a `[profile]` none of this runs, so the output is unchanged byte for byte (`tests/snapshots/merge-gate-pre-profiles.json`).
+
 ## Dependencies
 
 **Runtime: none.** The published package depends only on Node.js built-ins (`fs`, `child_process`, `os`, `path`, `crypto`, `url`). The pieces a library would usually provide are small and local:
@@ -98,6 +101,8 @@ With `--reviews comments` the field list gains `comments`, and the CLI first rea
 ## Configuration
 
 All deployment-specific values live in `config.toml`. Read-only commands work before `init` because missing config falls back to the rendered defaults, and a v1.1 config without the new tables gets defaults for them. A malformed file gives a one-line error and exit 2.
+
+`config.toml` is written in three places only: `init` (the whole file), and `profile update` / `init --force` for the profile tables. `profile update` never re-renders the file: `replaceTables()` locates the `[profile*]` table headers with the same parser that reads the config, cuts each table from its header to the next header (leaving comments just above a non-profile header in place), and puts the new tables where the first one was. The result is read back and compared, table by table, before it replaces the file.
 
 ## Left out on purpose
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** `orch`: command-line entry point for ORCH-os. */
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync, accessSync, constants } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync, accessSync, constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./args.js";
@@ -15,10 +15,11 @@ import { Mem, MemError } from "./mem.js";
 import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
+import * as P from "./profile.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
-import { TomlError } from "./toml.js";
-import { defaultSession, padEnd, sleep, which } from "./util.js";
+import { parseToml, TomlError } from "./toml.js";
+import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, Workers } from "./workers.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
@@ -27,12 +28,42 @@ export interface IO {
   out(s: string): void;
   err(s: string): void;
   stdin(): string;
+  /** Is stdin a terminal? Absent = no (nothing is asked). */
+  isTTY?(): boolean;
+  /** Print a question and read one answer line; null at end of input. */
+  ask?(q: string): string | null;
+}
+
+/** One line from fd 0, without its newline; null at end of input. */
+function readLineSync(): string | null {
+  const bytes: number[] = [];
+  const b = Buffer.alloc(1);
+  for (;;) {
+    let n = 0;
+    try {
+      n = readSync(0, b, 0, 1, null);
+    } catch (e: any) {
+      if (e && e.code === "EAGAIN") {
+        sleepSync(20);
+        continue;
+      }
+      if (!(e && e.code === "EOF")) throw e;
+    }
+    if (n === 0) return bytes.length ? Buffer.from(bytes).toString("utf8") : null;
+    if (b[0] === 10) return Buffer.from(bytes).toString("utf8").replace(/\r$/, "");
+    bytes.push(b[0]);
+  }
 }
 
 const processIO: IO = {
   out: (s) => process.stdout.write(s),
   err: (s) => process.stderr.write(s),
   stdin: () => readFileSync(0, "utf8"),
+  isTTY: () => Boolean(process.stdin.isTTY),
+  ask: (q) => {
+    process.stdout.write(q);
+    return readLineSync();
+  },
 };
 
 type Run = (a: Args, io: IO) => number | Promise<number>;
@@ -112,7 +143,37 @@ function printAgents(io: IO, agents: D.Agent[], def?: string | null): void {
   }
 }
 
+/** Ask until an answer is in `map` (3 tries); null = no answer. */
+function askChoice(io: IO, q: string, map: Record<string, string>): string | null {
+  for (let i = 0; i < 3; i++) {
+    const ans = io.ask!(q);
+    if (ans === null) return null;
+    const k = ans.trim().toLowerCase();
+    if (Object.hasOwn(map, k)) return map[k];
+    println(io, `  answer one of: ${Object.keys(map).filter((x) => x).join(", ")}`);
+  }
+  return null;
+}
+
+/** The two `orch init` questions. Detected agent CLIs pre-fill the account vendors. */
+function askProfile(io: IO, found: string[]): Record<string, any> | null {
+  const compute = askChoice(io, "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs? [1/2/3, default 1] ",
+    { "": "one", "1": "one", one: "one", "2": "same-vendor", "same-vendor": "same-vendor", "3": "multi-vendor", "multi-vendor": "multi-vendor" });
+  if (!compute) return null;
+  const people = askChoice(io, "Solo, or with teammates? [solo/team, default solo] ", { "": "solo", solo: "solo", team: "team", teammates: "team" });
+  if (!people) return null;
+  return P.initialProfile(compute as P.Compute, people as P.People, found);
+}
+
 const cmdInit: Run = (a, io) => {
+  if (Boolean(a.compute) !== Boolean(a.people)) {
+    eprintln(io, "init: --compute and --people go together: give both, or neither");
+    return 2;
+  }
+  if (a.no_profile && a.compute) {
+    eprintln(io, "init: --no-profile cannot be combined with --compute/--people");
+    return 2;
+  }
   const home = C.orchHome();
   mkdirSync(home, { recursive: true });
   const p = C.configPath();
@@ -123,12 +184,42 @@ const cmdInit: Run = (a, io) => {
   }
   const def = a.agent || (agents.length ? agents[0].name : null);
   if (existsSync(p) && !a.force) {
+    if (a.compute) {
+      eprintln(io, `init: ${p} exists and is not rewritten without --force; set the profile with \`orch profile update --compute ${a.compute} --people ${a.people}\``);
+      return 2;
+    }
     println(io, `config exists: ${p} (unchanged; --force rewrites it)`);
     printAgents(io, agents);
   } else {
+    // --force keeps an existing [profile] as it was, unless --compute/--people replace it
+    let kept = "";
+    if (existsSync(p) && !a.compute) {
+      const old = readFileSync(p, "utf8");
+      try {
+        kept = P.profileBlock(old);
+      } catch (e) {
+        if (!(e instanceof TomlError)) throw e;
+        if (/^\s*\[\s*profile\b/m.test(old)) {
+          eprintln(io, `init: ${p} is not valid TOML (${e.message}) and has a [profile] table; fix it, or remove the table, before --force`);
+          return 2;
+        }
+      }
+    }
     printAgents(io, agents, def);
-    writeFileSync(p, C.renderDefault(home, agents, def));
+    const found = agents.map((x) => x.name);
+    const fresh = kept ? null : a.compute ? P.initialProfile(a.compute, a.people, found)
+      : !a.no_profile && io.isTTY?.() && io.ask ? askProfile(io, found) : null;
+    let text = C.renderDefault(home, agents, def);
+    if (kept) text = P.withProfileBlock(text, kept);
+    else if (fresh) {
+      text = P.writeProfileText(text, fresh);
+      P.readProfile(parseToml(text)); // a bad value is a ConfigError (exit 2) before anything is written
+    }
+    writeFileSync(p, text);
     println(io, `wrote ${p}`);
+    if (kept) println(io, "kept the existing [profile] tables");
+    else if (fresh) println(io, `profile: ${P.cellLabel(P.readProfile(parseToml(text))!)} (\`orch profile show\`; add agents with \`orch profile update --agent NAME=ACCOUNT\`)`);
+    else if (io.isTTY?.() && io.ask && !a.no_profile) println(io, "no profile written (`orch profile update --compute ... --people ...` adds one later)");
   }
   const cfg = C.load();
   mkdirSync(join(home, "workers"), { recursive: true });
@@ -279,6 +370,14 @@ const cmdDoctor: Run = (_a, io) => {
     }
     const tier = LD.readState(loadPath(cfg)).tier;
     add(true, "load state", tier || "no sample yet (run `orch load`)");
+    // profile rows only when a [profile] table exists: without one, doctor prints what it always did
+    let prof: P.Profile | null = null;
+    try {
+      prof = P.readProfile(cfg);
+    } catch (e: any) {
+      add(false, "profile", String(e.message ?? e));
+    }
+    if (prof) for (const [ok, name, detail] of P.capabilityRows(prof, profileEnv(cfg))) add(ok, name, detail, true);
   }
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [s, n, d] of rows) println(io, `${padEnd(s, 4)}  ${padEnd(n, w)}  ${d}`);
@@ -286,6 +385,13 @@ const cmdDoctor: Run = (_a, io) => {
   println(io, `doctor: ${fails ? "FAIL" : "PASS"} (${fails} required check(s) failed)`);
   return fails ? 1 : 0;
 };
+
+function profileEnv(cfg: Record<string, any>): P.Env {
+  return {
+    found: D.installed().map((x) => x.name), configured: Object.keys(cfg.agents ?? {}),
+    gh: which("gh") !== null, repo: (cfg.merge ?? {}).repo ?? "",
+  };
+}
 
 const cmdConfig: Run = (_a, io) => {
   const cfg = C.loadOrDefault();
@@ -361,6 +467,11 @@ const cmdMergeGate: Run = (a, io) => {
   const cfg = C.loadOrDefault();
   const mc = cfg.merge ?? {};
   const source = reviewSource(cfg, a);
+  const prof = P.readProfile(cfg);
+  if (!prof && (a.tier || a.auto)) {
+    eprintln(io, `merge-gate: ${a.tier ? "--tier" : "--auto"} needs a [profile] table in config.toml, and none is set (see \`orch profile update\`)`);
+    return 2;
+  }
   let authors: string[] = [];
   if (source === "comments") {
     if (!a.task) {
@@ -380,7 +491,7 @@ const cmdMergeGate: Run = (a, io) => {
   }
   let info: unknown;
   try {
-    info = a.fixture ? M.loadFixture(a.fixture) : M.fetchLive(a.pr, a.repo || mc.repo || "", source);
+    info = a.fixture ? M.loadFixture(a.fixture) : M.fetchLive(a.pr, a.repo || mc.repo || "", source, Boolean(prof && prof.high_paths.length));
   } catch (e: any) {
     println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
     return 1;
@@ -397,8 +508,26 @@ const cmdMergeGate: Run = (a, io) => {
     println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
     return 1;
   }
+  let lines: [string, string] | undefined;
+  if (prof && "checks" in r) {
+    try {
+      const gh = M.githubApprovedAtHead(info);
+      const pg = P.gateProfile(prof, {
+        tierFlag: a.tier, auto: a.auto, files: M.changedFiles(info), githubApproved: gh,
+        // a teammate's GitHub approval is a human review, never an agent review
+        approvers: source === "comments" ? r.approved_by : gh.filter((l) => !P.isTeammate(prof, l)),
+        authors: source === "comments" ? authors : [M.prAuthor(info)],
+      });
+      r.ok = r.ok && pg.ok;
+      r.profile = pg.info;
+      lines = [P.strengthLine(pg.info), P.verdictLine(r.ok, pg.info)];
+    } catch (e: any) {
+      println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
+      return 1;
+    }
+  }
   if (r.malformed) eprintln(io, `merge-gate: warning: ${r.malformed} comment(s) look like ORCH-REVIEW lines but are malformed; they were not counted`);
-  println(io, a.json ? dumps(r) : M.render(a.pr, r));
+  println(io, a.json ? dumps(r) : M.render(a.pr, r, lines));
   return r.ok ? 0 : 1;
 };
 
@@ -433,10 +562,20 @@ const cmdReview: Run = (a, io) => {
 };
 
 const cmdWorker: Run = async (a, io) => {
-  const w = workers(C.loadOrDefault());
+  const cfg = C.loadOrDefault();
+  const w = workers(cfg);
   try {
     const action = a._path[2];
     if (action === "start") {
+      const prof = P.readProfile(cfg);
+      if (prof && !a.force) {
+        const cap = P.policyFor(prof, "high").workerCap;
+        const running = w.list().filter((x) => x.state === "RUNNING").length;
+        if (running >= cap) {
+          eprintln(io, `worker: ${running} worker(s) running and the profile's worker cap is ${cap} (${P.cellLabel(prof)}); stop one, or pass --force`);
+          return 2;
+        }
+      }
       const m = w.start(a.name, {
         command: a.cmd?.length ? a.cmd : null, task: a.task, workdir: a.workdir, minutes: a.minutes,
         force: a.force, agent: a.agent, worktree: a.worktree, branch: a.branch, base: a.base,
@@ -610,9 +749,140 @@ const cmdMem: Run = (a, io) => {
   }
 };
 
+/** Key-order-independent JSON, for comparing parsed tables. */
+function canon(v: unknown): string {
+  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+  if (isPlainObject(v)) return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+  return JSON.stringify(v);
+}
+
+function showProfile(io: IO, cfg: Record<string, any>, json: boolean): number {
+  const prof = P.readProfile(cfg);
+  if (!prof) {
+    println(io, json ? dumps({ profile: null }) : "profile: not set (merge gate uses the plain rule)");
+    return 0;
+  }
+  const eff = P.effective(prof);
+  const rows = P.capabilityRows(prof, profileEnv(cfg));
+  const pol = (t: P.Tier) => {
+    const x = P.policyFor(prof, t);
+    return { need_agent: x.needAgent, need_teammate: x.needTeammate, authority: x.authority, worker_cap: x.workerCap };
+  };
+  const cell = P.cellOf(eff.compute, prof.people);
+  const declared = P.cellOf(prof.compute, prof.people);
+  const missing = rows.filter(([ok]) => !ok).map(([, name, detail]) => `${name}: ${detail}`);
+  if (json) {
+    println(io, dumps({
+      cell, declared_cell: declared, compute: prof.compute, effective_compute: eff.compute, people: prof.people,
+      lead_account: prof.lead_account, default_tier: prof.default_tier, high_paths: prof.high_paths, teammates: prof.teammates,
+      accounts: prof.accounts, agents: prof.raw.agents ?? {}, max_workers: prof.max_workers, workers_per_account: prof.workers_per_account,
+      policy: { low: pol("low"), high: pol("high") }, degraded: eff.degraded, missing,
+    }));
+    return 0;
+  }
+  const list = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
+  println(io, `profile: ${P.cellLabel(prof)}` + (declared !== cell ? `, declared cell ${declared} (${prof.compute} · ${prof.people})` : ""));
+  println(io, `accounts: ${list(Object.entries(prof.accounts).map(([id, v]) => `${id} (${v})`))}` + (prof.lead_account ? `; lead ${prof.lead_account}` : ""));
+  println(io, `agents: ${list(Object.entries<string>(prof.raw.agents ?? {}).map(([n, id]) => `${n}=${id}`))}`);
+  println(io, `teammates: ${list(prof.teammates)}`);
+  println(io, `tiers: default=${prof.default_tier} high_paths=${list(prof.high_paths)}`);
+  for (const t of P.TIERS) {
+    const x = pol(t);
+    println(io, `${padEnd(t + ":", 5)} review=${x.need_agent} teammate=${x.need_teammate ? "yes" : "no"} authority=${x.authority} worker_cap=${x.worker_cap}`);
+  }
+  if (!missing.length) println(io, "missing: none");
+  for (const m of missing) println(io, `missing: ${m}`);
+  return 0;
+}
+
+/** NAME=VALUE pairs from a repeatable flag. */
+function pairs(items: string[], flag: string): [string, string][] {
+  return items.map((x) => {
+    const i = x.indexOf("=");
+    if (i <= 0 || i === x.length - 1) throw new C.ConfigError(`${flag} takes NAME=VALUE (got '${x}')`);
+    const k = x.slice(0, i);
+    if (["__proto__", "constructor", "prototype"].includes(k)) throw new C.ConfigError(`${flag}: the name '${k}' is not allowed`);
+    return [k, x.slice(i + 1)];
+  });
+}
+
+const cmdProfile: Run = (a, io) => {
+  if (a._path[2] === "show") return showProfile(io, C.loadOrDefault(), a.json);
+  const path = C.configPath();
+  if (!existsSync(path)) {
+    eprintln(io, `profile: ${path} missing - run \`orch init\` first`);
+    return 2;
+  }
+  const text = readFileSync(path, "utf8");
+  const cfg = parseToml(text);
+  const fail = (m: string) => {
+    eprintln(io, `profile: ${m}; nothing written`);
+    return 2;
+  };
+  if (cfg.profile !== undefined && !isPlainObject(cfg.profile)) return fail("[profile] is not a table");
+  if (cfg.profile === undefined && !(a.compute && a.people)) return fail("no [profile] yet: creating one needs both --compute and --people");
+  const raw: Record<string, any> = structuredClone(cfg.profile ?? {});
+  try {
+    if (a.compute) raw.compute = a.compute;
+    if (a.people) raw.people = a.people;
+    if (a.default_tier) raw.default_tier = a.default_tier;
+    if (a.lead_account) raw.lead_account = a.lead_account;
+    if (a.max_workers !== null) raw.max_workers = a.max_workers;
+    for (const [t, add, del, what] of [["accounts", pairs(a.account, "--account"), a.remove_account, "account"],
+      ["agents", pairs(a.agent, "--agent"), a.remove_agent, "agent"]] as const) {
+      if (!add.length && !del.length) continue;
+      if (raw[t] !== undefined && !isPlainObject(raw[t])) return fail(`[profile.${t}] is not a table`);
+      raw[t] = { ...(raw[t] ?? {}) };
+      for (const [k, v] of add) raw[t][k] = v;
+      for (const k of del) {
+        if (!Object.hasOwn(raw[t], k)) return fail(`no ${what} '${k}' in [profile.${t}]`);
+        delete raw[t][k];
+      }
+    }
+    for (const [key, add, del, same] of [["teammates", a.teammate, a.remove_teammate, (x: string, y: string) => x.toLowerCase() === y.toLowerCase()],
+      ["high_paths", a.high_path, a.remove_high_path, (x: string, y: string) => x === y]] as const) {
+      if (!add.length && !del.length) continue;
+      if (raw[key] !== undefined && !Array.isArray(raw[key])) return fail(`[profile] ${key} is not an array`);
+      let cur: string[] = [...(raw[key] ?? [])];
+      for (const x of add) if (!cur.some((y) => same(x, y))) cur.push(x);
+      for (const x of del) {
+        if (!cur.some((y) => same(x, y))) return fail(`'${x}' is not in [profile] ${key}`);
+        cur = cur.filter((y) => !same(x, y));
+      }
+      raw[key] = cur;
+    }
+    // the rendering always has both sub-tables
+    for (const t of ["accounts", "agents"]) raw[t] ??= {};
+    P.readProfile({ profile: raw });
+  } catch (e) {
+    if (e instanceof C.ConfigError) return fail(e.message);
+    throw e;
+  }
+  // replace only the profile tables, then prove it: the profile reads back as written and every other table is unchanged
+  let next = "";
+  let ok = false;
+  try {
+    next = P.writeProfileText(text, raw);
+    const back = parseToml(next);
+    const { profile: _old, ...before } = cfg;
+    const { profile: now, ...after } = back;
+    ok = canon(now) === canon(raw) && canon(before) === canon(after);
+  } catch (e) {
+    if (!(e instanceof TomlError)) throw e;
+  }
+  if (!ok) return fail("the profile could not be rewritten as [profile] tables in place (is it written as inline tables or dotted keys?)");
+  if (a.dry_run) {
+    io.out(P.renderProfile(raw));
+    return 0;
+  }
+  atomicWrite(path, next, { mode: statSync(path).mode & 0o777 });
+  println(io, `updated [profile] in ${path}`);
+  return showProfile(io, parseToml(next), false);
+};
+
 // ---- the command tree -------------------------------------------------------------------------
 
-const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
+const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
   ({ dest, flags, kind, help, ...extra });
 const JSON_OPT = opt("json", ["--json"], "bool", "machine-readable output");
 const AS_OPT = opt("as", ["--as"], "str", "my name (default $ORCH_AGENT, then $ORCH_SESSION_ID, then user@host)", { metavar: "NAME" });
@@ -631,6 +901,9 @@ export function buildTree(): CmdSpec<Run> {
           opt("layout", ["--layout"], "str", "flat (NAME.md) or skills (NAME/SKILL.md)", { choices: ["flat", "skills"] }),
           opt("force_handbook", ["--force-handbook"], "bool", "overwrite handbook files you may have edited"),
           opt("no_handbook", ["--no-handbook"], "bool", "do not write the handbook"),
+          opt("compute", ["--compute"], "str", "profile: the agent accounts (with --people; no questions)", { choices: P.COMPUTES }),
+          opt("people", ["--people"], "str", "profile: who approves merges (with --compute)", { choices: P.PEOPLE }),
+          opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
@@ -717,7 +990,37 @@ export function buildTree(): CmdSpec<Run> {
           opt("fixture", ["--fixture"], "str", "offline: a bundled fixture (" + M.fixtureNames().join(", ") + ") or a path to `gh pr view --json` output"),
           opt("reviews", ["--reviews"], "str", "where approvals come from (default [review] source, else github)", { choices: M.REVIEW_SOURCES }),
           opt("task", ["--task"], "str", "comments mode: the task id whose holder authored the PR", { metavar: "ID" }),
+          opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
+          opt("auto", ["--auto"], "bool", "profile only: the caller merges automatically on PASS; passes only under auto authority"),
           JSON_OPT,
+        ],
+      },
+      {
+        name: "profile", help: "the [profile] setup (accounts x people) and the review policy it gives",
+        sub: [
+          { name: "show", help: "cell, accounts, agents, the policy per tier, and missing capabilities", run: cmdProfile, opts: [JSON_OPT] },
+          {
+            name: "update", help: "change only the [profile] tables of config.toml", run: cmdProfile,
+            usage: "orch profile update [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... " +
+              "[--remove-agent NAME]... [--teammate LOGIN]... [--remove-teammate LOGIN]... [--high-path GLOB]... [--remove-high-path GLOB]... " +
+              "[--default-tier low|high] [--lead-account ID] [--max-workers N] [--dry-run]",
+            opts: [
+              opt("compute", ["--compute"], "str", "one, same-vendor or multi-vendor", { choices: P.COMPUTES }),
+              opt("people", ["--people"], "str", "solo or team", { choices: P.PEOPLE }),
+              opt("account", ["--account"], "list", "add or change an account: ID=VENDOR (repeatable)", { metavar: "ID=VENDOR" }),
+              opt("remove_account", ["--remove-account"], "list", "remove an account (repeatable)", { metavar: "ID" }),
+              opt("agent", ["--agent"], "list", "map an agent to an account: NAME=ID (repeatable)", { metavar: "NAME=ID" }),
+              opt("remove_agent", ["--remove-agent"], "list", "remove an agent (repeatable)", { metavar: "NAME" }),
+              opt("teammate", ["--teammate"], "list", "add a teammate GitHub login (repeatable)", { metavar: "LOGIN" }),
+              opt("remove_teammate", ["--remove-teammate"], "list", "remove a teammate (repeatable)", { metavar: "LOGIN" }),
+              opt("high_path", ["--high-path"], "list", "add a path glob that makes a PR high tier (repeatable)", { metavar: "GLOB" }),
+              opt("remove_high_path", ["--remove-high-path"], "list", "remove a path glob (repeatable)", { metavar: "GLOB" }),
+              opt("default_tier", ["--default-tier"], "str", "tier when neither --tier nor a path rule decides", { choices: P.TIERS }),
+              opt("lead_account", ["--lead-account"], "str", "the account the lead runs on", { metavar: "ID" }),
+              opt("max_workers", ["--max-workers"], "int", "worker cap (0 = derived from the cell)", { metavar: "N" }),
+              opt("dry_run", ["--dry-run"], "bool", "print the new tables; write nothing"),
+            ],
+          },
         ],
       },
       {

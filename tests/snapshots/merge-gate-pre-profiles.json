@@ -1,0 +1,1375 @@
+{
+ "_note": "Captured from origin/main at a5356348 (before profiles). With no [profile] table, merge-gate (both review sources), init (no agents found, stdin not a TTY) and the doctor row list must reproduce these bytes. $ORCH_HOME stands for the temporary home.",
+ "config_toml": "# ORCH-os configuration, written by `orch init`. Edit freely: `orch config` prints the\n# resolved values and `orch doctor` checks them.\n\n[orch]\n# Free-form label for this team or project.\nteam = \"my-team\"\n\n[mailbox]\n# The shared Markdown mailbox every session and worker posts to (lock-serialized).\npath = \"$ORCH_HOME/mailbox.md\"\nsections = [\"LEAD\", \"WORKER\", \"REVIEWER\", \"SYSTEM\"]\n\n[lease]\n# Single-holder role lease: one session at a time holds the lead role.\npath = \"$ORCH_HOME/lease.json\"\ndefault_seconds = 3600\nmin_seconds = 60\n\n[messages]\n# Addressed agent-to-agent messages: one JSON object per line, plus one read cursor per reader.\npath = \"$ORCH_HOME/messages.jsonl\"\ncursors = \"$ORCH_HOME/cursors\"\n# How often `orch msg watch` polls for new messages, in seconds.\npoll_seconds = 5\n\n[tasks]\n# Task claim registry: one lease file per task id, so a task has exactly one holder.\ndir = \"$ORCH_HOME/tasks\"\ndefault_seconds = 7200\nmin_seconds = 60\n\n[mem]\n# Long-lived notes: one Markdown file per entry and a generated INDEX.md.\ndir = \"$ORCH_HOME/mem\"\n# INDEX.md is meant to be read at every session start; `orch mem add` warns at this many lines.\nindex_max_lines = 200\n\n[handbook]\n# Where `orch init` writes the role boot files and the handbook.\ndir = \"$ORCH_HOME/handbook\"\n\n[merge]\n# Merge gate on GitHub reviews. repo = \"owner/name\" for live mode (needs the `gh` CLI).\nrepo = \"\"\n# Non-author approvals required at the PR's current head commit.\nrequired_approvals = 1\n# Label the PR must also carry (\"\" = no label required).\nrequired_label = \"\"\n\n[review]\n# Where merge-gate approvals come from. \"github\": GitHub reviews (the author's own never count).\n# \"comments\": ORCH-REVIEW comments (`orch review approve PR --as NAME`), for agents that\n# share one GitHub account; a review comment counts only at the PR's head and only from an agent other\n# than the task's holder (`merge-gate PR --task ID`). A process gate, not a security boundary.\nsource = \"github\"\n\n[workers]\n# Each worker is a detached process in its own process group, with one directory under root.\nroot = \"$ORCH_HOME/workers\"\n# Default worker command; the task file is fed on stdin. Placeholders: {name} {workdir}.\n# `orch init` sets it to the first agent CLI it detects (none found). Empty = pass one after --.\n# `orch worker start NAME --agent <name>` uses an [agents.<name>] command instead.\ncommand = []\ntimeout_minutes = 60\nnice = 5\n# Refuse new workers while the load governor reports one of these tiers (override: --force).\nblock_tiers = [\"HIGH\", \"CRITICAL\"]\n# `orch worker start NAME --worktree` gives the worker its own git worktree here, on branch\n# <worktree_branch_prefix><NAME> unless --branch is given.\nworktree_root = \"$ORCH_HOME/worktrees\"\nworktree_branch_prefix = \"orch/\"\n\n[load]\nstate = \"$ORCH_HOME/load.json\"\n# load_ratio = 1-minute load average / CPU count. swap_pct = swap in use, percent.\nbusy = { load_ratio = 0.75 }\nhigh = { load_ratio = 1.0, swap_pct = 90.0 }\ncritical = { load_ratio = 1.5 }\n# Optional: a shell command that prints the CPU temperature in degrees C. Empty = not used.\n# Add temp_c thresholds to busy/high/critical when you set it.\ntemp_command = \"\"\n# With act = true, HIGH/CRITICAL lower the priority of processes whose command line matches\n# renice_pattern (a regex; empty = none). Nothing is ever killed.\nrenice_pattern = \"\"\nact = false\n",
+ "doctor_rows": [
+  "node>=20",
+  "posix (process groups)",
+  "config",
+  "state dir writable",
+  "lease lockable",
+  "mailbox",
+  "mailbox sections",
+  "messages",
+  "task registry",
+  "mem",
+  "handbook",
+  "git",
+  "gh (merge-gate live mode)",
+  "merge repo",
+  "worker command",
+  "timeout (worker time limit)",
+  "agent CLIs",
+  "load state"
+ ],
+ "cases": {
+  "init --no-handbook": {
+   "out": "agents: none of claude, codex, gemini, qwen found on PATH (workers still run any command given after --)\nwrote $ORCH_HOME/config.toml\nwrote $ORCH_HOME/mailbox.md\nnext: orch doctor\n",
+   "err": "",
+   "code": 0
+  },
+  "merge-gate approved text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=0 label=off\n=> PASS\n",
+   "err": "",
+   "code": 0
+  },
+  "merge-gate approved text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": true, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 0}\n",
+   "err": "",
+   "code": 0
+  },
+  "merge-gate approved json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate approved json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=1 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=1 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=1 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 1}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 1, \"blocked_by\": [], \"github_changes_requested\": 1}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 1, \"blocked_by\": [], \"github_changes_requested\": 1}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate changes-requested json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "changes-requested",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=NOT green {\"tests\": \"FAILURE\"} approvals=1/1 (stale=0 self=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=NOT green {\"tests\": \"FAILURE\"} reviews=comments author=w1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=NOT green {\"tests\": \"FAILURE\"} reviews=comments author=r1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": false, \"checks\": {\"tests\": \"FAILURE\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": false, \"checks\": {\"tests\": \"FAILURE\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": false, \"checks\": {\"tests\": \"FAILURE\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate ci-red json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "ci-red",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=0/1 (stale=0 self=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=1/1 [r1] (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> PASS\n",
+   "err": "",
+   "code": 0
+  },
+  "merge-gate comment-approved text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1 approvals=0/1 (stale=0 self=1 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"stale\": 0, \"self\": 0, \"changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": true, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"approved_by\": [\"r1\"], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 0
+  },
+  "merge-gate comment-approved json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 1, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate comment-approved json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "comment-approved",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=0/1 (stale=0 self=1) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"stale\": 0, \"self\": 1, \"changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate self-approval json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "self-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=0/1 (stale=1 self=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 head=4f2c9a1e7 ci=green reviews=comments author=r1 approvals=0/1 (stale=0 self=0 malformed=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval text head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json live github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"stale\": 1, \"self\": 0, \"changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json live comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"w1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json live comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reviews\": \"comments\", \"authors\": [\"r1\"], \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"approved_by\": [], \"stale\": 0, \"self\": 0, \"malformed\": 0, \"changes_requested\": 0, \"blocked_by\": [], \"github_changes_requested\": 0}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json live comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json head-moved github": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--json"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json head-moved comments-w1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-w1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json head-moved comments-r1": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments",
+    "--task",
+    "t-r1"
+   ],
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "err": "",
+   "code": 1
+  },
+  "merge-gate stale-approval json head-moved comments-notask": {
+   "argv": [
+    "101",
+    "--fixture",
+    "stale-approval",
+    "--head",
+    "0000000",
+    "--json",
+    "--reviews",
+    "comments"
+   ],
+   "out": "#101 => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)\n",
+   "err": "",
+   "code": 1
+  }
+ }
+}
