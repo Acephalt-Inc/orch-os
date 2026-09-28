@@ -1,195 +1,189 @@
-# ORCH-os
+<h1 align="center">ORCH-os</h1>
 
-**让多个命令行编程代理像一个团队那样工作:一个负责人、定向消息、认领任务、一道合并闸门,以及跨会话保留的笔记。**
+<p align="center">为命令行编程代理提供团队协作层。</p>
 
-Author: Winnicent Zuo, Acephalt Inc. · [English](README.md) · [中文](README.zh.md)
+<p align="center"><a href="docs/concepts.md">文档</a> · <a href="docs/commands.md">命令</a> · <a href="docs/faq.md">常见问题</a> · <a href="README.md">English</a></p>
 
-## 快速上手
+<p align="center">
+  <a href="https://github.com/Acephalt-Inc/orch-os/actions/workflows/ci.yml"><img src="https://github.com/Acephalt-Inc/orch-os/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://www.npmjs.com/package/orch-os"><img src="https://img.shields.io/npm/v/orch-os" alt="npm 版本"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20dual-blue" alt="PolyForm 双许可证"></a>
+</p>
 
-```sh
-npx orch-os init          # 识别代理 CLI,写入 ~/.orch/config.toml、信箱和工作手册
-npx orch-os doctor        # 逐项 PASS/FAIL 检查
-npm i -g orch-os          # 或者长期安装 `orch` 命令
-```
+ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的负责人、共享信箱、支持独占认领的任务板、基于评审的合并闸门和后台工作进程，为团队提供共同的运行层。它与 Claude Code、Codex CLI 等命令行代理配合使用。
 
-不用 npm 仓库时,直接从 GitHub 运行(首次运行时构建),或从克隆安装:
-
-```sh
-npx github:Acephalt-Inc/orch-os init
-git clone https://github.com/Acephalt-Inc/orch-os && cd orch-os && sh install.sh
-```
-
-然后试一下。示例里的 `orch` 需要先全局安装才在 PATH 上;没有全局安装时,把 `orch` 换成 `npx orch-os`(`npx orch-os agents`、`npx orch-os lease acquire --session lead` 等):
-
-```sh
-orch agents                                    # 识别到、配置了哪些代理 CLI
-orch lease acquire --session lead              # 当前终端成为负责人
-orch task claim parser-fix --as w1             # w1 认领任务;其他人无法再认领
-orch msg send QUESTION --as w1 --to lead -m "旧参数还保留吗?"
-orch msg read --as lead                        # 负责人未确认的消息
-orch worker start w1 --agent claude --worktree --task task.md   # 在独立 git worktree 里运行的后台工作进程
-orch merge-gate 101 --fixture approved         # 离线演示合并闸门
-orch mem add review-at-head -t rule -d "只有针对当前 head 提交的批准才算数"
-```
-
-需要 Node.js 20 及以上,macOS 或 Linux。运行时零依赖。从克隆安装见[安装](#安装)。
-
-### 单人流程:一个 GitHub 账号,多个代理
-
-GitHub 不允许 PR 作者批准自己的 PR,所以所有代理都用同一个账号推送和审查时,正常的批准无法产生,默认闸门永远不会通过。这时把闸门切换到**审查评论**:一条 PR 评论,第一行是 `ORCH-REVIEW APPROVE <完整 head sha> by <代理名>`。它只对 PR 当前的 head 提交有效,并且只有当 `<代理名>` 不是该 PR 对应任务在 `orch task` 里的持有者时才算数。
-
-```sh
-orch task claim parser-fix --as w1             # w1 写代码并开 PR 101
-orch review approve 101 --as r1                # r1 审查了 head;通过 gh 发出审查评论
-orch merge-gate 101 --reviews comments --task parser-fix   # PASS:CI 绿、r1 不是 w1、审查评论针对当前 head
-```
-
-`orch review changes` 和 `orch review reject` 发出阻断评论。在 `~/.orch/config.toml` 里设 `[review] source = "comments"` 可设为默认。离线演示:`orch task claim demo --as w1 && orch merge-gate 101 --fixture comment-approved --reviews comments --task demo`。
-
-**这是流程闸门,不是安全边界。** 它让互相配合的代理对"谁在哪个提交上审查了什么"保持诚实,但挡不住持有账号令牌的人:他可以用任何代理名发审查评论。如果需要作者无法伪造的批准,请给审查代理单独的 GitHub 账号或 App 身份,并保留默认的 `github` 来源。
-
-## 它做什么,帮谁
-
-ORCH-os 面向已经在用命令行编程代理(Claude Code、Codex CLI、Gemini CLI 等)、并且开始**在同一个仓库里同时跑多个代理**的人。多个代理会带来单个代理没有的问题:
-
-| 多代理的问题 | ORCH-os 的做法 |
-|---|---|
-| 两个终端都以负责人自居,指令互相矛盾 | **角色租约**:同一时间只有一个会话持有负责人角色。要从未过期的持有者手里接管必须加 `--force`;每换一次持有者,纪元(epoch)加一,旧持有者随即被隔离。 |
-| 代理之间的问题丢失,没人知道哪些已答复 | **定向消息**(`orch msg`):`QUESTION`、`ANSWER`、`DONE`、`BLOCKED` 四种类型,发给某个名字或所有人;每个读者有自己的读取游标和确认(ack);`msg watch` 等待下一条。 |
-| 两个工作进程拿到同一个任务 | **任务认领**(`orch task`):每个任务只有一个持有者,用纪元做隔离;已被认领的任务在释放或过期前无法被抢走。 |
-| 工作进程互相覆盖文件 | **每个工作进程一个 git worktree**:`orch worker start --worktree` 给每个工作进程独立的分支和目录;`stop` 只在工作区干净时才删除它。 |
-| PR 凭旧提交上的批准、或作者自己批准就被合并 | 基于 GitHub 评审的**合并闸门**:CI 全绿,足够数量的非作者批准且批准针对 PR 当前的 head 提交,没有未解决的"要求修改"。 |
-| 后台代理成了孤儿进程、一直跑、停不干净 | **工作进程**:每个都是独立进程组里的后台进程,带时限、nice 优先级和日志目录;停止时信号送达整个进程组。 |
-| 多个代理加测试把机器压垮 | **负载调节器**:按每核负载和交换区(可选温度)分四档,带迟滞。负载为 HIGH 时拒绝启动新工作进程。 |
-| 每个会话都从零开始 | **长期笔记**(`orch mem`):每条规则或经验一个 Markdown 文件;会话开始时读取的索引有行数上限;用"标记退役并记录替代者"代替删除。 |
-| 每个团队都要重新定义代理该怎么做事 | **工作手册**:`orch init` 写入四个文件:负责人、工作进程、评审三个角色的启动文件,以及共同协议,适用于 Claude Code、Codex CLI 或任何读取指令文件的代理。 |
-
-ORCH-os 不替代你的代理。它决定谁负责、代理之间怎么沟通、谁拥有哪个任务、工作进程在哪里跑、团队长期记住什么,以及一个 PR 能否合并。
-
-## 功能
-
-| 功能 | 命令 | 说明 |
-|---|---|---|
-| 初始化 | `orch init`、`orch agents` | 在 PATH 和 cron 看不到的常见安装目录里找已知代理 CLI;用绝对路径写入 `[agents.*]`;写入信箱和工作手册。 |
-| 健康检查 | `orch doctor` | 每项前提一行 PASS/FAIL/SKIP;任一必需项 FAIL 则退出码为 1。 |
-| 角色租约 | `orch lease status\|acquire\|renew\|release` | 加锁串行写入,读回校验,纪元隔离(续约和释放都可校验),以存储的到期时间判断是否有效。 |
-| 信箱 | `orch mailbox post\|read` | 一个 Markdown 文件里的广播笔记;每个角色一节;加锁写入。 |
-| 消息 | `orch msg send\|read\|ack\|watch` | 定向、带类型、每个读者独立的游标和确认;JSON 行存储,消息正文无法伪造其他消息。 |
-| 任务认领 | `orch task claim\|renew\|release\|status\|list` | 每个任务一份租约:独占、纪元隔离、不会被重复认领。 |
-| 合并闸门 | `orch merge-gate <pr>` | CI + 当前 head 上的非作者批准 + 无"要求修改";可选必需标签。在线模式用 `gh`,离线模式用内置样例。 |
-| 工作进程 | `orch worker start\|list\|stop` | 独立进程组、时限、nice、任务从 stdin 传入、日志;可选每个工作进程一个 git worktree。 |
-| 负载调节器 | `orch load` | NORMAL/BUSY/HIGH/CRITICAL 四档,带迟滞;从不杀进程。 |
-| 笔记 | `orch mem add\|search\|retire` | 每条一个带 frontmatter 的文件;自动生成且有上限的 `INDEX.md`;退役保留文件并记录替代者。 |
-| 配置 | `orch config` | 打印解析后的 `~/.orch/config.toml`。 |
-
-## 架构
-
-```mermaid
-flowchart LR
-  subgraph T[会话与代理]
-    L[负责人]
-    W1[工作进程 w1]
-    W2[工作进程 w2]
-    R[评审]
-  end
-  subgraph O[orch 命令]
-    LE[lease]
-    MS[msg]
-    TK[task]
-    MB[mailbox]
-    WK[worker]
-    LD[load]
-    MG[merge-gate]
-    ME[mem]
-  end
-  subgraph S["~/.orch(纯文件,mkdir 锁)"]
-    LF[lease.json]
-    MF[messages.jsonl + cursors/]
-    TF[tasks/ID.json]
-    BF[mailbox.md]
-    WF[workers/NAME/]
-    WT[worktrees/NAME/]
-    NF[mem/*.md + INDEX.md]
-    LS[load.json]
-  end
-  GH[(GitHub,经由 gh)]
-  L --> LE --> LF
-  L & W1 & W2 & R --> MS --> MF
-  W1 & W2 & R --> TK --> TF
-  L & W1 & W2 --> MB --> BF
-  L --> WK --> WF & WT
-  WK -. HIGH 时拒绝 .-> LS
-  LD --> LS
-  L & W1 & W2 & R --> ME --> NF
-  R -->|评审| GH
-  L --> MG --> GH
-```
-
-每条命令都是一个短命进程:读配置、加锁、原子地改一个文件、退出。详见 [docs/architecture.md](docs/architecture.md)。
+作者：Winnicent Zuo
 
 ## 安装
 
-| 方式 | 命令 |
-|---|---|
-| npm,一次性 | `npx orch-os init` |
-| npm,全局 | `npm i -g orch-os`(不用 sudo:`npm i -g --prefix ~/.local orch-os`) |
-| GitHub,不经 npm 仓库 | `npx github:Acephalt-Inc/orch-os init`(首次运行时从源码构建;要长期可用的 `orch`,请从克隆安装) |
-| 从克隆安装 | `npm install && npm run build && npm i -g .`,或 `sh install.sh` |
-| 从仓库直接安装,不克隆 | `curl -fsSL https://raw.githubusercontent.com/Acephalt-Inc/orch-os/main/install.sh \| ORCH_OS_GH_REPO=Acephalt-Inc/orch-os sh`(公开仓库),私有仓库改用 `gh api -H "Accept: application/vnd.github.raw" repos/Acephalt-Inc/orch-os/contents/install.sh` |
+需要 Node.js 20 或更高版本，以及 macOS 或 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 
-`install.sh` 会找 Node.js ≥ 20,获取源码(它所在的检出目录;否则 `ORCH_OS_REPO`;否则当前目录;否则经 `gh` 或 https 获取 `ORCH_OS_GH_REPO`),缺 `dist/` 时先构建,复制到 `~/.orch/lib/orch-os`,并把启动脚本写到 `~/.local/bin/orch`。它从不改动已存在的 `config.toml`。`ORCH_INIT=1` 会顺带执行 `orch init && orch doctor`。
+```sh
+npm i -g orch-os
+# 或：npx orch-os init
+```
 
-无论哪种方式,之后都执行 `orch init`,再执行 `orch doctor`。没装任何代理 CLI 时 doctor 仍然通过:代理相关行显示 SKIP,工作进程可以运行 `--` 之后给出的任意命令。
+## 为什么选择 ORCH-os
 
-## 工作手册
+- **一位负责人：** 角色租约记录持有者，并用纪元隔离失去租约的旧持有者。
+- **明确归属：** 每个任务在释放或到期前只有一个认领者。
+- **等待处理的消息：** 定向问答有每位读者自己的游标和确认记录。
+- **共享上下文：** Markdown 信箱和生成的角色手册让团队状态可见。
+- **独立工作区：** 工作进程可在各自的 Git worktree 和分支中运行。
+- **只看当前提交的评审：** 合并闸门检查 PR 当前提交的 CI 与非作者批准。
+- **长期笔记：** 规则与经验保存在文件中；退役不会抹去历史。
 
-`orch init` 把四个文件写到 `~/.orch/handbook/`(用 `--dir` 指定别处,`--layout skills` 则写成 `NAME/SKILL.md` 目录):
+## ORCH-os 提供什么
 
-| 文件 | 用途 |
-|---|---|
-| `lead-boot.md` | 启动负责人会话:拿租约、补齐状态、先答复未决问题、分派工作、进入循环 |
-| `worker-boot.md` | 启动工作进程会话:先认领再动手、在自己的 worktree 里工作、带证据报告 DONE |
-| `review-boot.md` | 启动评审会话:在当前 head 上独立评审、修复轮规则、把结论记录到闸门读取的位置 |
-| `protocols.md` | 共同规则:消息类型、认领、DONE 报告、合并规则、笔记、安全底线 |
+下表区分当前 `main` 分支已有的命令、仍在审查中的改动和未来方向。“规划中”表示类别，不表示已有对应命令。
 
-让每个会话读取自己角色的文件(Claude Code 与 Codex CLI 的用法见 [docs/faq.md](docs/faq.md))。
+### 工作流与任务分配
 
-## 仓库结构
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 由纪元隔离的一位负责人及其租约 | `orch lease` | 已提供 |
+| 独占任务认领和后台工作进程 | `orch task`、`orch worker` | 已提供 |
 
-| 路径 | 内容 |
-|---|---|
-| `src/cli.ts`、`src/args.ts` | `orch` 命令及其参数解析 |
-| `src/config.ts`、`src/toml.ts` | 默认 `config.toml`、`ORCH_HOME` 解析、TOML 读取器 |
-| `src/lock.ts` | 基于 mkdir 的跨进程锁 |
-| `src/lease.ts`、`src/tasks.ts` | 角色租约;任务认领(每个任务一份租约) |
-| `src/mailbox.ts`、`src/messages.ts` | 广播信箱;带游标的定向消息 |
-| `src/mergegate.ts` | 针对 head 提交的评审判定、CI 与标签规则、`gh` 拉取 |
-| `src/workers.ts`、`src/load.ts` | 后台工作进程与 worktree;负载采样与分档 |
-| `src/mem.ts`、`src/handbook.ts` | 笔记存储;工作手册写入 |
-| `src/pyjson.ts`、`src/detect.ts`、`src/util.ts` | 与 v1.1 兼容的 JSON 格式;代理识别;工具函数 |
-| `templates/handbook/` | 四个工作手册文件 |
-| `fixtures/` | 离线 `merge-gate --fixture` 用的 PR 状态样例 |
-| `tests/` | vitest 测试:v1.1 的每个测试一一移植,外加 v2 新测试 |
-| `install.sh`、`scripts/demo.sh` | 从仓库安装的脚本;5 分钟离线演示 |
+### 评审与合并闸门
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 检查 CI 与 PR 当前提交的评审 | `orch merge-gate` | 已提供 |
+| 多个代理共用一个 GitHub 账号时使用评审评论 | `orch review`、`orch merge-gate --reviews comments --task ID` | 已提供 |
+
+评论模式是合作代理之间的流程闸门，不是安全边界：持有账号令牌的人可以用任何代理名发表评论。闸门只报告结果，不会合并 PR。
+
+### 调度与存活状态
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 续约负责人租约、等待定向消息 | `orch lease renew`、`orch msg watch` | 已提供 |
+| 安装操作系统定期任务 | `orch schedule` | 审查中（[PR #6](https://github.com/Acephalt-Inc/orch-os/pull/6)） |
+
+### 资源
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 采样机器负载，并在配置的负载档位拒绝新工作进程 | `orch load`、`orch worker start` | 已提供 |
+
+### 工作记录与日志
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 工作进程的输出和进程记录 | `orch worker`、`~/.orch/workers/` | 已提供 |
+| 汇总任务结果的统一历史 | — | 规划中 |
+
+### 代理通信
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 共享条目、定向消息和确认记录 | `orch mailbox`、`orch msg` | 已提供 |
+
+### 配置档：账号与人数
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 单人和团队账号配置设计 | `docs/profiles.md` | 审查中（[PR #5](https://github.com/Acephalt-Inc/orch-os/pull/5)） |
+| 配置档命令和评审强度规则 | `orch profile`、`src/profile.ts` | 审查中（[PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)） |
+
+### 笔记生命周期
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 新增、搜索和退役文件笔记 | `orch mem` | 已提供 |
+
+### 学习与改进
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 从已完成的工作中提出可复用经验 | — | 规划中 |
+
+### 策略与批准
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 闸门通过前要求标签和针对当前提交的批准 | `orch merge-gate --label NAME` | 已提供 |
+| 根据账号和人数配置档选择评审规则 | `src/profile.ts` | 审查中（[PR #7](https://github.com/Acephalt-Inc/orch-os/pull/7)） |
+
+### 目标与验证
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 检查本地运行前提 | `orch doctor` | 已提供 |
+| 跟踪目标及完成条件 | — | 规划中 |
+
+### 遥测与成本
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 读取本地负载采样 | `orch load` | 已提供 |
+| 记录每项任务的成本 | — | 规划中 |
+
+### 代理发现与隔离
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 发现已安装代理 CLI，并将工作进程放到独立 Git worktree | `orch agents`、`orch worker start --worktree` | 已提供 |
+| 验证代理身份和沙箱边界 | — | 规划中 |
+
+### 版本与配置
+
+| 功能 | 命令或文件 | 状态 |
+|---|---|---|
+| 显示已安装版本与解析后的配置 | `orch --version`、`orch config` | 已提供 |
+
+## 开始使用
+
+在你的仓库里初始化 ORCH-os，然后让 Claude Code 或 Codex CLI 中的负责人会话和工作进程会话分别读取生成的角色文件：
+
+```sh
+cd /path/to/repository
+orch init
+orch doctor
+orch lease acquire --session lead
+orch task claim first-task --as w1
+```
+
+角色文件是 `~/.orch/handbook/lead-boot.md` 和 `~/.orch/handbook/worker-boot.md`。如何在两种代理中加载文件，请看[常见问题](docs/faq.md)。临时安装时，把 `orch` 换成 `npx orch-os`。
+
+## 命令
+
+```sh
+orch init                                   # 创建配置、信箱和角色手册
+orch agents                                 # 查看已发现和已配置的代理 CLI
+orch doctor                                 # 检查运行前提
+orch lease status                           # 查看负责人租约
+orch lease acquire --session lead           # 获取负责人租约
+orch mailbox read                           # 读取共享信箱
+orch msg send QUESTION --as w1 --to lead -m "需要决定"  # 发送定向问题
+orch msg read --as lead                     # 读取负责人的待处理消息
+orch task claim first-task --as w1          # 独占认领任务
+orch worker start w1 --agent claude --worktree --task task.md  # 启动后台工作进程
+orch worker list                            # 查看工作进程
+orch merge-gate 101 --fixture approved      # 使用离线样例试运行闸门
+orch load                                   # 采样机器负载
+orch mem search review                      # 搜索长期笔记
+```
+
+完整参数和退出码见[命令参考](docs/commands.md)。
+
+## 为多代理协作而建
+
+- **负责人和工作进程角色：** 生成的手册提供各自的启动协议；CLI 记录负责人租约与任务认领。
+- **定向协调：** `msg` 支持分类消息、确认和等待答复；`mailbox` 保存共享条目。
+- **工作进程控制：** 后台进程有日志；安装 `timeout` 或 `gtimeout` 后可设置时限；可选 Git worktree 隔离文件改动。
+- **由人控制合并：** `merge-gate` 只报告评审条件是否通过，不会合并 PR。
+- **单账号评审流程：** `orch review approve` 发布评审评论，`orch merge-gate --reviews comments --task ID` 根据当前提交和任务持有者核查评论。
 
 ## 文档
 
-| 文档 | 内容 |
-|---|---|
-| [docs/concepts.md](docs/concepts.md) | 角色、租约与纪元、消息、认领、批准与 head 提交、工作进程与 worktree、负载分档、笔记、失败即拒绝 |
-| [docs/architecture.md](docs/architecture.md) | 模块、状态文件、锁、进程模型、依赖、刻意不做的事 |
-| [docs/commands.md](docs/commands.md) | 每个子命令、参数、退出码和配置项 |
-| [docs/faq.md](docs/faq.md) | 配合 Claude Code 或 Codex CLI 使用、只有一个 GitHub 账号、不用 GitHub、定时运行 |
-| [docs/migration.md](docs/migration.md) | 从 v1.1(Python)迁移到 v2 |
-| [docs/tests-map.md](docs/tests-map.md) | v2 的哪个测试移植了 v1.1 的哪个测试 |
-| [docs/DEMO.md](docs/DEMO.md) | 5 分钟脚本化演示 |
-
-## 测试
-
-```sh
-npm install
-npm test          # 先 tsc,再 vitest(单个子进程,测试文件顺序执行)
-```
+- [概念](docs/concepts.md) — 角色、租约、消息、认领、工作进程和笔记。
+- [命令](docs/commands.md) — 子命令、参数、退出码和配置。
+- [常见问题](docs/faq.md) — Claude Code 与 Codex CLI 的设置、GitHub 身份和常见疑问。
+- [架构](docs/architecture.md) — 模块、本地状态文件和进程模型。
+- [迁移](docs/migration.md) — 从 v1.1 迁移到 v2。
+- [测试对应表](docs/tests-map.md) — v1.1 与 v2 测试的对应关系。
+- [演示](docs/DEMO.md) — 离线演示脚本。
 
 ## 许可证
 
