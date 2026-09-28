@@ -29,7 +29,7 @@ Recorded in a throwaway HOME with only `/usr/bin:/bin` and `node` on PATH, so no
 # 1. install check + config + handbook
 
 $ orch --version
-orch 2.0.0
+orch 2.0.1
 
 $ orch init
 agents: none of claude, codex, gemini, qwen found on PATH (workers still run any command given after --)
