@@ -87,6 +87,11 @@ orch merge-gate <pr> --head <sha-you-reviewed>
 
 - Any push makes earlier approvals stale; the new head needs new approvals.
 - "Approve after fixes" is not an approval.
+- If every agent uses one code-host account, approvals are review comments instead:
+  `orch review approve <pr> --as <you> --head <sha>` posts one, and
+  `orch merge-gate <pr> --reviews comments --task <id>` checks them. The same rules hold,
+  with agent names in place of accounts. Review comments are a process rule between cooperating
+  agents; the account's token can post any name, so never post one for another agent.
 - Who performs the merge is the human's decision. Agents merge only when the human has
   said so for this change or this class of change, and only on a `PASS`.
 

@@ -111,10 +111,25 @@ orch mailbox read [-n N] [--section SECTION]
 ## orch merge-gate
 
 ```text
-orch merge-gate PR [--repo OWNER/NAME] [--head SHA] [--approvals N] [--label NAME] [--fixture NAME|PATH] [--json]
+orch merge-gate PR [--repo OWNER/NAME] [--head SHA] [--approvals N] [--label NAME] [--fixture NAME|PATH] [--reviews github|comments] [--task ID] [--json]
 ```
 
 Prints the head, CI state, approvals (with stale and self counts), changes requested and label state, then `=> PASS` (exit 0) or `=> BLOCKED` (exit 1). Live mode runs `gh pr view PR --repo REPO --json author,headRefOid,reviews,labels,statusCheckRollup`; any error prints `BLOCKED (...)` and exits 1. `--head` makes the gate block with `head moved` when the PR is at a different commit.
+
+`--reviews` picks where approvals come from (default `[review] source`, else `github`). With `github`, the output and behaviour are those of v2.0.1. With `comments`:
+
+- live mode also fetches `comments`;
+- `--task ID` is required: the agents recorded for that task in `orch task` (its holder, and the holder before it if the task changed hands) are the PR's authors. No task, or a task with no holder, is `BLOCKED`. The GitHub login is never used as an identity;
+- a **review comment** is a PR comment whose first line is exactly `ORCH-REVIEW APPROVE|CHANGES|REJECT <40-character lower-case head sha> by <agent>` (trailing whitespace ignored; anything after the first line is free text). A first line that starts with `ORCH-REVIEW` but is not exactly that shape is counted as `malformed` and ignored;
+- a review comment counts only when its sha is the PR's current head (otherwise `stale`) and its agent is not an author (otherwise `self`; names compare case-insensitively). Per agent, the latest counting review comment (in comment order) is the one that holds;
+- the gate passes when CI is green, at least N agents' latest review comment is `APPROVE`, no agent's latest review comment is `CHANGES` or `REJECT`, no non-author GitHub reviewer has an open `CHANGES_REQUESTED`, and the label rule holds. GitHub approvals do not count in this mode.
+
+This is a process gate between cooperating agents that share one account, not a security boundary: anyone with the account's token can post a review comment under any name.
+
+```text
+#101 head=4f2c9a1e7 ci=green reviews=comments author=w1 approvals=1/1 [r1] (stale=0 self=0 malformed=0) changes_requested=0 label=off
+=> PASS
+```
 
 | Fixture | Shows |
 |---|---|
@@ -123,6 +138,15 @@ Prints the head, CI state, approvals (with stale and self counts), changes reque
 | `self-approval` | Only the PR author approved |
 | `changes-requested` | One approval, but another reviewer requested changes |
 | `ci-red` | A failing check |
+| `comment-approved` | No GitHub review; one `ORCH-REVIEW APPROVE` review comment by `r1` at the head. `PASS` with `--reviews comments --task ID` when the task's holder is not `r1`; `BLOCKED` in the default `github` mode |
+
+## orch review
+
+```text
+orch review approve|changes|reject PR [--as NAME] [--head SHA] [--repo OWNER/NAME] [-m TEXT] [--dry-run]
+```
+
+Posts a review comment for `merge-gate --reviews comments`: `gh pr comment PR --repo REPO --body "ORCH-REVIEW <APPROVE|CHANGES|REJECT> <sha> by NAME"`, with `-m` text after a blank line. NAME is `--as`, then `$ORCH_AGENT`, then the session id. Without `--head`, the PR's live head is read with `gh pr view PR --json headRefOid`; pass `--head` with the full 40-character sha you actually reviewed to be sure the review comment names it. `--dry-run` prints the comment instead of posting it. A bad sha or name exits 2; a `gh` failure exits 1.
 
 ## orch worker
 
@@ -173,6 +197,7 @@ orch mem retire NAME (--superseded-by NEW | --reason TEXT)
 | `[mem] dir`, `index_max_lines` | `~/.orch/mem`, `200` | Notes directory; index line cap |
 | `[handbook] dir` | `~/.orch/handbook` | Where `init` writes the handbook |
 | `[merge] repo`, `required_approvals`, `required_label` | `""`, `1`, `""` | Live-mode repo; approvals needed at the head; optional label |
+| `[review] source` | `github` | Where `merge-gate` approvals come from: `github` reviews, or `comments` (ORCH-REVIEW comments; needs `--task`) |
 | `[workers] root`, `command`, `timeout_minutes`, `nice`, `block_tiers` | `~/.orch/workers`, first detected agent, `60`, `5`, `HIGH CRITICAL` | Worker defaults |
 | `[workers] worktree_root`, `worktree_branch_prefix` | `~/.orch/worktrees`, `orch/` | Where `--worktree` puts worktrees; default branch prefix |
 | `[agents.NAME] command` | written by `init` | Command for `worker start --agent NAME` |

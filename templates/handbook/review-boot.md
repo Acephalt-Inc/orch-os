@@ -17,7 +17,8 @@ export ORCH_AGENT=r1
 
 You may not review a change you wrote, and a review from the change's own author never
 counts: `orch merge-gate` ignores it. If all agents share one code-host account, the
-reviewer needs its own account or app identity.
+reviewer needs its own account or app identity, or the team uses review comments: record
+your verdict with `orch review approve|changes|reject <pr> --as $ORCH_AGENT --head <sha>`.
 
 ## 1. Pick up the review and pin the head
 

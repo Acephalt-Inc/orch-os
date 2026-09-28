@@ -11,12 +11,22 @@
  * A decisive review is APPROVED, CHANGES_REQUESTED or DISMISSED (DISMISSED clears the earlier
  * one); COMMENTED reviews are ignored. An approval of an older commit is stale and does not
  * count. Any error while fetching or reading the PR fails closed.
+ *
+ * Review source "comments" (`--reviews comments`, `[review] source`) is for teams whose agents
+ * all share one code-host account, so no agent can approve on GitHub. Rule 2 and 3 then read
+ * review comments: PR comments whose FIRST line is exactly
+ *     ORCH-REVIEW APPROVE|CHANGES|REJECT <40-char head sha> by <agent>
+ * A review comment counts only for the current head sha, and only when <agent> is not the task's
+ * author agent (from the task store; never the GitHub login). Per agent the latest review comment
+ * counts; CHANGES and REJECT block. GitHub CHANGES_REQUESTED reviews still block; GitHub
+ * approvals do not count. This is a process gate between cooperating agents, not a security
+ * boundary: anyone holding the account's token can post a review comment.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dumps } from "./pyjson.js";
-import { isPlainObject, which } from "./util.js";
+import { isPlainObject, validName, which } from "./util.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const CI_OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
@@ -47,10 +57,53 @@ function login(x: unknown): string {
   return str(obj(x, "author").login, "login").toLowerCase();
 }
 
+export type ReviewSource = "github" | "comments";
+export const REVIEW_SOURCES: ReviewSource[] = ["github", "comments"];
+export type Verdict = "APPROVE" | "CHANGES" | "REJECT";
+export const VERDICTS: Verdict[] = ["APPROVE", "CHANGES", "REJECT"];
+export const REVIEW_PREFIX = "ORCH-REVIEW";
+const REVIEW_RE = /^ORCH-REVIEW (APPROVE|CHANGES|REJECT) ([0-9a-f]{40}) by (\S+)$/;
+
+export interface ReviewLine {
+  verdict: Verdict;
+  sha: string;
+  agent: string;
+}
+
+/** The first line of a review comment. Throws RangeError on a bad sha or agent name. */
+export function reviewLine(verdict: Verdict, sha: string, agent: string): string {
+  if (!VERDICTS.includes(verdict)) throw new RangeError(`bad verdict '${verdict}'`);
+  if (!SHA_RE.test(sha)) throw new RangeError(`head must be the full 40-character commit sha, got '${sha}'`);
+  if (!validName(agent)) throw new RangeError(`bad agent name '${agent}': use letters, digits, . @ _ -`);
+  return `${REVIEW_PREFIX} ${verdict} ${sha} by ${agent}`;
+}
+
+/**
+ * Read a comment body. null = not a review comment (first line does not start with ORCH-REVIEW);
+ * "malformed" = starts with ORCH-REVIEW but is not exactly an ORCH-REVIEW line. Only the first line
+ * is read; trailing whitespace on it is ignored.
+ */
+export function parseReviewLine(body: string): ReviewLine | "malformed" | null {
+  const first = body.split("\n", 1)[0].replace(/\s+$/, "");
+  if (!first.startsWith(REVIEW_PREFIX)) return null;
+  const m = REVIEW_RE.exec(first);
+  if (!m || !validName(m[3])) return "malformed";
+  return { verdict: m[1] as Verdict, sha: m[2], agent: m[3] };
+}
+
+/** Agent names compare case-insensitively (NFC), like task ids. */
+function agentKey(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
 export interface GateOptions {
   requiredApprovals?: number;
   requiredLabel?: string;
   head?: string | null;
+  /** "github" (default): GitHub reviews. "comments": ORCH-REVIEW lines in PR comments. */
+  reviewSource?: ReviewSource;
+  /** comments mode: the task's author agent(s); their review comments never count. */
+  authorAgents?: string[];
 }
 
 export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, any> {
@@ -70,6 +123,7 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
     return res;
   }
   const head = live;
+  if ((opts.reviewSource ?? "github") === "comments") return evaluateComments(pr, res, head, need, requiredLabel, opts.authorAgents ?? []);
   const author = login(pr.author);
   const latest = new Map<string, Record<string, any>>(); // reviewer -> latest decisive review
   let selfReviews = 0;
@@ -96,6 +150,16 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
       else stale += 1;
     }
   }
+  const { ciOk, checks, labelOk } = ciAndLabel(pr, requiredLabel);
+  const ok = ciOk && labelOk && approvals >= need && blocking === 0;
+  Object.assign(res, {
+    ok, ci_ok: ciOk, checks, label: requiredLabel, label_ok: labelOk,
+    approvals, stale, self: selfReviews, changes_requested: blocking,
+  });
+  return res;
+}
+
+function ciAndLabel(pr: Record<string, any>, requiredLabel: string) {
   const rollup: [string, string][] = list(pr.statusCheckRollup, "statusCheckRollup").map((cRaw) => {
     const c = obj(cRaw, "check");
     const wf = str(c.workflowName, "workflowName");
@@ -109,22 +173,100 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
   for (const [k, v] of bad.length ? bad : rollup) checks[k] = v;
   const labels = list(pr.labels, "labels").map((l) => obj(l, "label").name);
   const labelOk = !requiredLabel || labels.includes(requiredLabel);
-  const ok = ciOk && labelOk && approvals >= need && blocking === 0;
+  return { ciOk, checks, labelOk };
+}
+
+/** Review source "comments": approvals and blocks come from ORCH-REVIEW comments. */
+function evaluateComments(pr: Record<string, any>, res: Record<string, any>, head: string, need: number,
+  requiredLabel: string, authorAgents: string[]): Record<string, any> {
+  const authors = [...new Set(authorAgents.filter((a) => typeof a === "string" && a).map(agentKey))];
+  res.reviews = "comments";
+  if (!authors.length) {
+    res.reason = "no author agent: comments mode needs the PR's task (--task ID) with a recorded holder";
+    return res;
+  }
+  // GitHub CHANGES_REQUESTED from a non-author login still blocks (fail closed); approvals there do not count
+  const prAuthor = login(pr.author);
+  const ghLatest = new Map<string, string>();
+  for (const rvRaw of list(pr.reviews, "reviews")) {
+    const rv = obj(rvRaw, "review");
+    const who = login(rv.author);
+    const state = str(rv.state, "review state").toUpperCase();
+    if (!["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(state) || !who || who === prAuthor) continue;
+    ghLatest.set(who, state);
+  }
+  const ghBlocking = [...ghLatest.values()].filter((s) => s === "CHANGES_REQUESTED").length;
+  const latest = new Map<string, ReviewLine>(); // agent -> latest review comment at the head, in comment order
+  let stale = 0;
+  let self = 0;
+  let malformed = 0;
+  for (const cRaw of list(pr.comments, "comments")) {
+    const p = parseReviewLine(str(obj(cRaw, "comment").body, "comment body"));
+    if (p === null) continue;
+    if (p === "malformed") {
+      malformed += 1;
+      continue;
+    }
+    if (p.sha !== head) {
+      stale += 1;
+      continue;
+    }
+    const who = agentKey(p.agent);
+    if (authors.includes(who)) {
+      self += 1;
+      continue;
+    }
+    latest.set(who, p);
+  }
+  const approvedBy = [...latest.entries()].filter(([, r]) => r.verdict === "APPROVE").map(([k]) => k).sort();
+  const blockedBy = [...latest.entries()].filter(([, r]) => r.verdict !== "APPROVE").map(([k]) => k).sort();
+  const blocking = blockedBy.length + ghBlocking;
+  const { ciOk, checks, labelOk } = ciAndLabel(pr, requiredLabel);
+  const ok = ciOk && labelOk && approvedBy.length >= need && blocking === 0;
   Object.assign(res, {
-    ok, ci_ok: ciOk, checks, label: requiredLabel, label_ok: labelOk,
-    approvals, stale, self: selfReviews, changes_requested: blocking,
+    ok, authors, ci_ok: ciOk, checks, label: requiredLabel, label_ok: labelOk,
+    approvals: approvedBy.length, approved_by: approvedBy, stale, self, malformed,
+    changes_requested: blocking, blocked_by: blockedBy, github_changes_requested: ghBlocking,
   });
   return res;
 }
 
-export function fetchLive(pr: string, repo: string): unknown {
+/** The `gh pr view --json` field list. The github source is unchanged from v2.0; comments adds `comments`. */
+export function liveFields(source: ReviewSource = "github"): string {
+  return "author,headRefOid,reviews,labels,statusCheckRollup" + (source === "comments" ? ",comments" : "");
+}
+
+export function fetchLive(pr: string, repo: string, source: ReviewSource = "github"): unknown {
   if (!which("gh")) throw new Error("live mode needs the GitHub CLI `gh` (or use --fixture)");
   if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
   const out = spawnSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json",
-    "author,headRefOid,reviews,labels,statusCheckRollup"], { encoding: "utf8", timeout: 60_000 });
+    liveFields(source)], { encoding: "utf8", timeout: 60_000 });
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || "gh pr view failed");
   return JSON.parse(out.stdout);
+}
+
+function gh(args: string[]): string {
+  const out = spawnSync("gh", args, { encoding: "utf8", timeout: 60_000 });
+  if (out.error) throw out.error;
+  if (out.status !== 0) throw new Error((out.stderr || "").trim() || `gh ${args[0]} ${args[1]} failed`);
+  return out.stdout;
+}
+
+/** The PR's live head sha, for `orch review` when --head is not given. */
+export function fetchHead(pr: string, repo: string): string {
+  if (!which("gh")) throw new Error("posting a review comment needs the GitHub CLI `gh`");
+  if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
+  const head = str(obj(JSON.parse(gh(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"])), "PR data").headRefOid, "headRefOid").toLowerCase();
+  if (!SHA_RE.test(head)) throw new Error(`no usable head commit '${head}'`);
+  return head;
+}
+
+/** Post a PR comment through `gh pr comment` (no shell; the body is one argument). */
+export function postComment(pr: string, repo: string, body: string): void {
+  if (!which("gh")) throw new Error("posting a review comment needs the GitHub CLI `gh`");
+  if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
+  gh(["pr", "comment", String(pr), "--repo", repo, "--body", body]);
 }
 
 export function loadFixture(name: string): unknown {
@@ -145,6 +287,13 @@ export function render(pr: string, r: Record<string, any>): string {
   if (!("checks" in r)) return `#${pr} => BLOCKED (${r.reason})`;
   const ci = r.ci_ok ? "green" : "NOT green " + dumps(r.checks);
   const label = !r.label ? "off" : r.label_ok ? r.label : `MISSING '${r.label}'`;
+  if (r.reviews === "comments") {
+    return `#${pr} head=${r.head} ci=${ci} reviews=comments author=${r.authors.join(",")} approvals=${r.approvals}/${r.need}` +
+      (r.approved_by.length ? ` [${r.approved_by.join(",")}]` : "") +
+      ` (stale=${r.stale} self=${r.self} malformed=${r.malformed}) changes_requested=${r.changes_requested}` +
+      (r.blocked_by.length ? ` [${r.blocked_by.join(",")}]` : "") + ` label=${label}\n` +
+      `=> ${r.ok ? "PASS" : "BLOCKED"}`;
+  }
   return `#${pr} head=${r.head} ci=${ci} approvals=${r.approvals}/${r.need} ` +
     `(stale=${r.stale} self=${r.self}) changes_requested=${r.changes_requested} label=${label}\n` +
     `=> ${r.ok ? "PASS" : "BLOCKED"}`;

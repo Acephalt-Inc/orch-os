@@ -344,11 +344,48 @@ const cmdMailbox: Run = (a, io) => {
   return 0;
 };
 
+/** --reviews, else [review] source, else "github". A bad config value is a ConfigError (exit 2). */
+function reviewSource(cfg: Record<string, any>, a: Args): M.ReviewSource {
+  if (a.reviews) return a.reviews;
+  const v = (cfg.review ?? {}).source ?? "github";
+  if (!(M.REVIEW_SOURCES as unknown[]).includes(v)) throw new ConfigError(`[review] source must be "github" or "comments" (got ${JSON.stringify(v)})`);
+  return v;
+}
+
+/**
+ * comments mode: the task's author agent(s) from the task store: the recorded holder, and the
+ * holder before it if the task changed hands. Never the GitHub login.
+ */
+function taskAuthors(cfg: Record<string, any>, id: string): string[] {
+  const [, r] = tasks(cfg).status(id);
+  const st = r.state ?? {};
+  return [st.session_id, st.previous_owner].filter((x): x is string => typeof x === "string" && x !== "");
+}
+
 const cmdMergeGate: Run = (a, io) => {
-  const mc = C.loadOrDefault().merge ?? {};
+  const cfg = C.loadOrDefault();
+  const mc = cfg.merge ?? {};
+  const source = reviewSource(cfg, a);
+  let authors: string[] = [];
+  if (source === "comments") {
+    if (!a.task) {
+      println(io, `#${a.pr} => BLOCKED (comments mode needs --task ID: the task whose holder authored this PR)`);
+      return 1;
+    }
+    try {
+      authors = taskAuthors(cfg, a.task);
+    } catch (e: any) {
+      println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
+      return 1;
+    }
+    if (!authors.length) {
+      println(io, `#${a.pr} => BLOCKED (task '${a.task}' has no recorded holder; the author claims it with \`orch task claim\`)`);
+      return 1;
+    }
+  }
   let info: unknown;
   try {
-    info = a.fixture ? M.loadFixture(a.fixture) : M.fetchLive(a.pr, a.repo || mc.repo || "");
+    info = a.fixture ? M.loadFixture(a.fixture) : M.fetchLive(a.pr, a.repo || mc.repo || "", source);
   } catch (e: any) {
     println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
     return 1;
@@ -357,7 +394,9 @@ const cmdMergeGate: Run = (a, io) => {
   const label = a.label ?? mc.required_label ?? "";
   let r: Record<string, any>;
   try {
-    r = M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head });
+    r = source === "comments"
+      ? M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head, reviewSource: source, authorAgents: authors })
+      : M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head });
   } catch (e: any) {
     // malformed PR data fails closed
     println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
@@ -365,6 +404,36 @@ const cmdMergeGate: Run = (a, io) => {
   }
   println(io, a.json ? dumps(r) : M.render(a.pr, r));
   return r.ok ? 0 : 1;
+};
+
+const VERDICT_OF: Record<string, M.Verdict> = { approve: "APPROVE", changes: "CHANGES", reject: "REJECT" };
+
+const cmdReview: Run = (a, io) => {
+  const verdict = VERDICT_OF[a._path[2]];
+  const agent = identity(a);
+  const repo = a.repo || (C.loadOrDefault().merge ?? {}).repo || "";
+  let head: string = (a.head ?? "").toLowerCase();
+  let line: string;
+  try {
+    if (!head) head = M.fetchHead(a.pr, repo);
+    line = M.reviewLine(verdict, head, agent);
+  } catch (e: any) {
+    eprintln(io, `review: ${e.message ?? e}`);
+    return 2;
+  }
+  const text = line + (a.message ? `\n\n${a.message}` : "");
+  if (a.dry_run) {
+    println(io, text);
+    return 0;
+  }
+  try {
+    M.postComment(a.pr, repo, text);
+  } catch (e: any) {
+    eprintln(io, `review: ${e.message ?? e}`);
+    return 1;
+  }
+  println(io, `posted on #${a.pr}: ${line}`);
+  return 0;
 };
 
 const cmdWorker: Run = async (a, io) => {
@@ -650,8 +719,25 @@ export function buildTree(): CmdSpec<Run> {
           opt("approvals", ["--approvals"], "int", "required approvals (default [merge] required_approvals)"),
           opt("label", ["--label"], "str", "required label (default [merge] required_label; '' = none)"),
           opt("fixture", ["--fixture"], "str", "offline: a bundled fixture (" + M.fixtureNames().join(", ") + ") or a path to `gh pr view --json` output"),
+          opt("reviews", ["--reviews"], "str", "where approvals come from (default [review] source, else github)", { choices: M.REVIEW_SOURCES }),
+          opt("task", ["--task"], "str", "comments mode: the task id whose holder authored the PR", { metavar: "ID" }),
           JSON_OPT,
         ],
+      },
+      {
+        name: "review", help: "post a review comment (ORCH-REVIEW line) as a PR comment, for merge-gate --reviews comments",
+        sub: (["approve", "changes", "reject"] as const).map((v) => ({
+          name: v, help: `post 'ORCH-REVIEW ${VERDICT_OF[v]} <head sha> by <me>' on the PR`, run: cmdReview,
+          usage: `orch review ${v} PR [--as NAME] [--head SHA] [--repo OWNER/NAME] [-m TEXT] [--dry-run]`,
+          pos: [{ dest: "pr" }],
+          opts: [
+            AS_OPT,
+            opt("head", ["--head"], "str", "the full 40-character sha you reviewed (default: the PR's live head, via gh)"),
+            opt("repo", ["--repo"], "str", "owner/name (default [merge] repo)"),
+            opt("message", ["-m", "--message"], "str", "text after the review comment line"),
+            opt("dry_run", ["--dry-run"], "bool", "print the comment instead of posting it"),
+          ],
+        })),
       },
       {
         name: "worker", help: "detached agent workers",

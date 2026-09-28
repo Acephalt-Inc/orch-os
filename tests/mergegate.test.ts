@@ -126,6 +126,6 @@ describe("MergeGateV2", () => {
   });
 
   it("fixture_names_are_listed", () => {
-    expect(M.fixtureNames()).toEqual(["approved", "changes-requested", "ci-red", "self-approval", "stale-approval"]);
+    expect(M.fixtureNames()).toEqual(["approved", "changes-requested", "ci-red", "comment-approved", "self-approval", "stale-approval"]);
   });
 });

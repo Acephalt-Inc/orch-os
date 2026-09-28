@@ -53,7 +53,7 @@ The epoch is the claim's **fencing token**: pass it back on `renew` and `release
 
 A decisive review is APPROVED, CHANGES_REQUESTED or DISMISSED; a later one from the same reviewer replaces an earlier one, and COMMENTED reviews are ignored. An approval of an older commit is **stale**: pushing new commits after an approval means the new code needs a new approval. `--head SHA` is an expected-head guard: if the PR has moved since you looked, the answer is `BLOCKED (head moved ...)`.
 
-GitHub does not let a PR author approve their own PR, and the gate ignores such reviews too. If all your agents act through one GitHub account, give the reviewing agent its own account or a GitHub App identity.
+GitHub does not let a PR author approve their own PR, and the gate ignores such reviews too. If all your agents act through one GitHub account, either give the reviewing agent its own account or a GitHub App identity, or switch the gate to **review comments** (`--reviews comments --task ID`, or `[review] source = "comments"`). A review comment is a PR comment whose first line is `ORCH-REVIEW APPROVE|CHANGES|REJECT <full head sha> by <agent>`, posted with `orch review`. The same rules apply with agents in place of GitHub logins: the author is the holder of the task in `orch task`, a review comment counts only for the current head commit and only from another agent, a later `CHANGES` or `REJECT` blocks, and CI must be green. Review comments are a process gate between cooperating agents, not a security boundary: whoever holds the shared token can post one under any name.
 
 ## Workers and worktrees
 

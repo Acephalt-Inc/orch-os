@@ -1,0 +1,85 @@
+{
+ "_note": "merge-gate stdout and exit code for every bundled v2.0.1 fixture, captured from the v2.0.1 build before review sources existed. The default github source must reproduce it byte for byte.",
+ "cases": {
+  "approved text live": {
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=0 label=off\n=> PASS\n",
+   "code": 0
+  },
+  "approved text head-moved": {
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "code": 1
+  },
+  "approved json live": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": true, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 0}\n",
+   "code": 0
+  },
+  "approved json head-moved": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "code": 1
+  },
+  "changes-requested text live": {
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=1 label=off\n=> BLOCKED\n",
+   "code": 1
+  },
+  "changes-requested text head-moved": {
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "code": 1
+  },
+  "changes-requested json live": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 1}\n",
+   "code": 1
+  },
+  "changes-requested json head-moved": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "code": 1
+  },
+  "ci-red text live": {
+   "out": "#101 head=4f2c9a1e7 ci=NOT green {\"tests\": \"FAILURE\"} approvals=1/1 (stale=0 self=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "code": 1
+  },
+  "ci-red text head-moved": {
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "code": 1
+  },
+  "ci-red json live": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": false, \"checks\": {\"tests\": \"FAILURE\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 1, \"stale\": 0, \"self\": 0, \"changes_requested\": 0}\n",
+   "code": 1
+  },
+  "ci-red json head-moved": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "code": 1
+  },
+  "self-approval text live": {
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=0/1 (stale=0 self=1) changes_requested=0 label=off\n=> BLOCKED\n",
+   "code": 1
+  },
+  "self-approval text head-moved": {
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "code": 1
+  },
+  "self-approval json live": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"stale\": 0, \"self\": 1, \"changes_requested\": 0}\n",
+   "code": 1
+  },
+  "self-approval json head-moved": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "code": 1
+  },
+  "stale-approval text live": {
+   "out": "#101 head=4f2c9a1e7 ci=green approvals=0/1 (stale=1 self=0) changes_requested=0 label=off\n=> BLOCKED\n",
+   "code": 1
+  },
+  "stale-approval text head-moved": {
+   "out": "#101 => BLOCKED (head moved: expected 0000000, PR is at 4f2c9a1e7)\n",
+   "code": 1
+  },
+  "stale-approval json live": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"ci_ok\": true, \"checks\": {\"tests\": \"SUCCESS\", \"lint\": \"SUCCESS\"}, \"label\": \"\", \"label_ok\": true, \"approvals\": 0, \"stale\": 1, \"self\": 0, \"changes_requested\": 0}\n",
+   "code": 1
+  },
+  "stale-approval json head-moved": {
+   "out": "{\"head\": \"4f2c9a1e7\", \"ok\": false, \"need\": 1, \"reason\": \"head moved: expected 0000000, PR is at 4f2c9a1e7\"}\n",
+   "code": 1
+  }
+ }
+}

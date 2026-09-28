@@ -81,6 +81,8 @@ The absolute agent path in the config means a worker started from cron, with its
 
 `merge-gate` fetches `author, headRefOid, reviews, labels, statusCheckRollup` with one `gh pr view --json` call, or loads the same JSON from a fixture. `evaluate()` is a pure function of that JSON and the settings, so it is fully testable offline. It validates the shape of what it reads: a wrong type anywhere (a string where a list belongs, a number for a head) throws, and the CLI prints `BLOCKED (unreadable PR data: ...)`. Any fetch error prints `BLOCKED` and exits 1.
 
+With `--reviews comments` the field list gains `comments`, and the CLI first reads the author agents of `--task ID` from the task store; `evaluate()` then takes approvals and blocks from `ORCH-REVIEW` review comments instead of GitHub reviews. `orch review` is the only command that writes to GitHub: one `gh pr comment` per call.
+
 ## Dependencies
 
 **Runtime: none.** The published package depends only on Node.js built-ins (`fs`, `child_process`, `os`, `path`, `crypto`, `url`). The pieces a library would usually provide are small and local:
