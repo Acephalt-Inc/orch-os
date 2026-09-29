@@ -534,6 +534,31 @@ function installedInvocationHealth(path: string, parse: (contents: string) => st
   }
 }
 
+function managedJobArgs(args: string[] | null, job: JobCandidate): boolean {
+  if (!args || !isAbsolute(args[0])) return false;
+  const offset = args.length > 1 && isAbsolute(args[1]) ? 2 : 1; // Node-prefixed and legacy shebang jobs
+  if (job.argv.some((arg, i) => args[offset + i] !== arg)) return false;
+  const extra = args.slice(offset + job.argv.length);
+  if (job.id !== "lease-renew") return extra.length === 0;
+  if (extra.length === 0) return true; // pre-epoch managed lease job
+  const epoch = Number(extra[3]);
+  return extra.length === 4 && extra[0] === "--session" && /^[A-Za-z0-9_.:@/-]+$/.test(extra[1])
+    && extra[2] === "--expected-epoch" && Number.isSafeInteger(epoch) && epoch >= 1 && String(epoch) === extra[3];
+}
+
+function assertManagedFile(path: string, job: JobCandidate, backend: "launchd" | "systemd", kind?: "service" | "timer"): void {
+  if (!existsSync(path)) return;
+  let contents: string;
+  try { contents = readFileSync(path, "utf8"); }
+  catch { throw new ScheduleError(`cannot read ${path}; refusing to remove an unverified job file`); }
+  const managed = backend === "launchd"
+    ? contents.match(/<key>Label<\/key>\s*<string>([^<]*)<\/string>/)?.[1] === launchdLabel(job.id)
+      && managedJobArgs(launchdArgv(contents), job)
+    : contents.split("\n").includes(`Description=orch-os scheduled job${kind === "timer" ? " timer" : ""}: ${job.label}`)
+      && (kind === "timer" ? contents.includes("[Timer]") : managedJobArgs(systemdArgv(contents), job));
+  if (!managed) throw new ScheduleError(`${path} is not a managed orch-os ${backend} file; preserving it`);
+}
+
 export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunContext, host: Host): StatusRow[] {
   if (backend === "launchd") {
     return jobs.map((job) => {
@@ -563,9 +588,20 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         detail = firstLine(r.stdout || r.stderr || `exit ${r.status}`);
         loaded = detail === "active";
       } catch { /* leave defaults */ }
+      let enabled = false;
+      let enableError: string | null = null;
+      try {
+        const state = host.exec("systemctl", ["--user", "is-enabled", `${name}.timer`]);
+        const value = state.stdout.trim();
+        enabled = state.status === 0 && /^(enabled|enabled-runtime)$/.test(value);
+        if (!enabled && loaded) enableError = /^(disabled|masked|masked-runtime|not-found)$/.test(value)
+          ? "timer is not enabled; reinstall" : `cannot inspect timer enablement: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`;
+      } catch (e: any) {
+        if (loaded) enableError = `cannot inspect timer enablement: ${String(e.message ?? e)}`;
+      }
       const svcPath = join(systemdDir(ctx.home), `${name}.service`);
       const error = loaded ? !written ? "managed systemd timer file missing; cannot verify captured Node"
-        : existsSync(svcPath) ? installedInvocationHealth(svcPath, systemdArgv, job, ctx) : nodeHealth(null) : null;
+        : enableError ?? (existsSync(svcPath) ? installedInvocationHealth(svcPath, systemdArgv, job, ctx) : nodeHealth(null)) : null;
       return { id: job.id, label: job.label, written, loaded: loaded && !error,
         detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
@@ -577,11 +613,15 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   const start = lines.indexOf(CRON_BEGIN);
   const end = start < 0 ? -1 : lines.indexOf(CRON_END, start + 1);
   const managed = start < 0 ? [] : lines.slice(start + 1, end).filter((l) => l.trim() && !l.startsWith("#"));
+  const malformed = managed.some((l) => cronArgv(l) === null);
   return jobs.map((job) => {
-    const line = managed.find((l) => cronArgv(l)?.[2] === job.argv[0]);
+    const line = managed.find((l) => {
+      const args = cronArgv(l);
+      return args?.[2] === job.argv[0] || args?.[1] === job.argv[0];
+    });
     const present = Boolean(line);
     const error = line ? invocationHealth(cronArgv(line), job, ctx)
-      : start >= 0 ? "managed cron job command missing or malformed; reinstall" : null;
+      : malformed ? "managed cron job command missing or malformed; reinstall" : null;
     return { id: job.id, label: job.label, written: present, loaded: present && !error,
       detail: error ? `ERROR: ${error}` : present ? "in crontab" : "not installed", degraded: Boolean(error) };
   });
@@ -598,6 +638,7 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   if (backend === "launchd") {
     return jobs.map((job) => {
       const p = launchdPath(ctx.home, job.id);
+      assertManagedFile(p, job, "launchd");
       const written = existsSync(p);
       const state = host.exec("launchctl", ["print", `gui/${host.uid}/${launchdLabel(job.id)}`]);
       const loaded = state.status === 0;
@@ -620,6 +661,8 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
       const name = systemdUnitName(job.id);
       const svc = join(systemdDir(ctx.home), `${name}.service`);
       const timer = join(systemdDir(ctx.home), `${name}.timer`);
+      assertManagedFile(svc, job, "systemd", "service");
+      assertManagedFile(timer, job, "systemd", "timer");
       const written = existsSync(svc) || existsSync(timer);
       const state = host.exec("systemctl", ["--user", "is-active", `${name}.timer`]);
       const active = state.status === 0 && state.stdout.trim() === "active";

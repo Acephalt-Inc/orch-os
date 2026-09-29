@@ -124,6 +124,22 @@ function scheduleContext(host: S.Host): S.RunContext {
   };
 }
 
+type ScheduleInventoryRow = S.StatusRow & { unavailable: boolean };
+
+function scheduleInventory(backend: S.BackendName, tree: ReturnType<typeof buildTree>,
+                           ctx: S.RunContext, host: S.Host): ScheduleInventoryRow[] {
+  const available = new Set(S.available(tree).map((job) => job.id));
+  const jobs = new Map(S.CANDIDATES.map((job) => [job.id, job]));
+  return S.status(backend, S.CANDIDATES, ctx, host).map((row) => {
+    if (available.has(row.id)) return { ...row, unavailable: false };
+    const job = jobs.get(row.id)!;
+    const absentCommand = `no \`orch ${job.argv.join(" ")}\` subcommand in this build`;
+    const installed = row.written || row.loaded || row.degraded;
+    return { ...row, unavailable: true, loaded: false, degraded: installed,
+      detail: installed ? `ERROR: ${absentCommand}; ${row.detail}` : `${absentCommand} - not scheduled` };
+  });
+}
+
 function session(a: Args): string {
   return a.session || process.env.ORCH_SESSION_ID || defaultSession();
 }
@@ -396,20 +412,13 @@ const cmdDoctor: Run = (_a, io) => {
     });
     check("schedule", () => {
       const host = S.realHost();
-      let backend: S.BackendName | null = null;
-      try {
-        backend = S.detectBackend(host);
-      } catch {
-        backend = null;
-      }
-      const treeForSchedule = buildTree();
-      for (const j of S.unavailable(treeForSchedule)) add(true, `schedule ${j.id}`, "no `orch " + j.argv.join(" ") + "` in this build - not scheduled", true);
-      if (!backend) {
-        add(true, "schedule", "no backend for this platform - `orch schedule` unavailable", true);
+      if (host.platform !== "darwin" && host.platform !== "linux") {
+        add(false, "schedule", "no backend for this platform - `orch schedule` unavailable", true);
         return;
       }
+      const backend = S.detectBackend(host);
       const ctx = scheduleContext(host);
-      for (const r of S.status(backend, S.available(treeForSchedule), ctx, host)) {
+      for (const r of scheduleInventory(backend, buildTree(), ctx, host)) {
         add(r.loaded, `schedule ${r.id}`, `${r.label}: ${r.detail} (${backend})`, !r.degraded);
       }
     });
@@ -992,9 +1001,9 @@ const cmdSchedule: Run = (a, io) => {
     ctx.leaseSession = requested;
     ctx.leaseEpoch = current.epoch;
   }
-  for (const j of missing) println(io, `schedule: skipping '${j.id}' (${j.label}) - no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
   try {
     if (action === "install") {
+      for (const j of missing) println(io, `schedule: skipping '${j.id}' (${j.label}) - no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
       if (!avail.length) {
         println(io, "schedule: no candidate job has a CLI subcommand in this build; nothing to install");
         return 0;
@@ -1018,17 +1027,16 @@ const cmdSchedule: Run = (a, io) => {
       return exitCode;
     }
     if (action === "status") {
-      const rows = S.status(backend, avail, ctx, host);
+      const rows = scheduleInventory(backend, tree, ctx, host);
       if (a.json) {
         println(io, dumps({ backend, jobs: rows, missing: missing.map((j) => j.id) }));
-        return rows.every((r) => r.loaded) ? 0 : 1;
+        return rows.every((r) => r.loaded || r.unavailable && !r.degraded) ? 0 : 1;
       }
-      for (const r of rows) println(io, `${padEnd(r.degraded ? "ERROR" : r.loaded ? "LOADED" : "MISSING", 8)} ${padEnd(r.id, 16)} ${r.label} (${backend}): ${r.detail}`);
-      for (const j of missing) println(io, `${padEnd("N/A", 8)} ${padEnd(j.id, 16)} ${j.label}: no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
-      return rows.every((r) => r.loaded) ? 0 : 1;
+      for (const r of rows) println(io, `${padEnd(r.degraded ? "ERROR" : r.unavailable ? "N/A" : r.loaded ? "LOADED" : "MISSING", 8)} ${padEnd(r.id, 16)} ${r.label} (${backend}): ${r.detail}`);
+      return rows.every((r) => r.loaded || r.unavailable && !r.degraded) ? 0 : 1;
     }
     // remove
-    const rows = S.remove(backend, avail, ctx, host);
+    const rows = S.remove(backend, S.CANDIDATES, ctx, host);
     for (const r of rows) println(io, `${r.removed ? "removed" : "skip"} ${r.id}: ${r.detail}`);
     println(io, `schedule: removed ${rows.filter((r) => r.removed).length}/${rows.length} job(s) via ${backend}`);
     return 0;

@@ -260,6 +260,7 @@ describe("ScheduleTest", () => {
         if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
         if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
         if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 0, stdout: "enabled", stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
       });
       const captured = { ...ctxFor(host), nodeBin: join(host.home, "removed-node") };
@@ -280,6 +281,7 @@ describe("ScheduleTest", () => {
         if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
         if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
         if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 0, stdout: "enabled", stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
       });
       const ctx = ctxFor(host);
@@ -296,8 +298,8 @@ describe("ScheduleTest", () => {
         writeFileSync(file, legacy);
       }
       const row = S.status(backend, [JOBS[1]], ctx, host)[0];
-      expect(row).toMatchObject({ written: backend !== "cron", loaded: false, degraded: true });
-      expect(row.detail).toMatch(/no verifiable absolute Node|managed cron job command missing/);
+      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/no verifiable absolute Node/);
     }
   });
 
@@ -316,6 +318,38 @@ describe("ScheduleTest", () => {
       expect(row.detail).toMatch(/managed .* file missing/);
       expect(existsSync(file)).toBe(false);
     });
+
+  it("test_active_but_disabled_systemd_timer_is_degraded", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd, args) => {
+      if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+      if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 1, stdout: "disabled", stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    for (const file of S.render("systemd", [JOBS[1]], ctx)) {
+      mkdirSync(dirname(file.path), { recursive: true });
+      writeFileSync(file.path, file.contents);
+    }
+    const row = S.status("systemd", [JOBS[1]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+    expect(row.detail).toMatch(/timer is not enabled/);
+  });
+
+  it("test_active_systemd_timer_with_unknown_enablement_is_degraded", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd, args) => {
+      if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+      if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 1, stdout: "", stderr: "user bus unavailable" };
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    for (const file of S.render("systemd", [JOBS[1]], ctx)) {
+      mkdirSync(dirname(file.path), { recursive: true });
+      writeFileSync(file.path, file.contents);
+    }
+    const row = S.status("systemd", [JOBS[1]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+    expect(row.detail).toMatch(/cannot inspect timer enablement.*user bus unavailable/);
+  });
 
   it("test_searchable_directory_is_not_a_node_executable", () => {
     const host = fakeHost({ platform: "darwin" }, () => ({ status: 0, stdout: "", stderr: "" }));
@@ -349,6 +383,7 @@ describe("ScheduleTest", () => {
         if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
         if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
         if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 0, stdout: "enabled", stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
       });
       const installed = { ...ctxFor(host), orchBin: "/opt/other/cli.js" };
@@ -366,6 +401,7 @@ describe("ScheduleTest", () => {
         if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
         if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
         if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 0, stdout: "enabled", stderr: "" };
         return { status: 0, stdout: "", stderr: "" };
       });
       const ctx = ctxFor(host);
@@ -467,7 +503,7 @@ describe("ScheduleTest", () => {
     const launchCtx = ctxFor(launchd);
     const file = S.launchdPath(launchd.home, "load-sample");
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, "unit");
+    writeFileSync(file, S.render("launchd", [JOBS[1]], launchCtx)[0].contents);
     expect(() => S.remove("launchd", [JOBS[1]], launchCtx, launchd)).toThrow(/permission denied/);
     expect(existsSync(file)).toBe(true);
 
@@ -478,7 +514,7 @@ describe("ScheduleTest", () => {
       : { status: 0, stdout: "", stderr: "" });
     const timer = join(S.systemdDir(systemd.home), `${S.systemdUnitName("load-sample")}.timer`);
     mkdirSync(dirname(timer), { recursive: true });
-    writeFileSync(timer, "unit");
+    writeFileSync(timer, S.render("systemd", [JOBS[1]], ctxFor(systemd)).find((f) => f.path === timer)!.contents);
     expect(() => S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd)).toThrow(/user bus denied/);
     expect(existsSync(timer)).toBe(true);
 
@@ -636,6 +672,95 @@ describe("ScheduleCliTest", () => {
     expect(out).toContain("schedule lease-renew");
     expect(out).toContain("schedule load-sample");
   });
+
+  it("test_doctor_fails_when_installed_systemd_backend_cannot_be_inspected", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    const host = fakeHost({ platform: "linux" }, (cmd, args) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 1, stdout: "", stderr: "no crontab for user" };
+      if (cmd === "systemctl" && args.includes("is-system-running")) return { status: 1, stdout: "", stderr: "Failed to connect to bus" };
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    vi.spyOn(S, "realHost").mockReturnValue(host);
+    const timer = S.render("systemd", [JOBS[1]], ctxFor(host)).find((f) => f.path.endsWith(".timer"))!;
+    mkdirSync(dirname(timer.path), { recursive: true });
+    writeFileSync(timer.path, timer.contents);
+    const [code, out] = await run("doctor");
+    expect(code).toBe(1);
+    expect(out).toMatch(/FAIL\s+schedule\s+.*systemd user bus unavailable/);
+  });
+
+  it("test_doctor_skips_genuinely_unsupported_platform", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    vi.spyOn(S, "realHost").mockReturnValue(fakeHost({ platform: "win32" }));
+    const [code, out] = await run("doctor");
+    expect(code).toBe(0);
+    expect(out).toMatch(/SKIP\s+schedule\s+no backend for this platform/);
+  });
+
+  it("test_unavailable_but_installed_candidate_is_error_and_removable", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    let crontab = "0 3 * * * /usr/bin/backup.sh\n";
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    S.install("cron", [JOBS[1]], ctxFor(host), host);
+    vi.spyOn(S, "realHost").mockReturnValue(host);
+    vi.spyOn(S, "available").mockReturnValue([JOBS[0]]);
+    vi.spyOn(S, "unavailable").mockReturnValue([JOBS[1]]);
+    const [statusCode, statusOut] = await run("schedule", "status", "--backend", "cron");
+    expect(statusCode).toBe(1);
+    expect(statusOut).toMatch(/ERROR\s+load-sample.*no `orch load` subcommand/);
+    const [removeCode] = await run("schedule", "remove", "--backend", "cron");
+    expect(removeCode).toBe(0);
+    expect(crontab).toContain("/usr/bin/backup.sh");
+    expect(crontab).not.toContain("BEGIN orch-os schedule");
+    S.install("cron", [JOBS[0]], { ...ctxFor(host), orchBin: DIST_CLI }, host);
+    const [availableCode, availableOut] = await run("schedule", "status", "--backend", "cron");
+    expect(availableCode).toBe(0);
+    expect(availableOut).toMatch(/N\/A\s+load-sample.*not scheduled/);
+  });
+
+  it.each(["launchd", "systemd"] as const)(
+    "test_remove_refuses_unmanaged_same_path_%s_file", (backend) => {
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args) => {
+        if (cmd === "launchctl" && args.includes("print")) return { status: 1, stdout: "", stderr: "service not found" };
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 4, stdout: "not-found", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 4, stdout: "not-found", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      const file = backend === "launchd" ? S.launchdPath(host.home, JOBS[1].id)
+        : join(S.systemdDir(host.home), `${S.systemdUnitName(JOBS[1].id)}.service`);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "personal configuration; not an orch-os managed file\n");
+      expect(() => S.remove(backend, [JOBS[1]], ctx, host)).toThrow(/not a managed orch-os/);
+      expect(readFileSync(file, "utf8")).toBe("personal configuration; not an orch-os managed file\n");
+      expect(host.calls.some(([cmd, args]) => cmd === "launchctl" && args.includes("bootout")
+        || cmd === "systemctl" && args.includes("disable"))).toBe(false);
+    });
+
+  it.each(["launchd", "systemd"] as const)(
+    "test_remove_refuses_mismatched_command_in_%s_managed_label_file", (backend) => {
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args) => {
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 0, stdout: "enabled", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      const file = S.render(backend, [JOBS[1]], ctx).find((f) => backend === "launchd" || f.path.endsWith(".service"))!;
+      const original = file.contents;
+      const altered = backend === "launchd" ? original.replace("<string>load</string>", "<string>task</string>")
+        : original.replace(/ load\n/, " task\n");
+      expect(altered).not.toBe(original);
+      mkdirSync(dirname(file.path), { recursive: true });
+      writeFileSync(file.path, altered);
+      expect(() => S.remove(backend, [JOBS[1]], ctx, host)).toThrow(/not a managed orch-os/);
+      expect(readFileSync(file.path, "utf8")).toBe(altered);
+      expect(host.calls.some(([cmd, args]) => cmd === "launchctl" && args.includes("bootout")
+        || cmd === "systemctl" && args.includes("disable"))).toBe(false);
+    });
 
   it("test_status_and_doctor_return_nonzero_for_loaded_job_with_missing_captured_node", async () => {
     expect((await run("init"))[0]).toBe(0);

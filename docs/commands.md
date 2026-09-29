@@ -281,6 +281,8 @@ Acquire the lead lease first, then run `orch schedule install --session HOLDER` 
 
 `orch doctor` shows uninstalled/missing jobs as informational `SKIP` rows; a loaded job with a broken installed invocation is a required `FAIL`.
 
+`status` and `doctor` inventory every known schedule candidate, including one whose command this build no longer exposes: an installed job without that command is `ERROR`/required `FAIL`, while an uninstalled unavailable candidate remains `N/A`/`SKIP`. An active but disabled systemd timer is unhealthy because it will not survive restart; an installed backend that cannot be inspected is a required doctor failure, not an unsupported-platform skip. `remove` covers every known candidate, but deletes only recognizable orch-os managed plists/units or the marked cron block; an unrecognized replacement at the exact expected file path is preserved without deactivating that unit. When the managed file is missing, cleanup is limited to the exact known launchd label or systemd timer name, with manager state checked before deactivation.
+
 ## orch mem
 
 ```text
