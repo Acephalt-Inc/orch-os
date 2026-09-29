@@ -567,6 +567,48 @@ describe("ScheduleTest", () => {
     expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
   });
 
+  it.each([" ", "\t"])("test_indented_unknown_cron_marker_refuses_every_operation_%j", (indent) => {
+    let crontab = `${indent}# BEGIN orch-os schedule v2 tail=empty\n`
+      + "*/1 * * * * '/old/node' '/old/cli' 'load' >>'/tmp/old.log' 2>&1\n"
+      + `${indent}# END orch-os schedule v2\n`;
+    const original = crontab;
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      crontab = input ?? "";
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    expect(() => S.installedBackend(host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.status("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.remove("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.install("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(crontab).toBe(original);
+    expect(crontab.match(/BEGIN orch-os schedule/g)).toHaveLength(1);
+    expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
+  });
+
+  it.each(["15 4 * * * /usr/bin/backup-b\n", "\n"])(
+    "test_nonl_cron_tail_with_post_block_suffix_refuses_remove_and_reinstall_%j", (suffix) => {
+      let crontab = "0 3 * * * /usr/bin/backup";
+      const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+        if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+        crontab = input ?? "";
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      S.install("cron", [JOBS[1]], ctx, host);
+      expect(crontab).toContain("tail=nonl");
+      crontab += suffix;
+      const original = crontab;
+      const writesBefore = host.calls.filter(([, args]) => args[0] === "-").length;
+      expect(() => S.remove("cron", [JOBS[1]], ctx, host)).toThrow(/post-block.*manual/i);
+      expect(() => S.install("cron", [JOBS[1]], ctx, host)).toThrow(/post-block.*manual/i);
+      expect(crontab).toBe(original);
+      expect(crontab.match(/BEGIN orch-os schedule/g)).toHaveLength(1);
+      expect(host.calls.filter(([, args]) => args[0] === "-")).toHaveLength(writesBefore);
+    },
+  );
+
   it("test_crontab_read_error_refuses_install_without_replacing_existing_entries", () => {
     const host = fakeHost({ platform: "linux" }, (_cmd, args) =>
       args[0] === "-l"

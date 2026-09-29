@@ -320,12 +320,14 @@ function cronTail(text: string): CronTail {
 }
 
 /** Only a complete v1 block is ours; old/unknown markers must never be guessed away. */
-function managedCronSpan(text: string): { start: number; end: number; endByte: number; originalPrefix: string } | null {
+function managedCronSpan(text: string): { start: number; end: number; endByte: number; originalPrefix: string; tail: CronTail } | null {
   const lines = text.split("\n");
-  const markers = lines.flatMap((line, index) =>
-    line.startsWith(CRON_BEGIN) || line.startsWith(CRON_END)
-      || line.startsWith("# >>> orch-os managed") || line.startsWith("# <<< orch-os managed")
-      ? [{ line, index }] : []);
+  const markers = lines.flatMap((line, index) => {
+    const markerLine = line.replace(/^[ \t]+/, "");
+    return markerLine.startsWith(CRON_BEGIN) || markerLine.startsWith(CRON_END)
+      || markerLine.startsWith("# >>> orch-os managed") || markerLine.startsWith("# <<< orch-os managed")
+      ? [{ line, index }] : [];
+  });
   if (markers.length === 0) return null;
   const begin = markers[0]?.line.match(/^# BEGIN orch-os schedule v1 tail=(empty|nl|nonl)$/);
   if (markers.length !== 2 || !begin || markers[1].line !== `${CRON_END} v1`
@@ -342,7 +344,7 @@ function managedCronSpan(text: string): { start: number; end: number; endByte: n
   if (cronTail(originalPrefix) !== tail || (tail === "nonl" && !prefix.endsWith("\n"))) {
     throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
   }
-  return { start, end, endByte, originalPrefix };
+  return { start, end, endByte, originalPrefix, tail };
 }
 
 function cronExpr(minutes: number): string {
@@ -363,6 +365,9 @@ function renderCronBlock(jobs: JobCandidate[], ctx: RunContext, tail: CronTail =
 function stripManagedBlock(text: string): string {
   const span = managedCronSpan(text);
   if (!span) return text;
+  if (span.tail === "nonl" && span.endByte !== text.length) {
+    throw new ScheduleError("post-block text after tail=nonl cron block; resolve manually before remove or reinstall");
+  }
   return span.originalPrefix + text.slice(span.endByte);
 }
 
