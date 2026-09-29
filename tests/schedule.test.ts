@@ -4,6 +4,7 @@
  * and a recording `exec` stub), never the real OS. No test calls launchctl, systemctl or
  * crontab for real, and none writes outside its own tmp directory - CI stays render-only too.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -42,7 +43,7 @@ function fakeHost(overrides: Partial<S.Host> = {}, exec?: (cmd: string, args: st
 }
 
 function ctxFor(host: S.Host): S.RunContext {
-  return { home: host.home, orchBin: "/opt/orch/bin/orch", orchHome: "/opt/orch/home", logDir: join(host.home, "logs"),
+  return { home: host.home, nodeBin: process.execPath, orchBin: "/opt/orch/bin/orch", orchHome: "/opt/orch/home", logDir: join(host.home, "logs"),
     leaseSession: "lead", leaseEpoch: 1 };
 }
 
@@ -78,7 +79,7 @@ describe("ScheduleTest", () => {
     expect(lease.path).toBe(S.launchdPath(host.home, "lease-renew"));
     expect(lease.contents).toContain("<key>Label</key>");
     expect(lease.contents).toContain("<string>com.orch-os.schedule.lease-renew</string>");
-    expect(lease.contents).toContain("<string>/opt/orch/bin/orch</string>");
+    expect(lease.contents).toContain(`<string>${process.execPath}</string>\n    <string>/opt/orch/bin/orch</string>`);
     expect(lease.contents).toContain("<string>lease</string>");
     expect(lease.contents).toContain("<string>renew</string>");
     expect(lease.contents).toContain("<string>--session</string>\n    <string>lead</string>");
@@ -103,10 +104,10 @@ describe("ScheduleTest", () => {
     expect(svc.path).toBe(join(S.systemdDir(host.home), "orch-os-schedule-load-sample.service"));
     expect(svc.contents).toContain("[Service]");
     expect(svc.contents).toContain("Type=oneshot");
-    expect(svc.contents).toContain("ExecStart=/opt/orch/bin/orch load");
+    expect(svc.contents).toContain(`ExecStart=${process.execPath} /opt/orch/bin/orch load`);
     expect(svc.contents).toContain("Environment=ORCH_HOME=/opt/orch/home");
     const leaseSvc = files.find((f) => f.path.endsWith("orch-os-schedule-lease-renew.service"))!;
-    expect(leaseSvc.contents).toContain("ExecStart=/opt/orch/bin/orch lease renew --session lead --expected-epoch 1");
+    expect(leaseSvc.contents).toContain(`ExecStart=${process.execPath} /opt/orch/bin/orch lease renew --session lead --expected-epoch 1`);
 
     const timer = files.find((f) => f.path.endsWith("orch-os-schedule-load-sample.timer"))!;
     expect(timer.contents).toContain("[Timer]");
@@ -124,9 +125,20 @@ describe("ScheduleTest", () => {
     const files = S.render("cron", JOBS, ctx);
     expect(files).toHaveLength(1);
     expect(files[0].contents).toContain("BEGIN orch-os schedule");
-    expect(files[0].contents).toContain("*/5 * * * * ORCH_HOME='/opt/orch/home' '/opt/orch/bin/orch' 'lease' 'renew' '--session' 'lead' '--expected-epoch' '1'");
-    expect(files[0].contents).toContain("*/1 * * * * ORCH_HOME='/opt/orch/home' '/opt/orch/bin/orch' 'load'");
+    expect(files[0].contents).toContain(`*/5 * * * * ORCH_HOME='/opt/orch/home' '${process.execPath}' '/opt/orch/bin/orch' 'lease' 'renew' '--session' 'lead' '--expected-epoch' '1'`);
+    expect(files[0].contents).toContain(`*/1 * * * * ORCH_HOME='/opt/orch/home' '${process.execPath}' '/opt/orch/bin/orch' 'load'`);
     expect(files[0].contents).toContain("END orch-os schedule");
+  });
+
+  it("test_all_scheduled_jobs_start_with_absolute_node_not_shebang_path_lookup", () => {
+    const host = fakeHost({ platform: "linux" });
+    const ctx = ctxFor(host);
+    const plist = S.render("launchd", [JOBS[1]], ctx)[0].contents;
+    const service = S.render("systemd", [JOBS[1]], ctx)[0].contents;
+    const cron = S.render("cron", [JOBS[1]], ctx)[0].contents;
+    expect(plist).toContain(`<array>\n    <string>${process.execPath}</string>\n    <string>${ctx.orchBin}</string>`);
+    expect(service).toContain(`ExecStart=${process.execPath} ${ctx.orchBin} load`);
+    expect(cron).toContain(`'${process.execPath}' '${ctx.orchBin}' 'load'`);
   });
 
   it("test_backend_detection_macos_is_always_launchd", () => {
@@ -330,21 +342,33 @@ describe("ScheduleTest", () => {
 
   it("test_render_quotes_paths_with_spaces_and_shell_metacharacters", () => {
     const host = fakeHost({ platform: "linux" });
-    const ctx = { ...ctxFor(host), orchBin: "/opt/orch tools/bin/orch", orchHome: "/tmp/orch's home", logDir: "/tmp/orch logs" };
+    const ctx = { ...ctxFor(host), nodeBin: "/opt/node tools/bin/node", orchBin: "/opt/orch tools/bin/orch",
+      orchHome: "/tmp/orch's home", logDir: "/tmp/orch logs" };
     const svc = S.render("systemd", [JOBS[1]], ctx)[0].contents;
-    expect(svc).toContain('ExecStart="/opt/orch tools/bin/orch" load');
+    expect(svc).toContain('ExecStart="/opt/node tools/bin/node" "/opt/orch tools/bin/orch" load');
     expect(svc).toContain('Environment="ORCH_HOME=/tmp/orch\'s home"');
     const cron = S.render("cron", [JOBS[1]], ctx)[0].contents;
     expect(cron).toContain("ORCH_HOME='/tmp/orch'\\''s home'");
-    expect(cron).toContain("'/opt/orch tools/bin/orch'");
+    expect(cron).toContain("'/opt/node tools/bin/node' '/opt/orch tools/bin/orch' 'load'");
     expect(cron).toContain(">>'/tmp/orch logs/load-sample.log'");
     expect(S.render("systemd", [JOBS[1]], { ...ctx, orchBin: "/opt/$tools/orch" })[0].contents)
-      .toContain("ExecStart=/opt/$$tools/orch load");
+      .toContain('ExecStart="/opt/node tools/bin/node" /opt/$$tools/orch load');
   });
 
   it("test_built_js_entrypoint_is_executable", () => {
     expect(statSync(DIST_CLI).mode & 0o111).not.toBe(0);
     expect(S.resolveOrchBin("/usr/bin/unrelated-runner.js", fakeHost())).toBe(DIST_CLI);
+  });
+
+  it("test_built_js_runs_with_absolute_node_under_scheduler_minimal_path", () => {
+    const home = fakeHost().home;
+    const env = { HOME: home, PATH: home }; // an existing empty directory: no `node` by any install layout
+    const shebang = spawnSync(DIST_CLI, ["--help"], { env, encoding: "utf8" });
+    expect(shebang.status).not.toBe(0); // the reproduced failure: /usr/bin/env cannot find node
+    const explicitNode = spawnSync(process.execPath, [DIST_CLI, "--help"], { env, encoding: "utf8" });
+    expect(explicitNode.error).toBeUndefined();
+    expect(explicitNode.status).toBe(0);
+    expect(explicitNode.stdout).toContain("orch");
   });
 
   it("test_install_activation_failure_is_reported_for_nonzero_exit", () => {

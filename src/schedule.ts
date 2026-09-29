@@ -185,6 +185,8 @@ export function resolveOrchBin(_argv1: string, _host: Host): string {
 export interface RunContext {
   /** Where per-user unit files live (launchd/systemd); normally host.home. */
   home: string;
+  /** Absolute Node executable captured at install; scheduler PATH may not contain node. */
+  nodeBin: string;
   /** Absolute path to the `orch` binary, baked into every installed job. */
   orchBin: string;
   /** ORCH_HOME to export explicitly, since none of the three backends inherit a login shell's env. */
@@ -213,6 +215,10 @@ function commandArgs(job: JobCandidate, ctx: RunContext): string[] {
   return [...job.argv, "--session", ctx.leaseSession, "--expected-epoch", String(ctx.leaseEpoch)];
 }
 
+function invocationArgs(job: JobCandidate, ctx: RunContext): string[] {
+  return [ctx.nodeBin, ctx.orchBin, ...commandArgs(job, ctx)];
+}
+
 function xmlEscape(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -236,7 +242,7 @@ export function launchdPath(home: string, id: string): string {
 }
 
 function renderLaunchdFile(job: JobCandidate, ctx: RunContext): RenderedFile {
-  const args = [ctx.orchBin, ...commandArgs(job, ctx)];
+  const args = invocationArgs(job, ctx);
   const argXml = args.map((a) => `    <string>${xmlEscape(a)}</string>`).join("\n");
   const envXml = ctx.orchHome
     ? `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>ORCH_HOME</key>\n    <string>${xmlEscape(ctx.orchHome)}</string>\n  </dict>\n`
@@ -285,7 +291,7 @@ Description=orch-os scheduled job: ${job.label}
 
 [Service]
 Type=oneshot
-${envLine}ExecStart=${[ctx.orchBin, ...commandArgs(job, ctx)].map((arg) => systemdArg(arg, true)).join(" ")}
+${envLine}ExecStart=${invocationArgs(job, ctx).map((arg) => systemdArg(arg, true)).join(" ")}
 `,
   };
   const timer: RenderedFile = {
@@ -317,7 +323,7 @@ function cronExpr(minutes: number): string {
 function cronLine(job: JobCandidate, ctx: RunContext): string {
   const envPrefix = ctx.orchHome ? `ORCH_HOME=${cronArg(ctx.orchHome)} ` : "";
   const log = join(ctx.logDir, `${job.id}.log`);
-  return `${cronExpr(job.minutes)} ${envPrefix}${cronArg(ctx.orchBin)} ${commandArgs(job, ctx).map(cronArg).join(" ")} >>${cronArg(log)} 2>&1`;
+  return `${cronExpr(job.minutes)} ${envPrefix}${invocationArgs(job, ctx).map(cronArg).join(" ")} >>${cronArg(log)} 2>&1`;
 }
 
 function renderCronBlock(jobs: JobCandidate[], ctx: RunContext): string {

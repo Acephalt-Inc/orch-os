@@ -117,6 +117,7 @@ function handbookDir(cfg: Record<string, any>): string {
 function scheduleContext(host: S.Host): S.RunContext {
   return {
     home: host.home,
+    nodeBin: process.execPath,
     orchBin: S.resolveOrchBin(process.argv[1] ?? "orch", host),
     orchHome: process.env.ORCH_HOME ? C.orchHome() : undefined,
     logDir: C.expand(join(C.orchHome(), "schedule", "logs")),
