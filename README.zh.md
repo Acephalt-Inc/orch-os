@@ -142,6 +142,7 @@ npm i -g orch-os
 |---|---|---|
 | 读取本地负载采样 | `orch load` | 已提供 |
 | 记录每项任务的成本 | — | Coming soon |
+| 不绑定供应商的能力清单、调用和用量记录 | `orch cap` | Coming soon |
 
 ### 代理发现与隔离
 

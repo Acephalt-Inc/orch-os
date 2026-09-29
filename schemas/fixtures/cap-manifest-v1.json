@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "provider": {
+    "id": "fixture-provider",
+    "name": "Fixture Provider",
+    "base_url": "https://api.example.test",
+    "auth": { "type": "bearer", "env_var": "FIXTURE_API_KEY" }
+  },
+  "capabilities": [{
+    "id": "example-task",
+    "description": "Fixture-only task; no real endpoint exists",
+    "method": "POST",
+    "path": "/v1/example-task",
+    "pricing_unit": "credits",
+    "max_rows": 20,
+    "mode": "sync",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": { "query": { "type": "string", "minLength": 1, "maxLength": 200 } },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "output_envelope": "orch-cap-envelope-v1"
+  }]
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orch-os.example/schemas/cap-job-handle-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "status_path"],
+  "properties": {
+    "job_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$" },
+    "status_path": { "type": "string", "minLength": 1, "maxLength": 2048 }
+  }
+}

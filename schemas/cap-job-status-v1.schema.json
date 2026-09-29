@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orch-os.example/schemas/cap-job-status-v1.schema.json",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "enum": ["queued", "running", "failed"] } }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "result"],
+      "properties": { "status": { "const": "succeeded" }, "result": {} }
+    }
+  ]
+}
