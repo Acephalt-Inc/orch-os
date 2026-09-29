@@ -150,8 +150,7 @@ export function installedBackend(host: Host): BackendName | null {
   if (host.platform !== "linux") return null;
   const units = hasSystemdUnits(host);
   const crontab = host.which("crontab") ? readCrontab(host) : "";
-  const cron = crontab.includes(CRON_BEGIN) || crontab.includes(CRON_END);
-  if (cron) stripManagedBlock(crontab); // refuse ambiguous/truncated state before switching backend
+  const cron = managedCronSpan(crontab) !== null; // refuse ambiguous/truncated state before switching backend
   if (units && cron) throw new ScheduleError("orch-os jobs exist in both systemd and cron; remove one backend explicitly");
   return units ? "systemd" : cron ? "cron" : null;
 }
@@ -312,8 +311,39 @@ WantedBy=timers.target
   return [svc, timer];
 }
 
-const CRON_BEGIN = "# BEGIN orch-os schedule (managed by `orch schedule`; do not edit by hand)";
+const CRON_BEGIN = "# BEGIN orch-os schedule";
 const CRON_END = "# END orch-os schedule";
+type CronTail = "empty" | "nl" | "nonl";
+
+function cronTail(text: string): CronTail {
+  return text === "" ? "empty" : text.endsWith("\n") ? "nl" : "nonl";
+}
+
+/** Only a complete v1 block is ours; old/unknown markers must never be guessed away. */
+function managedCronSpan(text: string): { start: number; end: number; endByte: number; originalPrefix: string } | null {
+  const lines = text.split("\n");
+  const markers = lines.flatMap((line, index) =>
+    line.startsWith(CRON_BEGIN) || line.startsWith(CRON_END)
+      || line.startsWith("# >>> orch-os managed") || line.startsWith("# <<< orch-os managed")
+      ? [{ line, index }] : []);
+  if (markers.length === 0) return null;
+  const begin = markers[0]?.line.match(/^# BEGIN orch-os schedule v1 tail=(empty|nl|nonl)$/);
+  if (markers.length !== 2 || !begin || markers[1].line !== `${CRON_END} v1`
+      || markers[0].index >= markers[1].index || markers[1].index === lines.length - 1) {
+    throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
+  }
+  const start = markers[0].index;
+  const end = markers[1].index;
+  const tail = begin[1] as CronTail;
+  const startByte = lines.slice(0, start).reduce((n, line) => n + line.length + 1, 0);
+  const endByte = startByte + lines.slice(start, end + 1).reduce((n, line) => n + line.length + 1, 0);
+  const prefix = text.slice(0, startByte);
+  const originalPrefix = tail === "nonl" ? prefix.slice(0, -1) : prefix;
+  if (cronTail(originalPrefix) !== tail || (tail === "nonl" && !prefix.endsWith("\n"))) {
+    throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
+  }
+  return { start, end, endByte, originalPrefix };
+}
 
 function cronExpr(minutes: number): string {
   if (minutes >= 60 && minutes % 60 === 0) return `0 */${minutes / 60} * * *`;
@@ -326,21 +356,14 @@ function cronLine(job: JobCandidate, ctx: RunContext): string {
   return `${cronExpr(job.minutes)} ${envPrefix}${invocationArgs(job, ctx).map(cronArg).join(" ")} >>${cronArg(log)} 2>&1`;
 }
 
-function renderCronBlock(jobs: JobCandidate[], ctx: RunContext): string {
-  return [CRON_BEGIN, ...jobs.map((j) => cronLine(j, ctx)), CRON_END].join("\n") + "\n";
+function renderCronBlock(jobs: JobCandidate[], ctx: RunContext, tail: CronTail = "empty"): string {
+  return [`${CRON_BEGIN} v1 tail=${tail}`, ...jobs.map((j) => cronLine(j, ctx)), `${CRON_END} v1`].join("\n") + "\n";
 }
 
 function stripManagedBlock(text: string): string {
-  const lines = text.split("\n");
-  const start = lines.indexOf(CRON_BEGIN);
-  const end = lines.indexOf(CRON_END, start + 1);
-  if (start === -1 && !lines.includes(CRON_END)) return text;
-  if (start === -1 || end === -1 || lines.indexOf(CRON_BEGIN, start + 1) !== -1
-      || lines.indexOf(CRON_END, end + 1) !== -1) {
-    throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
-  }
-  const rest = [...lines.slice(0, start), ...lines.slice(end + 1)];
-  return rest.join("\n");
+  const span = managedCronSpan(text);
+  if (!span) return text;
+  return span.originalPrefix + text.slice(span.endByte);
 }
 
 /** The files `install` would write, for `--dry-run` (and reused by `install` itself). */
@@ -416,8 +439,9 @@ export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunCont
   mkdirSync(ctx.logDir, { recursive: true });
   ensureTool(host, "crontab");
   const stripped = stripManagedBlock(readCrontab(host));
-  const block = renderCronBlock(jobs, ctx);
-  const next = (stripped.trim() ? stripped.replace(/\n*$/, "\n\n") : "") + block;
+  const tail = cronTail(stripped);
+  const block = renderCronBlock(jobs, ctx, tail);
+  const next = stripped + (tail === "nonl" ? "\n" : "") + block;
   const r = writeCrontab(host, next);
   const activated = r.status === 0;
   return jobs.map((job) => ({
@@ -690,11 +714,9 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   }
   // cron
   const text = readCrontab(host);
-  stripManagedBlock(text); // refuse malformed marker layout before interpreting any managed line
+  const span = managedCronSpan(text); // refuse malformed marker layout before interpreting any managed line
   const lines = text.split("\n");
-  const start = lines.indexOf(CRON_BEGIN);
-  const end = start < 0 ? -1 : lines.indexOf(CRON_END, start + 1);
-  const managed = start < 0 ? [] : lines.slice(start + 1, end).filter((l) => l.trim() && !l.startsWith("#"));
+  const managed = span === null ? [] : lines.slice(span.start + 1, span.end).filter((l) => l.trim() && !l.startsWith("#"));
   const malformed = managed.some((l) => cronArgv(l) === null);
   return jobs.map((job) => {
     const line = managed.find((l) => {

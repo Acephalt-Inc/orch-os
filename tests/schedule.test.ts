@@ -506,6 +506,67 @@ describe("ScheduleTest", () => {
     expect(crontab.match(/BEGIN orch-os schedule/g)).toHaveLength(1);
   });
 
+  it.each([
+    ["empty", "", "empty"],
+    ["no trailing newline", "0 3 * * * /usr/bin/backup.sh", "nonl"],
+    ["trailing newline", "0 3 * * * /usr/bin/backup.sh\n", "nl"],
+    ["whitespace only", " \t  ", "nonl"],
+    ["blank lines", "\n \t\n\n", "nl"],
+    ["user environment", "CRON_TZ=UTC\nMAILTO=ops@example.org\n0 3 * * * /usr/bin/backup.sh\n", "nl"],
+  ])("test_cron_versioned_tail_roundtrip_%s", (_case, original, tail) => {
+    let crontab = original;
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      if (cmd === "crontab" && args[0] === "-") {
+        crontab = input ?? "";
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    S.install("cron", [JOBS[1]], ctx, host);
+    const installed = crontab;
+    expect(installed.startsWith(original)).toBe(true);
+    expect(installed).toContain(`# BEGIN orch-os schedule v1 tail=${tail}`);
+    expect(installed).toContain("# END orch-os schedule v1");
+    expect(installed.match(/BEGIN orch-os schedule/g)).toHaveLength(1);
+    if (tail === "nonl") expect(installed.slice(original.length, original.length + 1)).toBe("\n");
+    S.install("cron", [JOBS[1]], ctx, host);
+    expect(crontab).toBe(installed);
+    S.remove("cron", [JOBS[1]], ctx, host);
+    expect(crontab).toBe(original);
+  });
+
+  it.each([
+    "# BEGIN orch-os schedule (managed by `orch schedule`; do not edit by hand)\n# END orch-os schedule\n",
+    "# BEGIN orch-os schedule v2 tail=nl\n# END orch-os schedule v2\n",
+    "# BEGIN orch-os schedule v1 tail=wat\n# END orch-os schedule v1\n",
+  ])("test_cron_unknown_or_unversioned_markers_fail_closed", (original) => {
+    let crontab = original;
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      crontab = input ?? "";
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    expect(() => S.install("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.status("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.remove("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(crontab).toBe(original);
+    expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
+  });
+
+  it("test_cron_tail_metadata_mismatch_is_not_reported_healthy", () => {
+    const original = "MAILTO=ops@example.org\n# BEGIN orch-os schedule v1 tail=empty\n# END orch-os schedule v1\n";
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) => args[0] === "-l"
+      ? { status: 0, stdout: original, stderr: "" }
+      : { status: 0, stdout: "", stderr: "" });
+    const ctx = ctxFor(host);
+    expect(() => S.status("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.remove("cron", [JOBS[1]], ctx, host)).toThrow(/malformed.*managed block/i);
+    expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
+  });
+
   it("test_crontab_read_error_refuses_install_without_replacing_existing_entries", () => {
     const host = fakeHost({ platform: "linux" }, (_cmd, args) =>
       args[0] === "-l"
@@ -538,7 +599,9 @@ describe("ScheduleTest", () => {
     });
     const prefix = "0 3 * * * /usr/bin/backup-a\n\n\n";
     const suffix = "\n\n15 4 * * * /usr/bin/backup-b\n\n\n";
-    let crontab = prefix + S.render("cron", [JOBS[1]], ctxFor(host))[0].contents + suffix;
+    let crontab = prefix;
+    S.install("cron", [JOBS[1]], ctxFor(host), host);
+    crontab += suffix;
     S.remove("cron", [JOBS[1]], ctxFor(host), host);
     expect(crontab).toBe(prefix + suffix);
   });
