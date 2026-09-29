@@ -164,6 +164,10 @@ export interface RunContext {
   orchHome?: string;
   /** Where job stdout/stderr (launchd, systemd oneshot via journal is separate, cron) land. */
   logDir: string;
+  /** Holder identity captured and verified when the renewal job is installed. */
+  leaseSession?: string;
+  /** Epoch fences the installed job after a different holder takes over. */
+  leaseEpoch?: number;
 }
 
 // ---- rendering -----------------------------------------------------------------------------------
@@ -171,6 +175,15 @@ export interface RunContext {
 export interface RenderedFile {
   path: string;
   contents: string;
+}
+
+function commandArgs(job: JobCandidate, ctx: RunContext): string[] {
+  if (job.id !== "lease-renew") return job.argv;
+  if (!ctx.leaseSession || !/^[A-Za-z0-9_.:@/-]+$/.test(ctx.leaseSession)
+      || typeof ctx.leaseEpoch !== "number" || !Number.isSafeInteger(ctx.leaseEpoch) || ctx.leaseEpoch < 1) {
+    throw new ScheduleError("lease renewal needs a verified current holder and epoch");
+  }
+  return [...job.argv, "--session", ctx.leaseSession, "--expected-epoch", String(ctx.leaseEpoch)];
 }
 
 function xmlEscape(s: string): string {
@@ -186,7 +199,7 @@ export function launchdPath(home: string, id: string): string {
 }
 
 function renderLaunchdFile(job: JobCandidate, ctx: RunContext): RenderedFile {
-  const args = [ctx.orchBin, ...job.argv];
+  const args = [ctx.orchBin, ...commandArgs(job, ctx)];
   const argXml = args.map((a) => `    <string>${xmlEscape(a)}</string>`).join("\n");
   const envXml = ctx.orchHome
     ? `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>ORCH_HOME</key>\n    <string>${xmlEscape(ctx.orchHome)}</string>\n  </dict>\n`
@@ -235,7 +248,7 @@ Description=orch-os scheduled job: ${job.label}
 
 [Service]
 Type=oneshot
-${envLine}ExecStart=${ctx.orchBin} ${job.argv.join(" ")}
+${envLine}ExecStart=${ctx.orchBin} ${commandArgs(job, ctx).join(" ")}
 `,
   };
   const timer: RenderedFile = {
@@ -267,7 +280,7 @@ function cronExpr(minutes: number): string {
 function cronLine(job: JobCandidate, ctx: RunContext): string {
   const envPrefix = ctx.orchHome ? `ORCH_HOME=${ctx.orchHome} ` : "";
   const log = join(ctx.logDir, `${job.id}.log`);
-  return `${cronExpr(job.minutes)} ${envPrefix}${ctx.orchBin} ${job.argv.join(" ")} >>${log} 2>&1`;
+  return `${cronExpr(job.minutes)} ${envPrefix}${ctx.orchBin} ${commandArgs(job, ctx).join(" ")} >>${log} 2>&1`;
 }
 
 function renderCronBlock(jobs: JobCandidate[], ctx: RunContext): string {
@@ -295,7 +308,9 @@ export function render(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
 
 function readCrontab(host: Host): string {
   const r = host.exec("crontab", ["-l"]);
-  return r.status === 0 ? r.stdout : ""; // no crontab yet reads as empty, never an error
+  if (r.status === 0) return r.stdout;
+  if (r.status === 1 && /\bno crontab for\b/i.test(r.stderr)) return "";
+  throw new ScheduleError(`cannot read crontab: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
 }
 
 function writeCrontab(host: Host, text: string): ExecResult {

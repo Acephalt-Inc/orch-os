@@ -255,7 +255,7 @@ Takes one sample, advances the tier and prints `load tier=... load_ratio=... swa
 ## orch schedule
 
 ```text
-orch schedule install [--dry-run] [--backend launchd|systemd|cron]
+orch schedule install [--session HOLDER] [--dry-run] [--backend launchd|systemd|cron]
 orch schedule status [--json] [--backend launchd|systemd|cron]
 orch schedule remove [--backend launchd|systemd|cron]
 ```
@@ -264,7 +264,7 @@ Installs, checks or removes the periodic background jobs this build supports, wi
 
 | Job id | Runs | Suggested period |
 |---|---|---|
-| `lease-renew` | `orch lease renew` | every 5 minutes |
+| `lease-renew` | `orch lease renew --session HOLDER --expected-epoch EPOCH` | every 5 minutes |
 | `load-sample` | `orch load` | every minute |
 
 Backend, auto-detected (override with `--backend`):
@@ -275,7 +275,9 @@ Backend, auto-detected (override with `--backend`):
 | Linux, `systemd --user` reachable | systemd `--user` timer | one `.service` + `.timer` pair per job under `~/.config/systemd/user/` |
 | Linux, no `--user` session | crontab fallback | one line per job in a block marked `# BEGIN orch-os schedule` / `# END orch-os schedule` in the caller's own crontab (`crontab -l` / `crontab -`) |
 
-`install` writes the unit files, then activates them (`launchctl bootstrap`, `systemctl --user enable --now`, or a `crontab -` write); `--dry-run` prints what would be written and stops there - no directory is created, no file is written, nothing is shelled out to. Re-running `install` is idempotent: it replaces its own previous unit files/crontab block rather than duplicating them. `ORCH_HOME`, when set to something other than the default, is baked into each job's environment (`EnvironmentVariables` in the plist, `Environment=` in the systemd service, or a prefix on the crontab line), since none of the three backends inherit a login shell's environment. `status` prints `LOADED`/`MISSING` per job plus any candidate this build lacks a subcommand for (`N/A`); exit code is 0 only when every scheduled job is loaded. `remove` uninstalls every job this command knows about (the crontab fallback leaves any other lines in the file untouched) and always exits 0.
+Acquire the lead lease first, then run `orch schedule install --session HOLDER` with the same session ID. Without `--session`, install uses `$ORCH_SESSION_ID`, then `user@host`. Install verifies that this session currently holds an active lease and captures its epoch; if the holder changes, the old renewal job fails its epoch check rather than renewing the new holder's lease. Reinstall for the new holder after acquiring its lease. Invalid or mismatched holder IDs are refused.
+
+`install` writes the unit files, then activates them (`launchctl bootstrap`, `systemctl --user enable --now`, or a `crontab -` write); `--dry-run` prints what would be written and stops without installing or activating a job. Auto-detection on Linux may query `systemctl --user`, and the lease is read to verify the holder. Re-running `install` is idempotent: it replaces its own previous unit files/crontab block rather than duplicating them. A crontab read error other than a confirmed "no crontab" refuses installation rather than replacing existing entries. `ORCH_HOME`, when set to something other than the default, is baked into each job's environment (`EnvironmentVariables` in the plist, `Environment=` in the systemd service, or a prefix on the crontab line), since none of the three backends inherit a login shell's environment. `status` prints `LOADED`/`MISSING` per job plus any candidate this build lacks a subcommand for (`N/A`); exit code is 0 only when every scheduled job is loaded. `remove` uninstalls every job this command knows about (the crontab fallback leaves any other lines in the file untouched) and always exits 0.
 
 `orch doctor` shows the same loaded/missing state per job, as informational rows (never a required `FAIL`).
 

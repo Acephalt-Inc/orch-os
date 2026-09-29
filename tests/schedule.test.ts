@@ -41,7 +41,8 @@ function fakeHost(overrides: Partial<S.Host> = {}, exec?: (cmd: string, args: st
 }
 
 function ctxFor(host: S.Host): S.RunContext {
-  return { home: host.home, orchBin: "/opt/orch/bin/orch", orchHome: "/opt/orch/home", logDir: join(host.home, "logs") };
+  return { home: host.home, orchBin: "/opt/orch/bin/orch", orchHome: "/opt/orch/home", logDir: join(host.home, "logs"),
+    leaseSession: "lead", leaseEpoch: 1 };
 }
 
 const JOBS = S.CANDIDATES; // this checkout's two real candidates: lease-renew, load-sample
@@ -79,6 +80,8 @@ describe("ScheduleTest", () => {
     expect(lease.contents).toContain("<string>/opt/orch/bin/orch</string>");
     expect(lease.contents).toContain("<string>lease</string>");
     expect(lease.contents).toContain("<string>renew</string>");
+    expect(lease.contents).toContain("<string>--session</string>\n    <string>lead</string>");
+    expect(lease.contents).toContain("<string>--expected-epoch</string>\n    <string>1</string>");
     expect(lease.contents).toContain("<key>StartInterval</key>");
     expect(lease.contents).toContain("<integer>300</integer>"); // 5 minutes
     expect(lease.contents).toContain("<key>ORCH_HOME</key>");
@@ -101,6 +104,8 @@ describe("ScheduleTest", () => {
     expect(svc.contents).toContain("Type=oneshot");
     expect(svc.contents).toContain("ExecStart=/opt/orch/bin/orch load");
     expect(svc.contents).toContain("Environment=ORCH_HOME=/opt/orch/home");
+    const leaseSvc = files.find((f) => f.path.endsWith("orch-os-schedule-lease-renew.service"))!;
+    expect(leaseSvc.contents).toContain("ExecStart=/opt/orch/bin/orch lease renew --session lead --expected-epoch 1");
 
     const timer = files.find((f) => f.path.endsWith("orch-os-schedule-load-sample.timer"))!;
     expect(timer.contents).toContain("[Timer]");
@@ -118,7 +123,7 @@ describe("ScheduleTest", () => {
     const files = S.render("cron", JOBS, ctx);
     expect(files).toHaveLength(1);
     expect(files[0].contents).toContain("BEGIN orch-os schedule");
-    expect(files[0].contents).toContain("*/5 * * * * ORCH_HOME=/opt/orch/home /opt/orch/bin/orch lease renew");
+    expect(files[0].contents).toContain("*/5 * * * * ORCH_HOME=/opt/orch/home /opt/orch/bin/orch lease renew --session lead --expected-epoch 1");
     expect(files[0].contents).toContain("*/1 * * * * ORCH_HOME=/opt/orch/home /opt/orch/bin/orch load");
     expect(files[0].contents).toContain("END orch-os schedule");
   });
@@ -255,7 +260,7 @@ describe("ScheduleTest", () => {
   it("test_install_reinstall_is_idempotent_for_cron", () => {
     let crontab = "";
     const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
-      if (cmd === "crontab" && args[0] === "-l") return crontab ? { status: 0, stdout: crontab, stderr: "" } : { status: 1, stdout: "", stderr: "" };
+      if (cmd === "crontab" && args[0] === "-l") return crontab ? { status: 0, stdout: crontab, stderr: "" } : { status: 1, stdout: "", stderr: "no crontab for user\n" };
       if (cmd === "crontab" && args[0] === "-") {
         crontab = input ?? "";
         return { status: 0, stdout: "", stderr: "" };
@@ -267,6 +272,16 @@ describe("ScheduleTest", () => {
     S.install("cron", JOBS, ctx, host);
     expect(crontab.match(/BEGIN orch-os schedule/g)).toHaveLength(1);
   });
+
+  it("test_crontab_read_error_refuses_install_without_replacing_existing_entries", () => {
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) =>
+      args[0] === "-l"
+        ? { status: 1, stdout: "", stderr: "permission denied\n" }
+        : { status: 0, stdout: "", stderr: "" });
+    expect(() => S.install("cron", JOBS.filter((j) => j.id === "load-sample"), ctxFor(host), host))
+      .toThrow(S.ScheduleError);
+    expect(host.calls.some(([cmd, args]) => cmd === "crontab" && args[0] === "-")).toBe(false);
+  });
 });
 
 // `--backend cron` makes these deterministic and exec-free on any OS: dry-run only ever calls
@@ -276,8 +291,10 @@ describe("ScheduleCliTest", () => {
   const ctx = useTmpHome();
 
   it("test_dry_run_prints_unit_files_and_writes_nothing", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    expect((await run("lease", "acquire", "--session", "lead"))[0]).toBe(0);
     const before = existsSync(join(ctx.home, "schedule"));
-    const [code, out] = await run("schedule", "install", "--dry-run", "--backend", "cron");
+    const [code, out] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "lead");
     expect(code).toBe(0);
     expect(out).toContain("BEGIN orch-os schedule");
     expect(out).toContain("lease renew");
@@ -297,5 +314,18 @@ describe("ScheduleCliTest", () => {
     expect(code).toBe(0);
     expect(out).toContain("schedule lease-renew");
     expect(out).toContain("schedule load-sample");
+  });
+
+  it("test_schedule_renewal_is_bound_to_the_acquired_session_and_epoch", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    expect((await run("lease", "acquire", "--session", "lead"))[0]).toBe(0);
+
+    const [code, out] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "lead");
+    expect(code).toBe(0);
+    expect(out).toContain("lease renew --session lead --expected-epoch 1");
+
+    const [wrongCode, , wrongErr] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "other");
+    expect(wrongCode).toBe(2);
+    expect(wrongErr).toContain("current lease holder");
   });
 });

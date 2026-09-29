@@ -978,6 +978,18 @@ const cmdSchedule: Run = (a, io) => {
     return 2;
   }
   const ctx = scheduleContext(host);
+  if (action === "install" && avail.some((j) => j.id === "lease-renew")) {
+    const requested = session(a);
+    const [code, result] = lease(C.loadOrDefault()).run("status");
+    const current = result.state ?? {};
+    if (code !== 0 || result.status !== "HELD" || current.state !== "ACTIVE"
+        || current.session_id !== requested || !Number.isSafeInteger(current.epoch) || current.epoch < 1) {
+      eprintln(io, `schedule: current lease holder must match session '${requested}'; acquire the lease first`);
+      return 2;
+    }
+    ctx.leaseSession = requested;
+    ctx.leaseEpoch = current.epoch;
+  }
   for (const j of missing) println(io, `schedule: skipping '${j.id}' (${j.label}) - no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
   try {
     if (action === "install") {
@@ -1229,6 +1241,7 @@ export function buildTree(): CmdSpec<Run> {
             name: "install", help: "install lease renewal + load sampling as background jobs (skips any job with no subcommand in this build)", run: cmdSchedule,
             opts: [
               opt("dry_run", ["--dry-run"], "bool", "print the unit files instead of installing them"),
+              opt("session", ["--session"], "str", "current lead lease holder to renew (default $ORCH_SESSION_ID, then user@host)"),
               opt("backend", ["--backend"], "str", "force a backend instead of auto-detecting", { choices: S.BACKEND_NAMES }),
             ],
           },
