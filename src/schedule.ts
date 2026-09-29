@@ -14,8 +14,8 @@
  * invents a subcommand that isn't in src/cli.ts's tree.
  */
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CmdSpec } from "./args.js";
 import { which as pathWhich } from "./util.js";
@@ -434,6 +434,76 @@ export interface StatusRow {
   written: boolean;
   loaded: boolean;
   detail: string;
+  degraded?: boolean;
+}
+
+function xmlValue(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+}
+
+function launchdNode(contents: string): string | null {
+  const args = contents.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>\s*<string>([^<]*)<\/string>/);
+  return args && isAbsolute(xmlValue(args[2]))
+    ? xmlValue(args[1]) : null;
+}
+
+function systemdArgv(contents: string): string[] {
+  let rest = contents.match(/^ExecStart=(.*)$/m)?.[1]?.trim() ?? "";
+  const out: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const m = rest.match(/^("(?:\\.|[^"])*"|\S+)(?:\s+|$)/);
+    if (!m) return [];
+    const raw = m[1].startsWith('"') ? m[1].slice(1, -1) : m[1];
+    out.push(raw.replace(/\\([\\"])/g, "$1").replace(/%%/g, "%").replace(/\$\$/g, "$"));
+    rest = rest.slice(m[0].length);
+  }
+  return out;
+}
+
+function systemdNode(contents: string): string | null {
+  const args = systemdArgv(contents);
+  return args.length === 2 && isAbsolute(args[1]) ? args[0] : null;
+}
+
+function cronQuoted(s: string): [string, string] | null {
+  if (!s.startsWith("'")) return null;
+  let value = "";
+  for (let i = 1; i < s.length;) {
+    if (s.slice(i, i + 4) === "'\\''") { value += "'"; i += 4; continue; }
+    if (s[i] === "'") return [value, s.slice(i + 1).trimStart()];
+    value += s[i++];
+  }
+  return null;
+}
+
+function cronNode(line: string): string | null {
+  let rest = line.replace(/^(?:\S+\s+){5}/, "");
+  if (rest.startsWith("ORCH_HOME=")) {
+    const env = cronQuoted(rest.slice("ORCH_HOME=".length));
+    if (!env) return null;
+    rest = env[1];
+  }
+  const node = cronQuoted(rest);
+  const cli = node && cronQuoted(node[1]);
+  return cli && isAbsolute(cli[0]) ? node![0] : null;
+}
+
+function nodeHealth(node: string | null): string | null {
+  if (!node || !isAbsolute(node)) return "installed job has no verifiable absolute Node executable; reinstall";
+  try {
+    accessSync(node, constants.X_OK);
+    return null;
+  } catch {
+    return `captured Node ${node} missing or not executable; reinstall`;
+  }
+}
+
+function installedNodeHealth(path: string, parse: (contents: string) => string | null): string {
+  try {
+    return nodeHealth(parse(readFileSync(path, "utf8"))) ?? "";
+  } catch {
+    return `cannot read installed job ${path}; reinstall`;
+  }
 }
 
 export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunContext, host: Host): StatusRow[] {
@@ -448,7 +518,9 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         loaded = r.status === 0;
         detail = loaded ? "loaded" : firstLine(r.stderr || r.stdout || "not loaded");
       } catch { /* leave defaults: not loaded */ }
-      return { id: job.id, label: job.label, written, loaded, detail: written ? detail : "not installed" };
+      const error = loaded && written ? installedNodeHealth(p, launchdNode) : null;
+      return { id: job.id, label: job.label, written, loaded: loaded && !error,
+        detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
   }
   if (backend === "systemd") {
@@ -462,15 +534,22 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         detail = firstLine(r.stdout || r.stderr || `exit ${r.status}`);
         loaded = detail === "active";
       } catch { /* leave defaults */ }
-      return { id: job.id, label: job.label, written, loaded, detail: written ? detail : "not installed" };
+      const svcPath = join(systemdDir(ctx.home), `${name}.service`);
+      const error = loaded && written ? existsSync(svcPath)
+        ? installedNodeHealth(svcPath, systemdNode) : nodeHealth(null) : null;
+      return { id: job.id, label: job.label, written, loaded: loaded && !error,
+        detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
   }
   // cron
   const text = readCrontab(host);
   return jobs.map((job) => {
     const command = `${cronArg(ctx.orchBin)} ${job.argv.map(cronArg).join(" ")}`;
-    const present = text.includes(command);
-    return { id: job.id, label: job.label, written: present, loaded: present, detail: present ? "in crontab" : "not installed" };
+    const line = text.split("\n").find((l) => l.includes(command));
+    const present = Boolean(line);
+    const error = line ? nodeHealth(cronNode(line)) : null;
+    return { id: job.id, label: job.label, written: present, loaded: present && !error,
+      detail: error ? `ERROR: ${error}` : present ? "in crontab" : "not installed", degraded: Boolean(error) };
   });
 }
 

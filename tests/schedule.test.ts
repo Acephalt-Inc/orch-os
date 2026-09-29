@@ -5,7 +5,7 @@
  * crontab for real, and none writes outside its own tmp directory - CI stays render-only too.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -253,6 +253,54 @@ describe("ScheduleTest", () => {
     expect(rows.every((r) => !r.loaded)).toBe(true);
   });
 
+  it.each(["launchd", "systemd", "cron"] as const)(
+    "test_loaded_jobs_with_missing_captured_node_are_error_not_healthy_on_%s", (backend) => {
+      let crontab = "";
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args, input) => {
+        if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+        if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const captured = { ...ctxFor(host), nodeBin: join(host.home, "removed-node") };
+      S.install(backend, [JOBS[1]], captured, host);
+      const managed = S.render(backend, [JOBS[1]], captured)[0].path;
+      const before = backend === "cron" ? crontab : readFileSync(managed, "utf8");
+      const current = { ...captured, nodeBin: process.execPath }; // current Node works; the installed one does not
+      const rows = S.status(backend, [JOBS[1]], current, host);
+      expect(rows[0]).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(rows[0].detail).toMatch(/removed-node.*(missing|not executable)/);
+      expect(backend === "cron" ? crontab : readFileSync(managed, "utf8")).toBe(before);
+    });
+
+  it("test_legacy_shebang_invocations_are_unverifiable_not_healthy_on_all_backends", () => {
+    for (const backend of ["launchd", "systemd", "cron"] as const) {
+      let crontab = "";
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args, input) => {
+        if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+        if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      S.install(backend, [JOBS[1]], ctx, host);
+      if (backend === "cron") {
+        crontab = crontab.replace(`'${ctx.nodeBin}' '${ctx.orchBin}' 'load'`, `'${ctx.orchBin}' 'load'`);
+      } else {
+        const file = S.render(backend, [JOBS[1]], ctx)[0].path;
+        const old = readFileSync(file, "utf8");
+        const legacy = backend === "launchd"
+          ? old.replace(`<string>${ctx.nodeBin}</string>\n    <string>${ctx.orchBin}</string>`,
+            `<string>${ctx.orchBin}</string>\n    <string>load</string>`)
+          : old.replace(/^ExecStart=.*$/m, `ExecStart=${ctx.orchBin} load`);
+        writeFileSync(file, legacy);
+      }
+      const row = S.status(backend, [JOBS[1]], ctx, host)[0];
+      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/no verifiable absolute Node/);
+    }
+  });
+
   it("test_cron_install_and_remove_preserve_unrelated_existing_entries", () => {
     let crontab = "0 3 * * * /usr/bin/backup.sh\n";
     const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
@@ -487,6 +535,28 @@ describe("ScheduleCliTest", () => {
     expect(code).toBe(0);
     expect(out).toContain("schedule lease-renew");
     expect(out).toContain("schedule load-sample");
+  });
+
+  it("test_status_and_doctor_return_nonzero_for_loaded_job_with_missing_captured_node", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    let crontab = "";
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+      if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+      return { status: 0, stdout: "running", stderr: "" };
+    });
+    vi.spyOn(S, "realHost").mockReturnValue(host);
+    const missingNode = join(host.home, "removed-node");
+    S.install("cron", JOBS, { home: host.home, nodeBin: missingNode, orchBin: DIST_CLI,
+      logDir: join(host.home, "logs"), leaseSession: "lead", leaseEpoch: 1 }, host);
+    const [statusCode, statusOut] = await run("schedule", "status", "--backend", "cron");
+    expect(statusCode).toBe(1);
+    expect(statusOut).toContain("ERROR");
+    expect(statusOut).toContain("removed-node");
+    const [doctorCode, doctorOut] = await run("doctor");
+    expect(doctorCode).toBe(1);
+    expect(doctorOut).toContain("FAIL  schedule lease-renew");
+    expect(doctorOut).toContain("removed-node");
   });
 
   it("test_schedule_renewal_is_bound_to_the_acquired_session_and_epoch", async () => {

@@ -410,7 +410,7 @@ const cmdDoctor: Run = (_a, io) => {
       }
       const ctx = scheduleContext(host);
       for (const r of S.status(backend, S.available(treeForSchedule), ctx, host)) {
-        add(r.loaded, `schedule ${r.id}`, `${r.label}: ${r.detail} (${backend})`, true);
+        add(r.loaded, `schedule ${r.id}`, `${r.label}: ${r.detail} (${backend})`, !r.degraded);
       }
     });
   }
@@ -1023,7 +1023,7 @@ const cmdSchedule: Run = (a, io) => {
         println(io, dumps({ backend, jobs: rows, missing: missing.map((j) => j.id) }));
         return rows.every((r) => r.loaded) ? 0 : 1;
       }
-      for (const r of rows) println(io, `${padEnd(r.loaded ? "LOADED" : "MISSING", 8)} ${padEnd(r.id, 16)} ${r.label} (${backend}): ${r.detail}`);
+      for (const r of rows) println(io, `${padEnd(r.degraded ? "ERROR" : r.loaded ? "LOADED" : "MISSING", 8)} ${padEnd(r.id, 16)} ${r.label} (${backend}): ${r.detail}`);
       for (const j of missing) println(io, `${padEnd("N/A", 8)} ${padEnd(j.id, 16)} ${j.label}: no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
       return rows.every((r) => r.loaded) ? 0 : 1;
     }
