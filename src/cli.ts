@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./args.js";
 import * as C from "./config.js";
+import * as CAP from "./cap.js";
 import * as D from "./detect.js";
 import { Lease } from "./lease.js";
 import * as LD from "./load.js";
@@ -33,6 +34,10 @@ export interface IO {
   isTTY?(): boolean;
   /** Print a question and read one answer line; null at end of input. */
   ask?(q: string): string | null;
+  /** Tests inject a fixture transport; the real CLI uses bounded pinned HTTPS. */
+  capTransport?: CAP.Transport;
+  /** Tests may simulate audit failures; the real CLI appends durable local usage events. */
+  capAudit?: (row: CAP.UsageRow) => void;
 }
 
 /** One line from fd 0, without its newline; null at end of input. */
@@ -131,6 +136,125 @@ function eprintln(io: IO, s: string): void {
 }
 
 // ---- commands ---------------------------------------------------------------------------------
+
+const cmdCap: Run = async (a, io) => {
+  const action = a._path[2];
+  if (action === "list") {
+    const entries = CAP.list();
+    if (!entries.length) println(io, "providers: none");
+    else for (const { manifest } of entries) {
+      const n = manifest.capabilities.length;
+      println(io, `${manifest.provider.id}  ${manifest.provider.name}  ${n} ${n === 1 ? "capability" : "capabilities"}`);
+    }
+    return 0;
+  }
+  if (action === "add") {
+    const manifest = await CAP.add(a.source, io.capTransport);
+    const n = manifest.capabilities.length;
+    println(io, `added ${manifest.provider.id} (${manifest.provider.name}; ${n} ${n === 1 ? "capability" : "capabilities"})`);
+    return 0;
+  }
+  if (action === "remove") {
+    CAP.remove(a.provider);
+    println(io, `removed ${a.provider}`);
+    return 0;
+  }
+  if (action === "usage") {
+    const rows = CAP.readUsage();
+    if (!rows.length) println(io, "usage: none");
+    else for (const row of rows) println(io, JSON.stringify(row));
+    return 0;
+  }
+  if (action === "call") {
+    const { manifest, capability } = CAP.findCapability(a.provider, a.capability);
+    const row = CAP.newUsageRow(a.provider, a.capability, a.task);
+    let dispatched = false;
+    let intentAttempted = false;
+    let intentRecorded = false;
+    let responseText = "";
+    const audit = io.capAudit ?? CAP.recordUsage;
+    try {
+      const origin = new URL(manifest.provider.base_url);
+      const transport = io.capTransport ?? CAP.secureRequest;
+      let url: URL;
+      let method: "GET" | "POST";
+      let body: string | null;
+      let token: string;
+      if (a.status) {
+        if (a.input || a.idempotency_key) throw new CAP.CapError("--status cannot be combined with --input or --idempotency-key");
+        if (capability.mode !== "async") throw new CAP.CapError("--status requires an async capability");
+        url = CAP.checkedPath(origin, a.status);
+        token = CAP.credential(manifest, a.auth_env);
+        method = "GET";
+        body = null;
+      } else {
+        if (!a.input) throw new CAP.CapError("call requires --input JSON_FILE or --input - for stdin");
+        if (a.idempotency_key && !/^[A-Za-z0-9_.-]{1,128}$/.test(a.idempotency_key)) throw new CAP.CapError("idempotency key must be 1-128 safe characters");
+        const raw = a.input === "-" ? io.stdin() : readFileSync(a.input, "utf8");
+        const prepared = CAP.prepareCall(manifest, capability, raw, a.task, a.auth_env);
+        token = prepared.token;
+        url = CAP.checkedPath(origin, capability.path);
+        method = "POST";
+        body = JSON.stringify({ input: prepared.input, ...(a.idempotency_key ? { idempotency_key: a.idempotency_key } : {}) });
+      }
+      row.outcome = "pending";
+      intentAttempted = true;
+      try { audit(row); intentRecorded = true; }
+      catch (e) {
+        if (e instanceof CAP.CapAuditUncertain) throw new CAP.CapError("audit intent commit uncertain; no request sent; inspect cap usage");
+        throw new CAP.CapError("audit intent failed; no request sent");
+      }
+      dispatched = true;
+      const reply = await transport(url, method, body, token, 2 * 1024 * 1024, 30_000);
+      row.http_status = reply.status;
+      if (reply.status < 200 || reply.status >= 300) {
+        Object.assign(row, CAP.reportedUsage(reply.body));
+        row.outcome = "http_error";
+        throw new CAP.CapError(`call returned HTTP ${reply.status}`);
+      }
+      if (method === "POST" && reply.status === 202) {
+        if (capability.mode !== "async") throw new CAP.CapError("sync capability returned an async job handle");
+        const handle = CAP.parseJobHandle(reply.body, origin);
+        row.outcome = "submitted";
+        responseText = JSON.stringify(handle);
+      } else if (method === "GET") {
+        if (reply.status !== 200) throw new CAP.CapError("async status requires HTTP 200");
+        const status = CAP.parseJobStatus(reply.body);
+        if (status.status === "succeeded") {
+          status.result = CAP.parseEnvelope(status.result, capability.max_rows);
+          Object.assign(row, CAP.reportedUsage(JSON.stringify(status.result)));
+        }
+        row.outcome = status.status === "succeeded" && (row.credits === null || row.pages === null || row.model_tokens === null)
+          ? "status_succeeded_usage_incomplete" : `status_${status.status}`;
+        responseText = JSON.stringify(status);
+      } else {
+        if (capability.mode !== "sync" || reply.status !== 200) throw new CAP.CapError("capability response requires sync HTTP 200 or async HTTP 202");
+        const envelope = CAP.parseEnvelopeBody(reply.body, capability.max_rows);
+        Object.assign(row, CAP.reportedUsage(reply.body));
+        row.outcome = row.credits === null || row.pages === null || row.model_tokens === null ? "usage_incomplete" : "succeeded";
+        responseText = JSON.stringify(envelope);
+      }
+    } catch (e) {
+      if (dispatched && row.outcome === "pending") row.outcome = row.http_status === null ? "transport_error" : "invalid_response";
+      if (e instanceof CAP.CapError) throw e;
+      throw new CAP.CapError(dispatched ? "network request failed" : "call input file cannot be read");
+    } finally {
+      if (intentRecorded) {
+        try { audit(row); }
+        catch (e) {
+          if (e instanceof CAP.CapAuditUncertain) throw new CAP.CapError("audit completion commit uncertain; inspect cap usage; do not retry automatically");
+          throw new CAP.CapError("audit completion failed; pending intent retained; do not retry automatically");
+        }
+      } else if (!intentAttempted) {
+        try { audit(row); }
+        catch { throw new CAP.CapError("audit attempt failed; no request sent"); }
+      }
+    }
+    println(io, responseText);
+    return 0;
+  }
+  return 2;
+};
 
 function printAgents(io: IO, agents: D.Agent[], def?: string | null): void {
   if (!agents.length) {
@@ -948,6 +1072,21 @@ export function buildTree(): CmdSpec<Run> {
     help: "ORCH-os: run several CLI coding agents as one team (lease, mailbox, messages, task claims, merge gate, workers, load governor, mem).",
     sub: [
       {
+        name: "cap", help: "provider-neutral capability manifests and usage (no built-in provider)",
+        sub: [
+          { name: "list", help: "list locally installed provider manifests", run: cmdCap },
+          { name: "add", help: "validate and add a provider manifest file", run: cmdCap, pos: [{ dest: "source" }] },
+          { name: "remove", help: "remove a provider without deleting historical usage", run: cmdCap, pos: [{ dest: "provider" }] },
+          { name: "usage", help: "show provider-reported call observations (null means unknown)", run: cmdCap },
+          { name: "call", help: "explicitly invoke a capability (credential from environment)", run: cmdCap,
+            pos: [{ dest: "provider" }, { dest: "capability" }],
+            opts: [opt("input", ["--input"], "str", "JSON file or - for stdin"), opt("task", ["--task"], "str", "optional task ID"),
+              opt("idempotency_key", ["--idempotency-key"], "str", "optional POST idempotency key"),
+              opt("status", ["--status"], "str", "async only: explicit one-shot same-origin status path GET"),
+              opt("auth_env", ["--auth-env"], "str", "confirm manifest env name before credential read or network")] },
+        ],
+      },
+      {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [
           opt("force", ["--force"], "bool", "rewrite config.toml from defaults + fresh detection"),
@@ -1212,6 +1351,10 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     if (e instanceof LockLostError) {
       eprintln(io, `orch: ${e.message}; the result was not verified`);
       return 5;
+    }
+    if (e instanceof CAP.CapError) {
+      eprintln(io, `orch cap: ${e.message}`);
+      return 2;
     }
     throw e;
   }

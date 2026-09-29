@@ -45,6 +45,12 @@ describe.skipIf(!HAVE)("InstallTest", () => {
   const runSh = (cmd: string, cwd: string, extra: Record<string, string> = {}) =>
     spawnSync("sh", ["-c", cmd], { cwd, env: env(extra), encoding: "utf8", timeout: 120_000 });
 
+  it("keeps the bundled capability validator out of runtime npm dependencies", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    expect(pkg.dependencies ?? {}).toEqual({});
+    expect(pkg.devDependencies.ajv).toBe("8.20.0");
+  });
+
   function assertInstalledAndGreen(r: ReturnType<typeof runSh>) {
     expect(r.status, r.stdout + r.stderr).toBe(0);
     const orch = join(home, ".local/bin/orch");
@@ -54,6 +60,12 @@ describe.skipIf(!HAVE)("InstallTest", () => {
     d = spawnSync(orch, ["doctor"], { env: env(), encoding: "utf8" });
     expect(d.status, d.stdout + d.stderr).toBe(0);
     expect(d.stdout).toContain("doctor: PASS");
+    d = spawnSync(orch, ["cap", "list"], { env: env(), encoding: "utf8" });
+    expect(d.status, d.stdout + d.stderr).toBe(0);
+    expect(d.stdout).toBe("providers: none\n");
+    expect(existsSync(join(home, ".orch/lib/orch-os/schemas/cap-manifest-v1.schema.json"))).toBe(true);
+    expect(existsSync(join(home, ".orch/lib/orch-os/THIRD_PARTY_NOTICES.md"))).toBe(true);
+    expect(existsSync(join(home, ".orch/lib/orch-os/node_modules"))).toBe(false);
   }
 
   it("test_from_checkout", () => {
@@ -104,6 +116,16 @@ describe.skipIf(!HAVE)("InstallTest", () => {
     const r = runSh(`sh < '${repo}/install.sh'`, home);
     expect(r.status).not.toBe(0);
     expect(r.stdout + r.stderr).toContain("no source");
+  });
+
+  it("rejects Node 20 before copying or building an install", () => {
+    const fakeNode = join(stub, "node");
+    writeFileSync(fakeNode, '#!/bin/sh\ncase "$1" in\n  -e) case "$2" in *">= 22"*) exit 1;; *">= 20"*) exit 0;; esac;;\n  -p) printf "20.19.0\\n"; exit 0;;\nesac\nexit 9\n');
+    chmodSync(fakeNode, 0o755);
+    const r = runSh("sh install.sh", repo, { ORCH_NODE: fakeNode });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("need Node.js >= 22");
+    expect(existsSync(join(home, ".orch/lib/orch-os"))).toBe(false);
   });
 
   it("test_rerun_keeps_config", () => {

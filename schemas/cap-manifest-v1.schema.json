@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orch-os.example/schemas/cap-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "capabilities"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "base_url", "auth"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "base_url": { "type": "string", "minLength": 9, "maxLength": 2048 },
+        "auth": {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "env_var"],
+          "properties": {
+            "type": { "const": "bearer" },
+            "env_var": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "maxLength": 128 }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "description", "method", "path", "pricing_unit", "max_rows", "mode", "input_schema", "output_envelope"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "method": { "const": "POST" },
+          "path": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "pricing_unit": { "const": "credits" },
+          "max_rows": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "mode": { "enum": ["sync", "async"] },
+          "input_schema": { "type": "object" },
+          "output_envelope": { "const": "orch-cap-envelope-v1" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "maxLength": 80 }
+  }
+}

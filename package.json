@@ -19,12 +19,14 @@
   "files": [
     "dist/",
     "fixtures/",
+    "schemas/",
     "templates/",
     "README.md",
     "README.zh.md",
     "LICENSE",
     "LICENSE-INTERNAL-USE",
     "LICENSE-NONCOMMERCIAL",
+    "THIRD_PARTY_NOTICES.md",
     "NOTICE",
     "AUTHORS"
   ],
@@ -36,10 +38,10 @@
     "linux"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && vitest run",
-    "prepack": "tsc -p tsconfig.json",
-    "prepare": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && esbuild src/cap.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/cap.js",
+    "test": "npm run build && vitest run",
+    "prepack": "npm run build",
+    "prepare": "npm run build"
   },
   "keywords": [
     "agents",
@@ -47,9 +49,10 @@
     "multi-agent",
     "cli"
   ],
-  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.19.0",
+    "ajv": "8.20.0",
+    "esbuild": "0.28.2",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   },

@@ -142,6 +142,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 |---|---|---|
 | Read local load samples | `orch load` | Available |
 | Record per-task cost | — | Coming soon |
+| Provider-neutral capability manifests, calls and usage | `orch cap` | Coming soon |
 
 ### Agent discovery and isolation
 
