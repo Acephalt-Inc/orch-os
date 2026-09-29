@@ -14,7 +14,7 @@
  * invents a subcommand that isn't in src/cli.ts's tree.
  */
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CmdSpec } from "./args.js";
@@ -441,18 +441,19 @@ function xmlValue(s: string): string {
   return s.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
 }
 
-function launchdNode(contents: string): string | null {
-  const args = contents.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>\s*<string>([^<]*)<\/string>/);
-  return args && isAbsolute(xmlValue(args[2]))
-    ? xmlValue(args[1]) : null;
+function launchdArgv(contents: string): string[] | null {
+  const body = contents.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1];
+  if (body === undefined || body.replace(/<string>[^<]*<\/string>/g, "").trim()) return null;
+  return [...body.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => xmlValue(m[1]));
 }
 
-function systemdArgv(contents: string): string[] {
+function systemdArgv(contents: string): string[] | null {
   let rest = contents.match(/^ExecStart=(.*)$/m)?.[1]?.trim() ?? "";
+  if (!rest) return null;
   const out: string[] = [];
-  for (let i = 0; i < 2; i++) {
+  while (rest) {
     const m = rest.match(/^("(?:\\.|[^"])*"|\S+)(?:\s+|$)/);
-    if (!m) return [];
+    if (!m) return null;
     const raw = m[1].startsWith('"') ? m[1].slice(1, -1) : m[1];
     out.push(raw.replace(/\\([\\"])/g, "$1").replace(/%%/g, "%").replace(/\$\$/g, "$"));
     rest = rest.slice(m[0].length);
@@ -460,37 +461,40 @@ function systemdArgv(contents: string): string[] {
   return out;
 }
 
-function systemdNode(contents: string): string | null {
-  const args = systemdArgv(contents);
-  return args.length === 2 && isAbsolute(args[1]) ? args[0] : null;
-}
-
 function cronQuoted(s: string): [string, string] | null {
   if (!s.startsWith("'")) return null;
   let value = "";
   for (let i = 1; i < s.length;) {
     if (s.slice(i, i + 4) === "'\\''") { value += "'"; i += 4; continue; }
+    if (s.slice(i, i + 2) === "\\%") { value += "%"; i += 2; continue; }
     if (s[i] === "'") return [value, s.slice(i + 1).trimStart()];
     value += s[i++];
   }
   return null;
 }
 
-function cronNode(line: string): string | null {
+function cronArgv(line: string): string[] | null {
   let rest = line.replace(/^(?:\S+\s+){5}/, "");
+  if (rest === line) return null;
   if (rest.startsWith("ORCH_HOME=")) {
     const env = cronQuoted(rest.slice("ORCH_HOME=".length));
     if (!env) return null;
     rest = env[1];
   }
-  const node = cronQuoted(rest);
-  const cli = node && cronQuoted(node[1]);
-  return cli && isAbsolute(cli[0]) ? node![0] : null;
+  const out: string[] = [];
+  while (rest.startsWith("'")) {
+    const arg = cronQuoted(rest);
+    if (!arg) return null;
+    out.push(arg[0]);
+    rest = arg[1];
+  }
+  return /^>>'/.test(rest) ? out : null;
 }
 
 function nodeHealth(node: string | null): string | null {
   if (!node || !isAbsolute(node)) return "installed job has no verifiable absolute Node executable; reinstall";
   try {
+    if (!statSync(node).isFile()) return `captured Node ${node} is not a regular executable file; reinstall`;
     accessSync(node, constants.X_OK);
     return null;
   } catch {
@@ -498,9 +502,33 @@ function nodeHealth(node: string | null): string | null {
   }
 }
 
-function installedNodeHealth(path: string, parse: (contents: string) => string | null): string {
+function invocationHealth(args: string[] | null, job: JobCandidate, ctx: RunContext): string | null {
+  if (!args || args.length < 3 || !isAbsolute(args[1]))
+    return "installed job has no verifiable absolute Node executable; reinstall";
+  if (args[1] !== ctx.orchBin) return `installed CLI does not match ${ctx.orchBin}; reinstall`;
+  let expected: string[];
   try {
-    return nodeHealth(parse(readFileSync(path, "utf8"))) ?? "";
+    if (job.id === "lease-renew") {
+      if (args.length !== 8 || args[4] !== "--session" || args[6] !== "--expected-epoch")
+        return "managed command arguments do not match lease renewal contract; reinstall";
+      const epoch = Number(args[7]);
+      if (String(epoch) !== args[7]) return "managed command arguments do not match lease renewal contract; reinstall";
+      expected = commandArgs(job, { ...ctx, leaseSession: args[5], leaseEpoch: epoch });
+    } else {
+      expected = commandArgs(job, ctx);
+    }
+  } catch {
+    return "managed command arguments do not match lease renewal contract; reinstall";
+  }
+  if (args.length !== expected.length + 2 || expected.some((arg, i) => arg !== args[i + 2]))
+    return "managed command arguments do not match this job; reinstall";
+  return nodeHealth(args[0]);
+}
+
+function installedInvocationHealth(path: string, parse: (contents: string) => string[] | null,
+                                   job: JobCandidate, ctx: RunContext): string {
+  try {
+    return invocationHealth(parse(readFileSync(path, "utf8")), job, ctx) ?? "";
   } catch {
     return `cannot read installed job ${path}; reinstall`;
   }
@@ -518,7 +546,8 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         loaded = r.status === 0;
         detail = loaded ? "loaded" : firstLine(r.stderr || r.stdout || "not loaded");
       } catch { /* leave defaults: not loaded */ }
-      const error = loaded && written ? installedNodeHealth(p, launchdNode) : null;
+      const error = loaded ? written ? installedInvocationHealth(p, launchdArgv, job, ctx)
+        : "managed launchd plist file missing; cannot verify captured Node" : null;
       return { id: job.id, label: job.label, written, loaded: loaded && !error,
         detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
@@ -535,19 +564,24 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         loaded = detail === "active";
       } catch { /* leave defaults */ }
       const svcPath = join(systemdDir(ctx.home), `${name}.service`);
-      const error = loaded && written ? existsSync(svcPath)
-        ? installedNodeHealth(svcPath, systemdNode) : nodeHealth(null) : null;
+      const error = loaded ? !written ? "managed systemd timer file missing; cannot verify captured Node"
+        : existsSync(svcPath) ? installedInvocationHealth(svcPath, systemdArgv, job, ctx) : nodeHealth(null) : null;
       return { id: job.id, label: job.label, written, loaded: loaded && !error,
         detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
   }
   // cron
   const text = readCrontab(host);
+  stripManagedBlock(text); // refuse malformed marker layout before interpreting any managed line
+  const lines = text.split("\n");
+  const start = lines.indexOf(CRON_BEGIN);
+  const end = start < 0 ? -1 : lines.indexOf(CRON_END, start + 1);
+  const managed = start < 0 ? [] : lines.slice(start + 1, end).filter((l) => l.trim() && !l.startsWith("#"));
   return jobs.map((job) => {
-    const command = `${cronArg(ctx.orchBin)} ${job.argv.map(cronArg).join(" ")}`;
-    const line = text.split("\n").find((l) => l.includes(command));
+    const line = managed.find((l) => cronArgv(l)?.[2] === job.argv[0]);
     const present = Boolean(line);
-    const error = line ? nodeHealth(cronNode(line)) : null;
+    const error = line ? invocationHealth(cronArgv(line), job, ctx)
+      : start >= 0 ? "managed cron job command missing or malformed; reinstall" : null;
     return { id: job.id, label: job.label, written: present, loaded: present && !error,
       detail: error ? `ERROR: ${error}` : present ? "in crontab" : "not installed", degraded: Boolean(error) };
   });

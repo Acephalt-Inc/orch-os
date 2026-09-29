@@ -5,7 +5,7 @@
  * crontab for real, and none writes outside its own tmp directory - CI stays render-only too.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -296,9 +296,109 @@ describe("ScheduleTest", () => {
         writeFileSync(file, legacy);
       }
       const row = S.status(backend, [JOBS[1]], ctx, host)[0];
-      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
-      expect(row.detail).toMatch(/no verifiable absolute Node/);
+      expect(row).toMatchObject({ written: backend !== "cron", loaded: false, degraded: true });
+      expect(row.detail).toMatch(/no verifiable absolute Node|managed cron job command missing/);
     }
+  });
+
+  it.each(["launchd", "systemd"] as const)(
+    "test_loaded_job_missing_managed_%s_file_is_error_without_rewrite", (backend) => {
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args) => {
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      const file = backend === "launchd" ? S.launchdPath(host.home, JOBS[1].id)
+        : join(S.systemdDir(host.home), `${S.systemdUnitName(JOBS[1].id)}.timer`);
+      expect(existsSync(file)).toBe(false);
+      const row = S.status(backend, [JOBS[1]], ctx, host)[0];
+      expect(row).toMatchObject({ written: false, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/managed .* file missing/);
+      expect(existsSync(file)).toBe(false);
+    });
+
+  it("test_searchable_directory_is_not_a_node_executable", () => {
+    const host = fakeHost({ platform: "darwin" }, () => ({ status: 0, stdout: "", stderr: "" }));
+    const ctx = { ...ctxFor(host), nodeBin: host.home }; // directory has X_OK on POSIX
+    S.install("launchd", [JOBS[1]], ctx, host);
+    const row = S.status("launchd", [JOBS[1]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+    expect(row.detail).toMatch(/not a regular executable file/);
+  });
+
+  it("test_cron_percent_escaped_node_path_round_trips_to_existing_executable", () => {
+    let crontab = "";
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+      if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const nodeBin = join(host.home, "node%run");
+    symlinkSync(process.execPath, nodeBin);
+    const ctx = { ...ctxFor(host), nodeBin };
+    S.install("cron", [JOBS[1]], ctx, host);
+    expect(crontab).toContain("node\\%run");
+    const row = S.status("cron", [JOBS[1]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: true, degraded: false });
+  });
+
+  it.each(["launchd", "systemd", "cron"] as const)(
+    "test_loaded_%s_job_targeting_wrong_cli_is_error", (backend) => {
+      let crontab = "";
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args, input) => {
+        if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+        if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const installed = { ...ctxFor(host), orchBin: "/opt/other/cli.js" };
+      S.install(backend, [JOBS[1]], installed, host);
+      const current = { ...installed, orchBin: "/opt/orch/bin/orch" };
+      const row = S.status(backend, [JOBS[1]], current, host)[0];
+      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/installed CLI does not match/);
+    });
+
+  it.each(["launchd", "systemd", "cron"] as const)(
+    "test_loaded_%s_lease_job_missing_epoch_is_error", (backend) => {
+      let crontab = "";
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args, input) => {
+        if (cmd === "crontab" && args[0] === "-l") return { status: crontab ? 0 : 1, stdout: crontab, stderr: crontab ? "" : "no crontab for user" };
+        if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 0, stdout: "active", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      S.install(backend, [JOBS[0]], ctx, host);
+      if (backend === "cron") {
+        crontab = crontab.replace(" '--expected-epoch' '1'", "");
+      } else {
+        const file = S.render(backend, [JOBS[0]], ctx)[0].path;
+        const old = readFileSync(file, "utf8");
+        writeFileSync(file, backend === "launchd"
+          ? old.replace("    <string>--expected-epoch</string>\n    <string>1</string>\n", "")
+          : old.replace(" --expected-epoch 1", ""));
+      }
+      const row = S.status(backend, [JOBS[0]], ctx, host)[0];
+      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/managed command arguments/);
+    });
+
+  it.each([
+    ["invalid session", "<string>lead</string>", "<string>bad session</string>"],
+    ["zero epoch", "<string>1</string>", "<string>0</string>"],
+    ["wrong command", "<string>renew</string>", "<string>release</string>"],
+  ])("test_loaded_launchd_lease_job_rejects_%s", (_case, from, to) => {
+    const host = fakeHost({ platform: "darwin" });
+    const ctx = ctxFor(host);
+    S.install("launchd", [JOBS[0]], ctx, host);
+    const file = S.launchdPath(host.home, JOBS[0].id);
+    const original = readFileSync(file, "utf8");
+    expect(original).toContain(from);
+    writeFileSync(file, original.replace(from, to));
+    const row = S.status("launchd", [JOBS[0]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+    expect(row.detail).toMatch(/managed command arguments/);
   });
 
   it("test_cron_install_and_remove_preserve_unrelated_existing_entries", () => {
