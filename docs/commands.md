@@ -252,6 +252,41 @@ orch load [--read] [--json]
 
 Takes one sample, advances the tier and prints `load tier=... load_ratio=... swap=...% temp=... reniced=N`. `--read` prints the stored state without sampling.
 
+## orch schedule
+
+```text
+orch schedule install [--session HOLDER] [--dry-run] [--backend launchd|systemd|cron]
+orch schedule status [--json] [--backend launchd|systemd|cron]
+orch schedule remove [--backend launchd|systemd|cron]
+```
+
+Installs, checks or removes the periodic background jobs this build supports, with no sudo, ever. Each job is a real `orch` subcommand found in the live command tree at run time, never one invented for the occasion; a candidate whose subcommand this build does not have (there is no dedicated "stuck-worker check" subcommand today - the closest is `orch worker list`, which reports state but takes no action) is skipped and named in the output.
+
+| Job id | Runs | Suggested period |
+|---|---|---|
+| `lease-renew` | `orch lease renew --session HOLDER --expected-epoch EPOCH` | every 5 minutes |
+| `load-sample` | `orch load` | every minute |
+
+Backend, auto-detected (override with `--backend`):
+
+| Platform | Backend | Where |
+|---|---|---|
+| macOS | launchd user agent | one `.plist` per job under `~/Library/LaunchAgents/` |
+| Linux, `systemd --user` reachable | systemd `--user` timer | one `.service` + `.timer` pair per job under `~/.config/systemd/user/` |
+| Linux, no `--user` session | crontab fallback | one line per job in a versioned block marked `# BEGIN orch-os schedule v1 tail=…` / `# END orch-os schedule v1` in the caller's own crontab (`crontab -l` / `crontab -`) |
+
+Acquire the lead lease first, then run `orch schedule install --session HOLDER` with the same session ID. Without `--session`, install uses `$ORCH_SESSION_ID`, then `user@host`. Install verifies that this session currently holds an active lease and captures its epoch; if the holder changes, the old renewal job fails its epoch check rather than renewing the new holder's lease. Reinstall for the new holder after acquiring its lease. Invalid or mismatched holder IDs are refused.
+
+`install` writes the unit files, reloads systemd when applicable, then activates them (`launchctl bootstrap`, `systemctl --user enable --now`, or a `crontab -` write); any reload or activation failure returns nonzero and names the failed job. Each job invokes the absolute Node executable that ran `install` before this build's `dist/cli.js`, so a scheduler's minimal PATH need not find `node`; reinstall after changing or removing that Node executable. `--dry-run` prints what would be written and stops without installing or activating a job. Auto-detection on Linux reads the existing managed backend and may query `systemctl --user`; a temporary bus failure never switches an installed systemd timer to cron. To change backends, first run `orch schedule remove --backend OLD`; an explicit install on a different backend refuses to create duplicate jobs. Re-running `install` on the same backend is idempotent. Cron installs append the versioned block at the end, leaving user `CRON_TZ` and `MAILTO` inheritance intact; its tail marker records whether the prior crontab was empty, newline-terminated, or lacked a final newline. Removal restores those prior bytes, including whitespace. Unknown or unversioned markers cause an error rather than an inferred rewrite; inspect and resolve them manually. A crontab read error or malformed managed block refuses any rewrite, preserving unrelated jobs. `ORCH_HOME`, when set to something other than the default, is baked into each job's environment (`EnvironmentVariables` in the plist, `Environment=` in the systemd service, or a prefix on the crontab line), since none of the three backends inherit a login shell's environment. `status` prints `LOADED`/`MISSING` per job plus any candidate this build lacks a subcommand for (`N/A`); exit code is 0 only when every scheduled job is loaded. If a loaded job's captured Node executable is missing/non-executable, its managed file is missing, or its CLI/job arguments do not match this build, `status` prints `ERROR` and exits nonzero; `doctor` makes that row a required `FAIL`. Reinstall after changing the CLI path or Node executable. This is installed-invocation/configuration health only: it does **not** prove that the executable is Node, the holder is still current, or renewal has actually run. The lease protocol separately checks current-holder identity and epoch. `remove` checks launchd load state and systemd activity plus enablement, even if a unit file is missing; unknown manager state, deactivation errors, or crontab write failures return nonzero with a message. The crontab fallback leaves unrelated lines untouched.
+
+Cron also refuses removal or reinstall when a `tail=nonl` block has any text appended after its END marker. This avoids joining a later user job to the prior unterminated line; inspect and resolve that crontab manually before retrying. Whitespace-indented marker-like comments are treated as unknown, never as an absent block.
+
+`orch doctor` shows uninstalled/missing jobs as informational `SKIP` rows; a loaded job with a broken installed invocation is a required `FAIL`.
+
+`status` and `doctor` inventory every known schedule candidate, including one whose command this build no longer exposes: an installed job without that command is `ERROR`/required `FAIL`, while an uninstalled unavailable candidate remains `N/A`/`SKIP`. An active but disabled systemd timer is unhealthy because it will not survive restart; an installed backend that cannot be inspected is a required doctor failure, not an unsupported-platform skip. `remove` covers every known candidate, but deletes only recognizable orch-os managed plists/units or the marked cron block; an unrecognized replacement at the exact expected file path is preserved without deactivating that unit. When the managed file is missing, cleanup is limited to the exact known launchd label or systemd timer name, with manager state checked before deactivation.
+
+`install` also refuses a same-path unmanaged file, symbolic link or non-regular target before writing or activating; it opens all launchd/systemd targets without following symlinks and verifies their managed content before updating any of them. A genuine previously managed file can be refreshed. Manager inspection errors for an installed file are `ERROR`/required `FAIL`, distinct from a confirmed absent job. Removing the managed cron block preserves every unrelated line and blank line byte-for-byte. These checks do not make concurrent edits by another process transactional; avoid editing managed job files concurrently with install/remove.
+
 ## orch mem
 
 ```text

@@ -42,7 +42,10 @@ No. It decides which session acts as lead. It prevents two sessions from both be
 No. `merge-gate` answers yes or no; you or your automation performs the merge.
 
 **How do I run the load governor continuously?**
-Run `orch load` once a minute from cron or any other scheduler. Each call takes one sample and updates `load.json`; `orch worker start` reads it.
+After acquiring the lead lease, run `orch schedule install --session HOLDER` with that lease's session ID (see below), or run `orch load` once a minute from cron or any other scheduler. Each call takes one sample and updates `load.json`; `orch worker start` reads it.
+
+**How do I keep the lease renewed and the load governor sampling without wiring up cron myself?**
+After `orch lease acquire --session lead`, run `orch schedule install --session lead`. It installs both as background jobs with no sudo: launchd user agents on macOS, systemd `--user` timers on Linux (falling back to a crontab block when a `--user` session is not reachable). The renewal job includes the verified session ID and lease epoch, so an old job cannot renew a successor's lease. `orch schedule status` shows what's loaded; `orch schedule remove` uninstalls everything it installed; `--dry-run` on `install` prints the unit files instead of writing them. It only ever schedules a job whose subcommand exists in your installed build (right now: `lease renew` and `load`) - see [docs/commands.md](docs/commands.md#orch-schedule).
 
 **How do I add CPU temperature?**
 Set `[load] temp_command` to any command that prints one number in degrees C, then add `temp_c` thresholds to `busy`, `high` and `critical`.
