@@ -413,7 +413,11 @@ export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunCont
     mkdirSync(ctx.logDir, { recursive: true });
     return jobs.map((job) => {
       const f = files.find((x) => x.job.id === job.id)!.file;
-      host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]); // fine if not loaded
+      const target = `gui/${host.uid}/${launchdLabel(job.id)}`;
+      const stop = host.exec("launchctl", ["bootout", target]);
+      if (stop.status !== 0 && !/could not find service|service not found/i.test(stop.stderr || stop.stdout)) {
+        throw new ScheduleError(`cannot deactivate ${launchdLabel(job.id)} before install: ${firstLine(stop.stderr || stop.stdout || `exit ${stop.status}`)}`);
+      }
       const r = host.exec("launchctl", ["bootstrap", `gui/${host.uid}`, f.path]);
       const activated = r.status === 0;
       return { id: job.id, path: f.path, activated, detail: activated ? "loaded" : firstLine(r.stderr || r.stdout || `exit ${r.status}`) };
@@ -755,7 +759,7 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
         throw new ScheduleError(`cannot inspect ${launchdLabel(job.id)}: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`);
       }
       if (loaded) {
-        const r = host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]);
+        const r = host.exec("launchctl", ["bootout", `gui/${host.uid}/${launchdLabel(job.id)}`]);
         if (r.status !== 0 && !/could not find service|service not found/i.test(r.stderr)) {
           throw new ScheduleError(`cannot deactivate ${launchdLabel(job.id)}: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
         }

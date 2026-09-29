@@ -205,10 +205,49 @@ describe("ScheduleTest", () => {
 
     const removed = S.remove("launchd", JOBS, ctx, host);
     expect(removed.every((r) => r.removed)).toBe(true);
+    expect(host.calls.filter(([cmd, args]) => cmd === "launchctl" && args[0] === "bootout")
+      .map(([, args]) => args)).toContainEqual(["bootout", `gui/${host.uid}/${S.launchdLabel("lease-renew")}`]);
     expect(existsSync(S.launchdPath(host.home, "lease-renew"))).toBe(false);
     rows = S.status("launchd", JOBS, ctx, host);
     expect(rows.every((r) => !r.written)).toBe(true);
   });
+
+  it("test_launchd_loaded_reinstall_boots_out_exact_service_target_before_bootstrap", () => {
+    let loaded = true;
+    const host = fakeHost({ platform: "darwin" }, (_cmd, args) => {
+      const target = `gui/${host.uid}/${S.launchdLabel(JOBS[1].id)}`;
+      if (args[0] === "bootout") {
+        if (args.length !== 2 || args[1] !== target) return { status: 5, stdout: "", stderr: "invalid service target" };
+        loaded = false;
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "bootstrap") {
+        if (loaded) return { status: 5, stdout: "", stderr: "already loaded" };
+        loaded = true;
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const rows = S.install("launchd", [JOBS[1]], ctxFor(host), host);
+    expect(rows[0].activated).toBe(true);
+    expect(host.calls.filter(([, args]) => args[0] === "bootout").map(([, args]) => args))
+      .toEqual([["bootout", `gui/${host.uid}/${S.launchdLabel(JOBS[1].id)}`]]);
+  });
+
+  it.each(["permission denied", "user domain unavailable"])(
+    "test_launchd_reinstall_aborts_on_bootout_error_%s", (error) => {
+      let deny = false;
+      const host = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "bootout"
+        ? deny ? { status: 5, stdout: "", stderr: error }
+          : { status: 3, stdout: "", stderr: "Could not find service" }
+        : { status: 0, stdout: "", stderr: "" });
+      const ctx = ctxFor(host);
+      expect(S.install("launchd", [JOBS[1]], ctx, host)[0].activated).toBe(true);
+      const bootstraps = host.calls.filter(([, args]) => args[0] === "bootstrap").length;
+      deny = true;
+      expect(() => S.install("launchd", [JOBS[1]], ctx, host)).toThrow(error);
+      expect(host.calls.filter(([, args]) => args[0] === "bootstrap")).toHaveLength(bootstraps);
+    },
+  );
 
   it("test_status_and_remove_parse_systemd_state_correctly", () => {
     const host = fakeHost({ platform: "linux" }, (cmd, args) => {
@@ -782,7 +821,8 @@ describe("ScheduleTest", () => {
       ? { status: 0, stdout: "loaded", stderr: "" } : { status: 0, stdout: "", stderr: "" });
     const launchRows = S.remove("launchd", [JOBS[1]], ctxFor(launchd), launchd);
     expect(launchRows[0].removed).toBe(true);
-    expect(launchd.calls.some(([, args]) => args[0] === "bootout")).toBe(true);
+    expect(launchd.calls.filter(([, args]) => args[0] === "bootout").map(([, args]) => args))
+      .toEqual([["bootout", `gui/${launchd.uid}/${S.launchdLabel(JOBS[1].id)}`]]);
 
     const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
       ? { status: 0, stdout: "active", stderr: "" }
