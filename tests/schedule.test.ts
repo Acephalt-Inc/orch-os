@@ -311,7 +311,9 @@ describe("ScheduleTest", () => {
     expect(existsSync(file)).toBe(true);
 
     const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("disable")
-      ? { status: 6, stdout: "", stderr: "user bus denied" } : { status: 0, stdout: "", stderr: "" });
+      ? { status: 6, stdout: "", stderr: "user bus denied" }
+      : args.includes("is-active") ? { status: 0, stdout: "active", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" });
     const timer = join(S.systemdDir(systemd.home), `${S.systemdUnitName("load-sample")}.timer`);
     mkdirSync(dirname(timer), { recursive: true });
     writeFileSync(timer, "unit");
@@ -349,6 +351,36 @@ describe("ScheduleTest", () => {
     const rows = S.install("launchd", [JOBS[1]], ctxFor(host), host);
     expect(rows[0].activated).toBe(false);
     expect(S.installExitCode(rows)).not.toBe(0);
+  });
+
+  it("test_systemd_install_refuses_failed_reload_before_enabling_timer", () => {
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("daemon-reload")
+      ? { status: 7, stdout: "", stderr: "reload denied" } : { status: 0, stdout: "", stderr: "" });
+    expect(() => S.install("systemd", [JOBS[1]], ctxFor(host), host)).toThrow(/reload denied/);
+    expect(host.calls.some(([, args]) => args.includes("enable"))).toBe(false);
+  });
+
+  it("test_remove_deactivates_loaded_job_even_when_unit_file_is_missing", () => {
+    const launchd = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "print"
+      ? { status: 0, stdout: "loaded", stderr: "" } : { status: 0, stdout: "", stderr: "" });
+    const launchRows = S.remove("launchd", [JOBS[1]], ctxFor(launchd), launchd);
+    expect(launchRows[0].removed).toBe(true);
+    expect(launchd.calls.some(([, args]) => args[0] === "bootout")).toBe(true);
+
+    const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
+      ? { status: 0, stdout: "active", stderr: "" } : { status: 0, stdout: "", stderr: "" });
+    const systemdRows = S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd);
+    expect(systemdRows[0].removed).toBe(true);
+    expect(systemd.calls.some(([, args]) => args.includes("disable"))).toBe(true);
+  });
+
+  it("test_remove_fails_closed_on_unknown_manager_state", () => {
+    const launchd = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "print"
+      ? { status: 13, stdout: "", stderr: "user domain unavailable" } : { status: 0, stdout: "", stderr: "" });
+    expect(() => S.remove("launchd", [JOBS[1]], ctxFor(launchd), launchd)).toThrow(/user domain unavailable/);
+    const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
+      ? { status: null, stdout: "", stderr: "bus unavailable" } : { status: 0, stdout: "", stderr: "" });
+    expect(() => S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd)).toThrow(/bus unavailable/);
   });
 
   it("test_backend_auto_selection_refuses_cron_when_systemd_units_exist", () => {

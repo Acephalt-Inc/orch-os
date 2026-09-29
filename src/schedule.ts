@@ -393,7 +393,8 @@ export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunCont
       writeFileSync(svc.path, svc.contents);
       writeFileSync(timer.path, timer.contents);
     }
-    host.exec("systemctl", ["--user", "daemon-reload"]);
+    const reload = host.exec("systemctl", ["--user", "daemon-reload"]);
+    if (reload.status !== 0) throw new ScheduleError(`cannot reload systemd user units: ${firstLine(reload.stderr || reload.stdout || `exit ${reload.status}`)}`);
     return jobs.map((job) => {
       const name = systemdUnitName(job.id);
       const r = host.exec("systemctl", ["--user", "enable", "--now", `${name}.timer`]);
@@ -478,15 +479,21 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   if (backend === "launchd") {
     return jobs.map((job) => {
       const p = launchdPath(ctx.home, job.id);
-      const removed = existsSync(p);
-      if (removed) {
+      const written = existsSync(p);
+      const state = host.exec("launchctl", ["print", `gui/${host.uid}/${launchdLabel(job.id)}`]);
+      const loaded = state.status === 0;
+      if (!loaded && !/could not find service|service not found/i.test(state.stderr)) {
+        throw new ScheduleError(`cannot inspect ${launchdLabel(job.id)}: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`);
+      }
+      if (loaded) {
         const r = host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]);
         if (r.status !== 0 && !/could not find service|service not found/i.test(r.stderr)) {
           throw new ScheduleError(`cannot deactivate ${launchdLabel(job.id)}: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
         }
       }
-      if (removed) unlinkSync(p);
-      return { id: job.id, removed, detail: removed ? `removed ${p}` : "was not installed" };
+      if (written) unlinkSync(p);
+      const removed = written || loaded;
+      return { id: job.id, removed, detail: written ? `removed ${p}` : loaded ? `deactivated ${launchdLabel(job.id)}` : "was not installed" };
     });
   }
   if (backend === "systemd") {
@@ -494,18 +501,26 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
       const name = systemdUnitName(job.id);
       const svc = join(systemdDir(ctx.home), `${name}.service`);
       const timer = join(systemdDir(ctx.home), `${name}.timer`);
-      if (existsSync(svc) || existsSync(timer)) {
+      const written = existsSync(svc) || existsSync(timer);
+      const state = host.exec("systemctl", ["--user", "is-active", `${name}.timer`]);
+      const active = state.status === 0 && state.stdout.trim() === "active";
+      const inactive = state.status === 3 && /^(inactive|failed)$/.test(state.stdout.trim());
+      const missing = state.status === 4 && /not-found|could not be found|not found/i.test(state.stderr || state.stdout);
+      if (!active && !inactive && !missing) {
+        throw new ScheduleError(`cannot inspect ${name}.timer: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`);
+      }
+      if (written || active) {
         const r = host.exec("systemctl", ["--user", "disable", "--now", `${name}.timer`]);
         if (r.status !== 0) throw new ScheduleError(`cannot deactivate ${name}.timer: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
       }
-      let removed = false;
+      let removed = active;
       for (const p of [svc, timer]) {
         if (existsSync(p)) {
           unlinkSync(p);
           removed = true;
         }
       }
-      return { id: job.id, removed, detail: removed ? `removed ${name}.service/.timer` : "was not installed" };
+      return { id: job.id, removed, detail: written ? `removed ${name}.service/.timer` : active ? `deactivated ${name}.timer` : "was not installed" };
     });
     const reload = host.exec("systemctl", ["--user", "daemon-reload"]);
     if (reload.status !== 0) throw new ScheduleError(`cannot reload systemd user units: ${firstLine(reload.stderr || reload.stdout || `exit ${reload.status}`)}`);
