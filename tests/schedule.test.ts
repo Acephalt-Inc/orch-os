@@ -351,6 +351,39 @@ describe("ScheduleTest", () => {
     expect(row.detail).toMatch(/cannot inspect timer enablement.*user bus unavailable/);
   });
 
+  it.each(["launchd", "systemd"] as const)(
+    "test_installed_%s_job_with_manager_inspection_error_is_degraded", (backend) => {
+      const host = fakeHost({ platform: backend === "launchd" ? "darwin" : "linux" }, (cmd, args) => {
+        if (cmd === "launchctl" && args.includes("print")) return { status: 5, stdout: "", stderr: "permission denied" };
+        if (cmd === "systemctl" && args.includes("is-active")) return { status: 1, stdout: "", stderr: "user bus unavailable" };
+        return { status: 0, stdout: "enabled", stderr: "" };
+      });
+      const ctx = ctxFor(host);
+      for (const file of S.render(backend, [JOBS[1]], ctx)) {
+        mkdirSync(dirname(file.path), { recursive: true });
+        writeFileSync(file.path, file.contents);
+      }
+      const row = S.status(backend, [JOBS[1]], ctx, host)[0];
+      expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+      expect(row.detail).toMatch(/permission denied|user bus unavailable/);
+    });
+
+  it("test_inactive_systemd_job_with_unknown_enablement_is_degraded", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd, args) => {
+      if (cmd === "systemctl" && args.includes("is-active")) return { status: 3, stdout: "inactive", stderr: "" };
+      if (cmd === "systemctl" && args.includes("is-enabled")) return { status: 1, stdout: "", stderr: "user bus unavailable" };
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const ctx = ctxFor(host);
+    for (const file of S.render("systemd", [JOBS[1]], ctx)) {
+      mkdirSync(dirname(file.path), { recursive: true });
+      writeFileSync(file.path, file.contents);
+    }
+    const row = S.status("systemd", [JOBS[1]], ctx, host)[0];
+    expect(row).toMatchObject({ written: true, loaded: false, degraded: true });
+    expect(row.detail).toMatch(/cannot inspect timer enablement.*user bus unavailable/);
+  });
+
   it("test_searchable_directory_is_not_a_node_executable", () => {
     const host = fakeHost({ platform: "darwin" }, () => ({ status: 0, stdout: "", stderr: "" }));
     const ctx = { ...ctxFor(host), nodeBin: host.home }; // directory has X_OK on POSIX
@@ -495,6 +528,75 @@ describe("ScheduleTest", () => {
     expect(() => S.remove("cron", JOBS, ctxFor(host), host)).toThrow(/malformed.*managed block/i);
     expect(crontab).toBe(original);
     expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
+  });
+
+  it("test_remove_preserves_unrelated_crontab_blank_lines_byte_for_byte", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd, args, input) => {
+      if (cmd === "crontab" && args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      if (cmd === "crontab" && args[0] === "-") { crontab = input ?? ""; return { status: 0, stdout: "", stderr: "" }; }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const prefix = "0 3 * * * /usr/bin/backup-a\n\n\n";
+    const suffix = "\n\n15 4 * * * /usr/bin/backup-b\n\n\n";
+    let crontab = prefix + S.render("cron", [JOBS[1]], ctxFor(host))[0].contents + suffix;
+    S.remove("cron", [JOBS[1]], ctxFor(host), host);
+    expect(crontab).toBe(prefix + suffix);
+  });
+
+  it("test_install_refuses_unmanaged_launchd_target_without_activation", () => {
+    const host = fakeHost({ platform: "darwin" });
+    const ctx = ctxFor(host);
+    const file = S.launchdPath(host.home, JOBS[1].id);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "personal plist\n");
+    expect(() => S.install("launchd", [JOBS[1]], ctx, host)).toThrow(/not a managed orch-os/);
+    expect(readFileSync(file, "utf8")).toBe("personal plist\n");
+    expect(host.calls).toHaveLength(0);
+  });
+
+  it("test_install_refuses_launchd_symlink_without_overwriting_target", () => {
+    const host = fakeHost({ platform: "darwin" });
+    const ctx = ctxFor(host);
+    const file = S.launchdPath(host.home, JOBS[1].id);
+    const target = join(host.home, "personal.txt");
+    const targetBefore = S.render("launchd", [JOBS[1]], ctx)[0].contents + "<!-- old managed copy elsewhere -->\n";
+    writeFileSync(target, targetBefore);
+    mkdirSync(dirname(file), { recursive: true });
+    symlinkSync(target, file);
+    expect(() => S.install("launchd", [JOBS[1]], ctx, host)).toThrow(/symbolic link|not a regular/);
+    expect(readFileSync(target, "utf8")).toBe(targetBefore);
+    expect(host.calls).toHaveLength(0);
+  });
+
+  it("test_systemd_install_checks_both_targets_before_overwriting_either", () => {
+    const host = fakeHost({ platform: "linux" });
+    const ctx = ctxFor(host);
+    const [service, timer] = S.render("systemd", [JOBS[1]], ctx);
+    mkdirSync(dirname(service.path), { recursive: true });
+    const managedOld = service.contents + "# old managed comment\n";
+    writeFileSync(service.path, managedOld);
+    writeFileSync(timer.path, "personal timer\n");
+    expect(() => S.install("systemd", [JOBS[1]], ctx, host)).toThrow(/not a managed orch-os/);
+    expect(readFileSync(service.path, "utf8")).toBe(managedOld);
+    expect(readFileSync(timer.path, "utf8")).toBe("personal timer\n");
+    expect(host.calls).toHaveLength(0);
+  });
+
+  it("test_systemd_install_refuses_service_symlink_without_touching_timer", () => {
+    const host = fakeHost({ platform: "linux" });
+    const ctx = ctxFor(host);
+    const [service, timer] = S.render("systemd", [JOBS[1]], ctx);
+    mkdirSync(dirname(service.path), { recursive: true });
+    const target = join(host.home, "personal.txt");
+    const targetBefore = service.contents + "# old managed copy elsewhere\n";
+    writeFileSync(target, targetBefore);
+    symlinkSync(target, service.path);
+    writeFileSync(timer.path, timer.contents + "# old managed comment\n");
+    const timerOld = readFileSync(timer.path, "utf8");
+    expect(() => S.install("systemd", [JOBS[1]], ctx, host)).toThrow(/symbolic link|not a regular/);
+    expect(readFileSync(target, "utf8")).toBe(targetBefore);
+    expect(readFileSync(timer.path, "utf8")).toBe(timerOld);
+    expect(host.calls).toHaveLength(0);
   });
 
   it("test_remove_surfaces_os_deactivation_and_crontab_write_failures", () => {

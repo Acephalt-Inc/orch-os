@@ -14,7 +14,7 @@
  * invents a subcommand that isn't in src/cli.ts's tree.
  */
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CmdSpec } from "./args.js";
@@ -340,7 +340,7 @@ function stripManagedBlock(text: string): string {
     throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
   }
   const rest = [...lines.slice(0, start), ...lines.slice(end + 1)];
-  return rest.join("\n").replace(/\n{3,}/g, "\n\n");
+  return rest.join("\n");
 }
 
 /** The files `install` would write, for `--dry-run` (and reused by `install` itself). */
@@ -378,13 +378,13 @@ export function installExitCode(rows: InstallRow[]): number {
 
 export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunContext, host: Host): InstallRow[] {
   if (!jobs.length) return [];
-  mkdirSync(ctx.logDir, { recursive: true });
   if (backend === "launchd") {
     ensureTool(host, "launchctl");
+    const files = jobs.map((job) => ({ file: renderLaunchdFile(job, ctx), job, backend: "launchd" as const }));
+    writeManagedFiles(files); // verify every target before any content write or activation
+    mkdirSync(ctx.logDir, { recursive: true });
     return jobs.map((job) => {
-      const f = renderLaunchdFile(job, ctx);
-      mkdirSync(dirname(f.path), { recursive: true });
-      writeFileSync(f.path, f.contents);
+      const f = files.find((x) => x.job.id === job.id)!.file;
       host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]); // fine if not loaded
       const r = host.exec("launchctl", ["bootstrap", `gui/${host.uid}`, f.path]);
       const activated = r.status === 0;
@@ -393,12 +393,13 @@ export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunCont
   }
   if (backend === "systemd") {
     ensureTool(host, "systemctl");
-    mkdirSync(systemdDir(ctx.home), { recursive: true });
-    for (const job of jobs) {
-      const [svc, timer] = renderSystemdFiles(job, ctx);
-      writeFileSync(svc.path, svc.contents);
-      writeFileSync(timer.path, timer.contents);
-    }
+    const files = jobs.flatMap((job) => {
+      const [service, timer] = renderSystemdFiles(job, ctx);
+      return [{ file: service, job, backend: "systemd" as const, kind: "service" as const },
+        { file: timer, job, backend: "systemd" as const, kind: "timer" as const }];
+    });
+    writeManagedFiles(files);
+    mkdirSync(ctx.logDir, { recursive: true });
     const reload = host.exec("systemctl", ["--user", "daemon-reload"]);
     if (reload.status !== 0) throw new ScheduleError(`cannot reload systemd user units: ${firstLine(reload.stderr || reload.stdout || `exit ${reload.status}`)}`);
     return jobs.map((job) => {
@@ -412,6 +413,7 @@ export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunCont
     });
   }
   // cron
+  mkdirSync(ctx.logDir, { recursive: true });
   ensureTool(host, "crontab");
   const stripped = stripManagedBlock(readCrontab(host));
   const block = renderCronBlock(jobs, ctx);
@@ -546,17 +548,84 @@ function managedJobArgs(args: string[] | null, job: JobCandidate): boolean {
     && extra[2] === "--expected-epoch" && Number.isSafeInteger(epoch) && epoch >= 1 && String(epoch) === extra[3];
 }
 
-function assertManagedFile(path: string, job: JobCandidate, backend: "launchd" | "systemd", kind?: "service" | "timer"): void {
-  if (!existsSync(path)) return;
-  let contents: string;
-  try { contents = readFileSync(path, "utf8"); }
-  catch { throw new ScheduleError(`cannot read ${path}; refusing to remove an unverified job file`); }
-  const managed = backend === "launchd"
+type ManagedTarget = { file: RenderedFile; job: JobCandidate; backend: "launchd" | "systemd"; kind?: "service" | "timer" };
+
+function isManagedContents(contents: string, job: JobCandidate, backend: "launchd" | "systemd",
+                           kind?: "service" | "timer"): boolean {
+  return backend === "launchd"
     ? contents.match(/<key>Label<\/key>\s*<string>([^<]*)<\/string>/)?.[1] === launchdLabel(job.id)
       && managedJobArgs(launchdArgv(contents), job)
     : contents.split("\n").includes(`Description=orch-os scheduled job${kind === "timer" ? " timer" : ""}: ${job.label}`)
       && (kind === "timer" ? contents.includes("[Timer]") : managedJobArgs(systemdArgv(contents), job));
-  if (!managed) throw new ScheduleError(`${path} is not a managed orch-os ${backend} file; preserving it`);
+}
+
+function assertManagedFile(path: string, job: JobCandidate, backend: "launchd" | "systemd", kind?: "service" | "timer"): void {
+  let stat;
+  try { stat = lstatSync(path); }
+  catch (e: any) {
+    if (e.code === "ENOENT") return;
+    throw new ScheduleError(`cannot inspect ${path}: ${String(e.message ?? e)}`);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile())
+    throw new ScheduleError(`${path} is a symbolic link or not a regular managed file; preserving it`);
+  let contents: string;
+  try { contents = readFileSync(path, "utf8"); }
+  catch { throw new ScheduleError(`cannot read ${path}; refusing to remove an unverified job file`); }
+  if (!isManagedContents(contents, job, backend, kind))
+    throw new ScheduleError(`${path} is not a managed orch-os ${backend} file; preserving it`);
+}
+
+/** Open all target inodes with O_NOFOLLOW, verify ownership on the opened descriptors, then write. */
+function writeManagedFiles(targets: ManagedTarget[]): void {
+  const opened: { target: ManagedTarget; fd: number; created: boolean; dev: number; ino: number }[] = [];
+  let complete = false;
+  try {
+    for (const target of targets) {
+      mkdirSync(dirname(target.file.path), { recursive: true });
+      let fd: number;
+      let created = false;
+      try {
+        fd = openSync(target.file.path, constants.O_RDWR | constants.O_NOFOLLOW);
+      } catch (e: any) {
+        if (e.code === "ELOOP") throw new ScheduleError(`${target.file.path} is a symbolic link; preserving it`);
+        if (e.code !== "ENOENT") throw e;
+        fd = openSync(target.file.path, constants.O_RDWR | constants.O_NOFOLLOW | constants.O_CREAT | constants.O_EXCL, 0o600);
+        created = true;
+      }
+      const stat = fstatSync(fd);
+      opened.push({ target, fd, created, dev: stat.dev, ino: stat.ino });
+      if (!stat.isFile()) throw new ScheduleError(`${target.file.path} is a symbolic link or not a regular managed file; preserving it`);
+      if (!created && !isManagedContents(readFileSync(fd, "utf8"), target.job, target.backend, target.kind))
+        throw new ScheduleError(`${target.file.path} is not a managed orch-os ${target.backend} file; preserving it`);
+    }
+    for (const { target, fd } of opened) {
+      const bytes = Buffer.from(target.file.contents, "utf8");
+      for (let offset = 0; offset < bytes.length;) {
+        const written = writeSync(fd, bytes, offset, bytes.length - offset, offset);
+        if (written < 1) throw new ScheduleError(`cannot write ${target.file.path}`);
+        offset += written;
+      }
+      ftruncateSync(fd, bytes.length);
+    }
+    for (const { target, dev, ino } of opened) {
+      const stat = lstatSync(target.file.path);
+      if (!stat.isFile() || stat.dev !== dev || stat.ino !== ino)
+        throw new ScheduleError(`${target.file.path} changed during install; refusing activation`);
+    }
+    complete = true;
+  } catch (e: any) {
+    if (e instanceof ScheduleError) throw e;
+    throw new ScheduleError(`cannot safely write managed job: ${String(e.message ?? e)}`);
+  } finally {
+    if (!complete) for (const { target, created, dev, ino } of opened) {
+      if (!created) continue;
+      try {
+        const stat = lstatSync(target.file.path);
+        if (stat.isFile() && stat.dev === dev && stat.ino === ino) unlinkSync(target.file.path);
+      } catch { /* preserve unknown replacements */ }
+    }
+    for (const { fd } of opened) closeSync(fd);
+  }
 }
 
 export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunContext, host: Host): StatusRow[] {
@@ -566,13 +635,16 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
       const written = existsSync(p);
       let loaded = false;
       let detail = "not loaded";
+      let managerError: string | null = null;
       try {
         const r = host.exec("launchctl", ["print", `gui/${host.uid}/${launchdLabel(job.id)}`]);
         loaded = r.status === 0;
         detail = loaded ? "loaded" : firstLine(r.stderr || r.stdout || "not loaded");
-      } catch { /* leave defaults: not loaded */ }
+        if (!loaded && !/could not find service|service not found/i.test(r.stderr || r.stdout))
+          managerError = `cannot inspect ${launchdLabel(job.id)}: ${detail}`;
+      } catch (e: any) { managerError = `cannot inspect ${launchdLabel(job.id)}: ${String(e.message ?? e)}`; }
       const error = loaded ? written ? installedInvocationHealth(p, launchdArgv, job, ctx)
-        : "managed launchd plist file missing; cannot verify captured Node" : null;
+        : "managed launchd plist file missing; cannot verify captured Node" : written ? managerError : null;
       return { id: job.id, label: job.label, written, loaded: loaded && !error,
         detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });
@@ -580,28 +652,38 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   if (backend === "systemd") {
     return jobs.map((job) => {
       const name = systemdUnitName(job.id);
-      const written = existsSync(join(systemdDir(ctx.home), `${name}.timer`));
+      const timerPath = join(systemdDir(ctx.home), `${name}.timer`);
+      const svcPath = join(systemdDir(ctx.home), `${name}.service`);
+      const timerWritten = existsSync(timerPath);
+      const written = timerWritten || existsSync(svcPath);
       let loaded = false;
       let detail = "inactive";
+      let managerError: string | null = null;
       try {
         const r = host.exec("systemctl", ["--user", "is-active", `${name}.timer`]);
         detail = firstLine(r.stdout || r.stderr || `exit ${r.status}`);
-        loaded = detail === "active";
-      } catch { /* leave defaults */ }
+        loaded = r.status === 0 && detail === "active";
+        const inactive = r.status === 3 && /^(inactive|failed)$/.test(r.stdout.trim());
+        const absent = r.status === 4 && /not-found|could not be found|not found/i.test(r.stderr || r.stdout);
+        if (!loaded && !inactive && !absent) managerError = `cannot inspect ${name}.timer: ${detail}`;
+      } catch (e: any) { managerError = `cannot inspect ${name}.timer: ${String(e.message ?? e)}`; }
       let enabled = false;
       let enableError: string | null = null;
       try {
         const state = host.exec("systemctl", ["--user", "is-enabled", `${name}.timer`]);
         const value = state.stdout.trim();
         enabled = state.status === 0 && /^(enabled|enabled-runtime)$/.test(value);
-        if (!enabled && loaded) enableError = /^(disabled|masked|masked-runtime|not-found)$/.test(value)
-          ? "timer is not enabled; reinstall" : `cannot inspect timer enablement: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`;
+        const disabled = state.status !== 0 && /^(disabled|masked|masked-runtime)$/.test(value);
+        const absent = state.status === 4 && value === "not-found";
+        if (!enabled && !disabled && !absent && written)
+          enableError = `cannot inspect timer enablement: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`;
+        else if (loaded && !enabled) enableError = "timer is not enabled; reinstall";
       } catch (e: any) {
-        if (loaded) enableError = `cannot inspect timer enablement: ${String(e.message ?? e)}`;
+        if (written) enableError = `cannot inspect timer enablement: ${String(e.message ?? e)}`;
       }
-      const svcPath = join(systemdDir(ctx.home), `${name}.service`);
-      const error = loaded ? !written ? "managed systemd timer file missing; cannot verify captured Node"
-        : enableError ?? (existsSync(svcPath) ? installedInvocationHealth(svcPath, systemdArgv, job, ctx) : nodeHealth(null)) : null;
+      const error = loaded ? !timerWritten ? "managed systemd timer file missing; cannot verify captured Node"
+        : managerError ?? enableError ?? (existsSync(svcPath) ? installedInvocationHealth(svcPath, systemdArgv, job, ctx) : nodeHealth(null))
+        : written ? managerError ?? enableError : null;
       return { id: job.id, label: job.label, written, loaded: loaded && !error,
         detail: error ? `ERROR: ${error}` : written ? detail : "not installed", degraded: Boolean(error) };
     });

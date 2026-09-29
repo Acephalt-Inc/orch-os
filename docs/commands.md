@@ -283,6 +283,8 @@ Acquire the lead lease first, then run `orch schedule install --session HOLDER` 
 
 `status` and `doctor` inventory every known schedule candidate, including one whose command this build no longer exposes: an installed job without that command is `ERROR`/required `FAIL`, while an uninstalled unavailable candidate remains `N/A`/`SKIP`. An active but disabled systemd timer is unhealthy because it will not survive restart; an installed backend that cannot be inspected is a required doctor failure, not an unsupported-platform skip. `remove` covers every known candidate, but deletes only recognizable orch-os managed plists/units or the marked cron block; an unrecognized replacement at the exact expected file path is preserved without deactivating that unit. When the managed file is missing, cleanup is limited to the exact known launchd label or systemd timer name, with manager state checked before deactivation.
 
+`install` also refuses a same-path unmanaged file, symbolic link or non-regular target before writing or activating; it opens all launchd/systemd targets without following symlinks and verifies their managed content before updating any of them. A genuine previously managed file can be refreshed. Manager inspection errors for an installed file are `ERROR`/required `FAIL`, distinct from a confirmed absent job. Removing the managed cron block preserves every unrelated line and blank line byte-for-byte. These checks do not make concurrent edits by another process transactional; avoid editing managed job files concurrently with install/remove.
+
 ## orch mem
 
 ```text
