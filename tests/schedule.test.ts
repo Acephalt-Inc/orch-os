@@ -4,16 +4,17 @@
  * and a recording `exec` stub), never the real OS. No test calls launchctl, systemctl or
  * crontab for real, and none writes outside its own tmp directory - CI stays render-only too.
  */
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CmdSpec } from "../src/args.js";
 import * as S from "../src/schedule.js";
-import { run, useTmpHome } from "./_helpers.js";
+import { DIST_CLI, run, useTmpHome } from "./_helpers.js";
 
 const cleanups: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   // nothing to actually clean: fakeHost() dirs live under the OS tmp dir and vitest's own
   // teardown / the OS reclaims them; kept as a hook point if that ever needs to change.
   cleanups.length = 0;
@@ -123,8 +124,8 @@ describe("ScheduleTest", () => {
     const files = S.render("cron", JOBS, ctx);
     expect(files).toHaveLength(1);
     expect(files[0].contents).toContain("BEGIN orch-os schedule");
-    expect(files[0].contents).toContain("*/5 * * * * ORCH_HOME=/opt/orch/home /opt/orch/bin/orch lease renew --session lead --expected-epoch 1");
-    expect(files[0].contents).toContain("*/1 * * * * ORCH_HOME=/opt/orch/home /opt/orch/bin/orch load");
+    expect(files[0].contents).toContain("*/5 * * * * ORCH_HOME='/opt/orch/home' '/opt/orch/bin/orch' 'lease' 'renew' '--session' 'lead' '--expected-epoch' '1'");
+    expect(files[0].contents).toContain("*/1 * * * * ORCH_HOME='/opt/orch/home' '/opt/orch/bin/orch' 'load'");
     expect(files[0].contents).toContain("END orch-os schedule");
   });
 
@@ -138,7 +139,9 @@ describe("ScheduleTest", () => {
   });
 
   it("test_backend_detection_linux_falls_back_to_cron_when_the_user_bus_is_unreachable", () => {
-    const host = fakeHost({ platform: "linux" }, () => ({ status: 1, stdout: "", stderr: "Failed to connect to bus\n" }));
+    const host = fakeHost({ platform: "linux" }, (cmd) => cmd === "systemctl"
+      ? { status: 1, stdout: "", stderr: "Failed to connect to bus\n" }
+      : { status: 1, stdout: "", stderr: "no crontab for user\n" });
     expect(S.detectBackend(host)).toBe("cron");
   });
 
@@ -282,6 +285,89 @@ describe("ScheduleTest", () => {
       .toThrow(S.ScheduleError);
     expect(host.calls.some(([cmd, args]) => cmd === "crontab" && args[0] === "-")).toBe(false);
   });
+
+  it("test_malformed_cron_block_never_erases_following_user_job", () => {
+    const original = "# BEGIN orch-os schedule (managed by `orch schedule`; do not edit by hand)\n0 4 * * * /usr/bin/my-backup\n";
+    let crontab = original;
+    const host = fakeHost({ platform: "linux" }, (_cmd, args, input) => {
+      if (args[0] === "-l") return { status: 0, stdout: crontab, stderr: "" };
+      crontab = input ?? "";
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    expect(() => S.install("cron", JOBS, ctxFor(host), host)).toThrow(/malformed.*managed block/i);
+    expect(() => S.remove("cron", JOBS, ctxFor(host), host)).toThrow(/malformed.*managed block/i);
+    expect(crontab).toBe(original);
+    expect(host.calls.some(([, args]) => args[0] === "-")).toBe(false);
+  });
+
+  it("test_remove_surfaces_os_deactivation_and_crontab_write_failures", () => {
+    const launchd = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "bootout"
+      ? { status: 5, stdout: "", stderr: "permission denied" } : { status: 0, stdout: "", stderr: "" });
+    const launchCtx = ctxFor(launchd);
+    const file = S.launchdPath(launchd.home, "load-sample");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "unit");
+    expect(() => S.remove("launchd", [JOBS[1]], launchCtx, launchd)).toThrow(/permission denied/);
+    expect(existsSync(file)).toBe(true);
+
+    const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("disable")
+      ? { status: 6, stdout: "", stderr: "user bus denied" } : { status: 0, stdout: "", stderr: "" });
+    const timer = join(S.systemdDir(systemd.home), `${S.systemdUnitName("load-sample")}.timer`);
+    mkdirSync(dirname(timer), { recursive: true });
+    writeFileSync(timer, "unit");
+    expect(() => S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd)).toThrow(/user bus denied/);
+    expect(existsSync(timer)).toBe(true);
+
+    const cron = fakeHost({ platform: "linux" }, (_cmd, args) => args[0] === "-l"
+      ? { status: 0, stdout: S.render("cron", [JOBS[1]], ctxFor(cron))[0].contents, stderr: "" }
+      : { status: 13, stdout: "", stderr: "read-only crontab" });
+    expect(() => S.remove("cron", [JOBS[1]], ctxFor(cron), cron)).toThrow(/read-only crontab/);
+  });
+
+  it("test_render_quotes_paths_with_spaces_and_shell_metacharacters", () => {
+    const host = fakeHost({ platform: "linux" });
+    const ctx = { ...ctxFor(host), orchBin: "/opt/orch tools/bin/orch", orchHome: "/tmp/orch's home", logDir: "/tmp/orch logs" };
+    const svc = S.render("systemd", [JOBS[1]], ctx)[0].contents;
+    expect(svc).toContain('ExecStart="/opt/orch tools/bin/orch" load');
+    expect(svc).toContain('Environment="ORCH_HOME=/tmp/orch\'s home"');
+    const cron = S.render("cron", [JOBS[1]], ctx)[0].contents;
+    expect(cron).toContain("ORCH_HOME='/tmp/orch'\\''s home'");
+    expect(cron).toContain("'/opt/orch tools/bin/orch'");
+    expect(cron).toContain(">>'/tmp/orch logs/load-sample.log'");
+    expect(S.render("systemd", [JOBS[1]], { ...ctx, orchBin: "/opt/$tools/orch" })[0].contents)
+      .toContain("ExecStart=/opt/$$tools/orch load");
+  });
+
+  it("test_built_js_entrypoint_is_executable", () => {
+    expect(statSync(DIST_CLI).mode & 0o111).not.toBe(0);
+    expect(S.resolveOrchBin("/usr/bin/unrelated-runner.js", fakeHost())).toBe(DIST_CLI);
+  });
+
+  it("test_install_activation_failure_is_reported_for_nonzero_exit", () => {
+    const host = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "bootstrap"
+      ? { status: 9, stdout: "", stderr: "bootstrap refused" } : { status: 0, stdout: "", stderr: "" });
+    const rows = S.install("launchd", [JOBS[1]], ctxFor(host), host);
+    expect(rows[0].activated).toBe(false);
+    expect(S.installExitCode(rows)).not.toBe(0);
+  });
+
+  it("test_backend_auto_selection_refuses_cron_when_systemd_units_exist", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd) => cmd === "systemctl"
+      ? { status: 1, stdout: "", stderr: "Failed to connect to bus" }
+      : { status: 1, stdout: "", stderr: "no crontab for user" });
+    const unit = join(S.systemdDir(host.home), `${S.systemdUnitName("load-sample")}.timer`);
+    mkdirSync(dirname(unit), { recursive: true });
+    writeFileSync(unit, "existing timer");
+    expect(() => S.detectBackend(host)).toThrow(/systemd.*unavailable/i);
+  });
+
+  it("test_backend_auto_selection_keeps_existing_cron_after_user_bus_returns", () => {
+    const host = fakeHost({ platform: "linux" }, (cmd, args) => cmd === "systemctl"
+      ? { status: 0, stdout: "running", stderr: "" }
+      : { status: 0, stdout: S.render("cron", [JOBS[1]], ctxFor(host))[0].contents, stderr: "" });
+    expect(S.detectBackend(host)).toBe("cron");
+  });
+
 });
 
 // `--backend cron` makes these deterministic and exec-free on any OS: dry-run only ever calls
@@ -297,7 +383,7 @@ describe("ScheduleCliTest", () => {
     const [code, out] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "lead");
     expect(code).toBe(0);
     expect(out).toContain("BEGIN orch-os schedule");
-    expect(out).toContain("lease renew");
+    expect(out).toContain("'lease' 'renew'");
     expect(out).toContain("load");
     expect(existsSync(join(ctx.home, "schedule"))).toBe(before); // no logDir created by a dry run
   });
@@ -322,10 +408,34 @@ describe("ScheduleCliTest", () => {
 
     const [code, out] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "lead");
     expect(code).toBe(0);
-    expect(out).toContain("lease renew --session lead --expected-epoch 1");
+    expect(out).toContain("'lease' 'renew' '--session' 'lead' '--expected-epoch' '1'");
 
     const [wrongCode, , wrongErr] = await run("schedule", "install", "--dry-run", "--backend", "cron", "--session", "other");
     expect(wrongCode).toBe(2);
     expect(wrongErr).toContain("current lease holder");
+  });
+
+  it("test_cli_install_returns_nonzero_when_activation_fails", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    expect((await run("lease", "acquire", "--session", "lead"))[0]).toBe(0);
+    const host = fakeHost({ platform: "darwin" }, (_cmd, args) => args[0] === "bootstrap"
+      ? { status: 9, stdout: "", stderr: "bootstrap refused" } : { status: 0, stdout: "", stderr: "" });
+    vi.spyOn(S, "realHost").mockReturnValue(host);
+    const [code, out] = await run("schedule", "install", "--backend", "launchd", "--session", "lead");
+    expect(code).toBe(2);
+    expect(out).toContain("bootstrap refused");
+  });
+
+  it("test_cli_refuses_explicit_backend_switch_until_old_jobs_are_removed", async () => {
+    expect((await run("init"))[0]).toBe(0);
+    expect((await run("lease", "acquire", "--session", "lead"))[0]).toBe(0);
+    const host = fakeHost({ platform: "linux" }, (cmd) => cmd === "crontab"
+      ? { status: 0, stdout: S.render("cron", [JOBS[1]], ctxFor(host))[0].contents, stderr: "" }
+      : { status: 0, stdout: "running", stderr: "" });
+    vi.spyOn(S, "realHost").mockReturnValue(host);
+    const [code, , err] = await run("schedule", "install", "--backend", "systemd", "--session", "lead");
+    expect(code).toBe(2);
+    expect(err).toContain("remove --backend cron");
+    expect(host.calls.some(([cmd, args]) => cmd === "systemctl" && args.includes("enable"))).toBe(false);
   });
 });

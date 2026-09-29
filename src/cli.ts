@@ -971,13 +971,14 @@ const cmdSchedule: Run = (a, io) => {
   const missing = S.unavailable(tree);
   const host = S.realHost();
   let backend: S.BackendName;
+  let ctx: S.RunContext;
   try {
     backend = (a.backend as S.BackendName | null) || S.detectBackend(host);
+    ctx = scheduleContext(host);
   } catch (e: any) {
     eprintln(io, `schedule: ${e.message}`);
     return 2;
   }
-  const ctx = scheduleContext(host);
   if (action === "install" && avail.some((j) => j.id === "lease-renew")) {
     const requested = session(a);
     const [code, result] = lease(C.loadOrDefault()).run("status");
@@ -1004,10 +1005,16 @@ const cmdSchedule: Run = (a, io) => {
         }
         return 0;
       }
+      const installed = S.installedBackend(host);
+      if (installed && installed !== backend) {
+        eprintln(io, `schedule: ${installed} jobs already installed; run orch schedule remove --backend ${installed} before switching to ${backend}`);
+        return 2;
+      }
       const rows = S.install(backend, avail, ctx, host);
       for (const r of rows) println(io, `installed ${r.id} -> ${r.path} (${r.activated ? "activated" : "written; " + r.detail})`);
-      println(io, `schedule: installed ${rows.length} job(s) via ${backend}`);
-      return 0;
+      const exitCode = S.installExitCode(rows);
+      println(io, `schedule: ${exitCode ? "activation failed for one or more of" : "installed"} ${rows.length} job(s) via ${backend}`);
+      return exitCode;
     }
     if (action === "status") {
       const rows = S.status(backend, avail, ctx, host);

@@ -14,8 +14,9 @@
  * invents a subcommand that isn't in src/cli.ts's tree.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CmdSpec } from "./args.js";
 import { which as pathWhich } from "./util.js";
 
@@ -139,19 +140,45 @@ function systemdUserUsable(host: Host): boolean {
   }
 }
 
-/** macOS => launchd. Linux => systemd --user when reachable, else the cron fallback. */
+function hasSystemdUnits(host: Host): boolean {
+  return CANDIDATES.some((job) => ["service", "timer"].some((ext) =>
+    existsSync(join(systemdDir(host.home), `${systemdUnitName(job.id)}.${ext}`))));
+}
+
+export function installedBackend(host: Host): BackendName | null {
+  if (host.platform === "darwin") return CANDIDATES.some((j) => existsSync(launchdPath(host.home, j.id))) ? "launchd" : null;
+  if (host.platform !== "linux") return null;
+  const units = hasSystemdUnits(host);
+  const crontab = host.which("crontab") ? readCrontab(host) : "";
+  const cron = crontab.includes(CRON_BEGIN) || crontab.includes(CRON_END);
+  if (cron) stripManagedBlock(crontab); // refuse ambiguous/truncated state before switching backend
+  if (units && cron) throw new ScheduleError("orch-os jobs exist in both systemd and cron; remove one backend explicitly");
+  return units ? "systemd" : cron ? "cron" : null;
+}
+
+/** Preserve the installed backend across transient changes in the Linux user bus. */
 export function detectBackend(host: Host): BackendName {
   if (host.platform === "darwin") return "launchd";
-  if (host.platform === "linux") return systemdUserUsable(host) ? "systemd" : "cron";
+  if (host.platform === "linux") {
+    const installed = installedBackend(host);
+    if (installed === "systemd") {
+      if (!systemdUserUsable(host)) throw new ScheduleError("systemd user bus unavailable while orch-os systemd units exist; retry when the bus is reachable");
+      return "systemd";
+    }
+    if (installed) return installed;
+    return systemdUserUsable(host) ? "systemd" : "cron";
+  }
   throw new ScheduleError(`orch schedule has no backend for platform '${host.platform}' (supported: darwin, linux)`);
 }
 
-/** The binary path baked into installed units: realpath of the running CLI, else `which orch`. */
-export function resolveOrchBin(argv1: string, host: Host): string {
+/** Use this package's own built executable, never an unrelated process or older PATH copy. */
+export function resolveOrchBin(_argv1: string, _host: Host): string {
+  const ownDist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
   try {
-    return realpathSync(argv1);
+    accessSync(ownDist, constants.X_OK);
+    return realpathSync(ownDist);
   } catch {
-    return host.which("orch") ?? argv1;
+    throw new ScheduleError("no executable orch CLI found in this build; run npm run build before installing jobs");
   }
 }
 
@@ -188,6 +215,16 @@ function commandArgs(job: JobCandidate, ctx: RunContext): string[] {
 
 function xmlEscape(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function systemdArg(s: string, forExec = false): string {
+  const escaped = s.replace(/%/g, "%%").replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    .replace(/\$/g, () => forExec ? "$$" : "$");
+  return /[\s"'\\]/.test(s) ? `"${escaped}"` : escaped;
+}
+
+function cronArg(s: string): string {
+  return `'${s.replace(/'/g, "'\\''").replace(/%/g, "\\%")}'`;
 }
 
 export function launchdLabel(id: string): string {
@@ -240,7 +277,7 @@ export function systemdDir(home: string): string {
 
 function renderSystemdFiles(job: JobCandidate, ctx: RunContext): [RenderedFile, RenderedFile] {
   const name = systemdUnitName(job.id);
-  const envLine = ctx.orchHome ? `Environment=ORCH_HOME=${ctx.orchHome}\n` : "";
+  const envLine = ctx.orchHome ? `Environment=${systemdArg(`ORCH_HOME=${ctx.orchHome}`)}\n` : "";
   const svc: RenderedFile = {
     path: join(systemdDir(ctx.home), `${name}.service`),
     contents: `[Unit]
@@ -248,7 +285,7 @@ Description=orch-os scheduled job: ${job.label}
 
 [Service]
 Type=oneshot
-${envLine}ExecStart=${ctx.orchBin} ${commandArgs(job, ctx).join(" ")}
+${envLine}ExecStart=${[ctx.orchBin, ...commandArgs(job, ctx)].map((arg) => systemdArg(arg, true)).join(" ")}
 `,
   };
   const timer: RenderedFile = {
@@ -278,9 +315,9 @@ function cronExpr(minutes: number): string {
 }
 
 function cronLine(job: JobCandidate, ctx: RunContext): string {
-  const envPrefix = ctx.orchHome ? `ORCH_HOME=${ctx.orchHome} ` : "";
+  const envPrefix = ctx.orchHome ? `ORCH_HOME=${cronArg(ctx.orchHome)} ` : "";
   const log = join(ctx.logDir, `${job.id}.log`);
-  return `${cronExpr(job.minutes)} ${envPrefix}${ctx.orchBin} ${commandArgs(job, ctx).join(" ")} >>${log} 2>&1`;
+  return `${cronExpr(job.minutes)} ${envPrefix}${cronArg(ctx.orchBin)} ${commandArgs(job, ctx).map(cronArg).join(" ")} >>${cronArg(log)} 2>&1`;
 }
 
 function renderCronBlock(jobs: JobCandidate[], ctx: RunContext): string {
@@ -290,9 +327,12 @@ function renderCronBlock(jobs: JobCandidate[], ctx: RunContext): string {
 function stripManagedBlock(text: string): string {
   const lines = text.split("\n");
   const start = lines.indexOf(CRON_BEGIN);
-  if (start === -1) return text;
-  let end = lines.indexOf(CRON_END, start);
-  if (end === -1) end = lines.length - 1;
+  const end = lines.indexOf(CRON_END, start + 1);
+  if (start === -1 && !lines.includes(CRON_END)) return text;
+  if (start === -1 || end === -1 || lines.indexOf(CRON_BEGIN, start + 1) !== -1
+      || lines.indexOf(CRON_END, end + 1) !== -1) {
+    throw new ScheduleError("malformed orch-os managed block in crontab; refusing to change it");
+  }
   const rest = [...lines.slice(0, start), ...lines.slice(end + 1)];
   return rest.join("\n").replace(/\n{3,}/g, "\n\n");
 }
@@ -324,6 +364,10 @@ export interface InstallRow {
   path: string;
   activated: boolean;
   detail: string;
+}
+
+export function installExitCode(rows: InstallRow[]): number {
+  return rows.every((row) => row.activated) ? 0 : 2;
 }
 
 export function install(backend: BackendName, jobs: JobCandidate[], ctx: RunContext, host: Host): InstallRow[] {
@@ -417,7 +461,8 @@ export function status(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   // cron
   const text = readCrontab(host);
   return jobs.map((job) => {
-    const present = text.includes(` ${ctx.orchBin} ${job.argv.join(" ")} `) || text.includes(` ${ctx.orchBin} ${job.argv.join(" ")}>`);
+    const command = `${cronArg(ctx.orchBin)} ${job.argv.map(cronArg).join(" ")}`;
+    const present = text.includes(command);
     return { id: job.id, label: job.label, written: present, loaded: present, detail: present ? "in crontab" : "not installed" };
   });
 }
@@ -432,9 +477,14 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   if (!jobs.length) return [];
   if (backend === "launchd") {
     return jobs.map((job) => {
-      host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]); // fine if not loaded
       const p = launchdPath(ctx.home, job.id);
       const removed = existsSync(p);
+      if (removed) {
+        const r = host.exec("launchctl", ["bootout", `gui/${host.uid}`, launchdLabel(job.id)]);
+        if (r.status !== 0 && !/could not find service|service not found/i.test(r.stderr)) {
+          throw new ScheduleError(`cannot deactivate ${launchdLabel(job.id)}: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
+        }
+      }
       if (removed) unlinkSync(p);
       return { id: job.id, removed, detail: removed ? `removed ${p}` : "was not installed" };
     });
@@ -442,9 +492,12 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
   if (backend === "systemd") {
     const rows = jobs.map((job) => {
       const name = systemdUnitName(job.id);
-      host.exec("systemctl", ["--user", "disable", "--now", `${name}.timer`]); // fine if not enabled
       const svc = join(systemdDir(ctx.home), `${name}.service`);
       const timer = join(systemdDir(ctx.home), `${name}.timer`);
+      if (existsSync(svc) || existsSync(timer)) {
+        const r = host.exec("systemctl", ["--user", "disable", "--now", `${name}.timer`]);
+        if (r.status !== 0) throw new ScheduleError(`cannot deactivate ${name}.timer: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
+      }
       let removed = false;
       for (const p of [svc, timer]) {
         if (existsSync(p)) {
@@ -454,13 +507,17 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
       }
       return { id: job.id, removed, detail: removed ? `removed ${name}.service/.timer` : "was not installed" };
     });
-    host.exec("systemctl", ["--user", "daemon-reload"]);
+    const reload = host.exec("systemctl", ["--user", "daemon-reload"]);
+    if (reload.status !== 0) throw new ScheduleError(`cannot reload systemd user units: ${firstLine(reload.stderr || reload.stdout || `exit ${reload.status}`)}`);
     return rows;
   }
   // cron
   const cur = readCrontab(host);
   const stripped = stripManagedBlock(cur);
   const changed = stripped !== cur;
-  if (changed) writeCrontab(host, stripped);
+  if (changed) {
+    const r = writeCrontab(host, stripped);
+    if (r.status !== 0) throw new ScheduleError(`cannot write crontab: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
+  }
   return jobs.map((job) => ({ id: job.id, removed: changed, detail: changed ? "removed from crontab" : "was not installed" }));
 }
