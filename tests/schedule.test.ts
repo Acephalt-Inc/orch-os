@@ -203,6 +203,7 @@ describe("ScheduleTest", () => {
       if (cmd === "systemctl" && args[0] === "--user" && args[1] === "is-active") {
         return args[2].includes("lease-renew") ? { status: 0, stdout: "active\n", stderr: "" } : { status: 3, stdout: "inactive\n", stderr: "" };
       }
+      if (cmd === "systemctl" && args[1] === "is-enabled") return { status: 0, stdout: "enabled\n", stderr: "" };
       return { status: 0, stdout: "", stderr: "" };
     });
     const ctx = ctxFor(host);
@@ -313,6 +314,7 @@ describe("ScheduleTest", () => {
     const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("disable")
       ? { status: 6, stdout: "", stderr: "user bus denied" }
       : args.includes("is-active") ? { status: 0, stdout: "active", stderr: "" }
+      : args.includes("is-enabled") ? { status: 0, stdout: "enabled", stderr: "" }
       : { status: 0, stdout: "", stderr: "" });
     const timer = join(S.systemdDir(systemd.home), `${S.systemdUnitName("load-sample")}.timer`);
     mkdirSync(dirname(timer), { recursive: true });
@@ -368,7 +370,9 @@ describe("ScheduleTest", () => {
     expect(launchd.calls.some(([, args]) => args[0] === "bootout")).toBe(true);
 
     const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
-      ? { status: 0, stdout: "active", stderr: "" } : { status: 0, stdout: "", stderr: "" });
+      ? { status: 0, stdout: "active", stderr: "" }
+      : args.includes("is-enabled") ? { status: 0, stdout: "enabled", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" });
     const systemdRows = S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd);
     expect(systemdRows[0].removed).toBe(true);
     expect(systemd.calls.some(([, args]) => args.includes("disable"))).toBe(true);
@@ -381,6 +385,33 @@ describe("ScheduleTest", () => {
     const systemd = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
       ? { status: null, stdout: "", stderr: "bus unavailable" } : { status: 0, stdout: "", stderr: "" });
     expect(() => S.remove("systemd", [JOBS[1]], ctxFor(systemd), systemd)).toThrow(/bus unavailable/);
+  });
+
+  it("test_remove_disables_enabled_inactive_timer_without_unit_files", () => {
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
+      ? { status: 3, stdout: "inactive", stderr: "" }
+      : args.includes("is-enabled") ? { status: 0, stdout: "enabled", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" });
+    const rows = S.remove("systemd", [JOBS[1]], ctxFor(host), host);
+    expect(rows[0].removed).toBe(true);
+    expect(host.calls.some(([, args]) => args.includes("disable"))).toBe(true);
+  });
+
+  it("test_remove_fails_closed_when_timer_enablement_is_unknown", () => {
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active")
+      ? { status: 3, stdout: "inactive", stderr: "" }
+      : args.includes("is-enabled") ? { status: null, stdout: "", stderr: "bus unavailable" }
+      : { status: 0, stdout: "", stderr: "" });
+    expect(() => S.remove("systemd", [JOBS[1]], ctxFor(host), host)).toThrow(/bus unavailable/);
+  });
+
+  it("test_remove_reports_skip_when_systemd_timer_is_confirmed_absent", () => {
+    const host = fakeHost({ platform: "linux" }, (_cmd, args) => args.includes("is-active") || args.includes("is-enabled")
+      ? { status: 4, stdout: "not-found", stderr: "" }
+      : { status: 0, stdout: "", stderr: "" });
+    const rows = S.remove("systemd", [JOBS[1]], ctxFor(host), host);
+    expect(rows[0].removed).toBe(false);
+    expect(host.calls.some(([, args]) => args.includes("disable"))).toBe(false);
   });
 
   it("test_backend_auto_selection_refuses_cron_when_systemd_units_exist", () => {

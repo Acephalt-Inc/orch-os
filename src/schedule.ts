@@ -509,18 +509,26 @@ export function remove(backend: BackendName, jobs: JobCandidate[], ctx: RunConte
       if (!active && !inactive && !missing) {
         throw new ScheduleError(`cannot inspect ${name}.timer: ${firstLine(state.stderr || state.stdout || `exit ${state.status}`)}`);
       }
-      if (written || active) {
+      const enableState = host.exec("systemctl", ["--user", "is-enabled", `${name}.timer`]);
+      const enableText = enableState.stdout.trim();
+      const enabled = enableState.status === 0 && /^(enabled|enabled-runtime)$/.test(enableText);
+      const disabled = enableState.status !== 0 && /^(disabled|masked|masked-runtime)$/.test(enableText);
+      const enableMissing = enableState.status === 4 && enableText === "not-found";
+      if (!enabled && !disabled && !enableMissing) {
+        throw new ScheduleError(`cannot inspect enablement of ${name}.timer: ${firstLine(enableState.stderr || enableState.stdout || `exit ${enableState.status}`)}`);
+      }
+      if (written || active || enabled) {
         const r = host.exec("systemctl", ["--user", "disable", "--now", `${name}.timer`]);
         if (r.status !== 0) throw new ScheduleError(`cannot deactivate ${name}.timer: ${firstLine(r.stderr || r.stdout || `exit ${r.status}`)}`);
       }
-      let removed = active;
+      let removed = active || enabled;
       for (const p of [svc, timer]) {
         if (existsSync(p)) {
           unlinkSync(p);
           removed = true;
         }
       }
-      return { id: job.id, removed, detail: written ? `removed ${name}.service/.timer` : active ? `deactivated ${name}.timer` : "was not installed" };
+      return { id: job.id, removed, detail: written ? `removed ${name}.service/.timer` : active || enabled ? `deactivated ${name}.timer` : "was not installed" };
     });
     const reload = host.exec("systemctl", ["--user", "daemon-reload"]);
     if (reload.status !== 0) throw new ScheduleError(`cannot reload systemd user units: ${firstLine(reload.stderr || reload.stdout || `exit ${reload.status}`)}`);
