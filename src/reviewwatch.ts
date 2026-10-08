@@ -12,8 +12,8 @@
  * - The reviewer comes from [review.agents.NAME] (cmd, vendor, account). chooseReviewer() drops
  *   every author agent (every holder of the task, as in the comments merge gate), grades the
  *   rest against the authors (cross-vendor, cross-account, single-agent in a fresh context) and
- *   takes the strongest, config order breaking ties. With a [profile], policy() for the PR's
- *   tier sets the strength needed; a best reviewer below it is BLOCKED, never a weaker dispatch.
+ *   takes the strongest, config order breaking ties. With a [profile], its selected policy
+ *   sets the strength needed; a best reviewer below it is BLOCKED, never a weaker dispatch.
  * - One dispatch per (PR, head), recorded in a state file under $ORCH_HOME. A new head gets a
  *   new dispatch; the same head never gets a second one unless --force. A reviewer that posts
  *   no line for the head within stale_minutes is STALE (and `orch doctor` lists it).
@@ -192,7 +192,7 @@ export interface Choice {
   excluded: string[];
   tier: P.Tier | null;
   tierSource: string | null;
-  cell: P.Cell | null;
+  policy: P.PolicyName | null;
   need: P.Strength | null;
   reason: string | null;
 }
@@ -223,11 +223,11 @@ export function chooseReviewer(inp: ChooseInput): Choice {
       const w = where(a.name, inp.profile, inp.agents);
       return { name: a.name, label: gradeReviewer(w, authorsAt), ...w, available: a.shell !== null || inp.which(a.argv![0]) !== null };
     });
-  const res: Choice = { pick: null, candidates, excluded, tier: null, tierSource: null, cell: null, need: null, reason: null };
+  const res: Choice = { pick: null, candidates, excluded, tier: null, tierSource: null, policy: null, need: null, reason: null };
   if (inp.profile) {
     const t = P.chooseTier(inp.profile, inp.tierFlag, inp.files === undefined ? [] : inp.files);
     const pol = P.policyFor(inp.profile, t.tier);
-    Object.assign(res, { tier: t.tier, tierSource: t.source, cell: pol.cell, need: pol.needAgent });
+    Object.assign(res, { tier: t.tier, tierSource: t.source, policy: pol.name, need: pol.needAgent });
   }
   const ready = candidates.filter((c) => c.available);
   if (!inp.agents.length) {
@@ -243,7 +243,7 @@ export function chooseReviewer(inp: ChooseInput): Choice {
   let best = ready[0];
   for (const c of ready) if (LABELS.indexOf(c.label) > LABELS.indexOf(best.label)) best = c;
   if (res.need && !P.meets(strengthOf(best.label), res.need)) {
-    res.reason = `the strongest available reviewer, ${best.name}, is ${best.label}; profile ${res.cell} at tier ${res.tier} needs ${res.need}. ` +
+    res.reason = `the strongest available reviewer, ${best.name}, is ${best.label}; policy ${res.policy} at tier ${res.tier} needs ${res.need}. ` +
       "Add a reviewer on another " + (res.need === "cross-vendor" ? "vendor" : "account") + " to [review.agents]";
     return res;
   }

@@ -219,7 +219,11 @@ const cmdInit: Run = (a, io) => {
     writeFileSync(p, text);
     println(io, `wrote ${p}`);
     if (kept) println(io, "kept the existing [profile] tables");
-    else if (fresh) println(io, `profile: ${P.cellLabel(P.readProfile(parseToml(text))!)} (\`orch profile show\`; add agents with \`orch profile update --agent NAME=ACCOUNT\`)`);
+    else if (fresh) {
+      const written = P.readProfile(parseToml(text))!;
+      println(io, `profile: ${P.profileLabel(written)}, required_review = ${written.required_review}, max_workers = ${written.max_workers} ` +
+        "(`orch profile show`; add agents with `orch profile update --agent NAME=ACCOUNT`)");
+    }
     else if (io.isTTY?.() && io.ask && !a.no_profile) println(io, "no profile written (`orch profile update --compute ... --people ...` adds one later)");
   }
   const cfg = C.load();
@@ -618,10 +622,10 @@ const cmdWorker: Run = async (a, io) => {
     if (action === "start") {
       const prof = P.readProfile(cfg);
       if (prof && !a.force) {
-        const cap = P.policyFor(prof, "high").workerCap;
+        const cap = prof.max_workers;
         const running = w.list().filter((x) => x.state === "RUNNING").length;
         if (running >= cap) {
-          eprintln(io, `worker: ${running} worker(s) running and the profile's worker cap is ${cap} (${P.cellLabel(prof)}); stop one, or pass --force`);
+          eprintln(io, `worker: ${running} worker(s) running and [profile] max_workers is ${cap}; stop one, raise max_workers, or pass --force`);
           return 2;
         }
       }
@@ -811,26 +815,23 @@ function showProfile(io: IO, cfg: Record<string, any>, json: boolean): number {
     println(io, json ? dumps({ profile: null }) : "profile: not set (merge gate uses the plain rule)");
     return 0;
   }
-  const eff = P.effective(prof);
   const rows = P.capabilityRows(prof, profileEnv(cfg));
   const pol = (t: P.Tier) => {
     const x = P.policyFor(prof, t);
     return { need_agent: x.needAgent, need_teammate: x.needTeammate, authority: x.authority, worker_cap: x.workerCap };
   };
-  const cell = P.cellOf(eff.compute, prof.people);
-  const declared = P.cellOf(prof.compute, prof.people);
   const missing = rows.filter(([ok]) => !ok).map(([, name, detail]) => `${name}: ${detail}`);
   if (json) {
     println(io, dumps({
-      cell, declared_cell: declared, compute: prof.compute, effective_compute: eff.compute, people: prof.people,
-      lead_account: prof.lead_account, default_tier: prof.default_tier, high_paths: prof.high_paths, teammates: prof.teammates,
-      accounts: prof.accounts, agents: prof.raw.agents ?? {}, max_workers: prof.max_workers, workers_per_account: prof.workers_per_account,
-      policy: { low: pol("low"), high: pol("high") }, degraded: eff.degraded, missing,
+      policy: prof.policy, compute: prof.compute, people: prof.people, lead_account: prof.lead_account,
+      required_review: prof.required_review, default_tier: prof.default_tier, high_paths: prof.high_paths, teammates: prof.teammates,
+      accounts: prof.accounts, agents: prof.raw.agents ?? {}, max_workers: prof.max_workers,
+      rules: { low: pol("low"), high: pol("high") }, missing,
     }));
     return 0;
   }
   const list = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
-  println(io, `profile: ${P.cellLabel(prof)}` + (declared !== cell ? `, declared cell ${declared} (${prof.compute} · ${prof.people})` : ""));
+  println(io, `profile: ${P.profileLabel(prof)}`);
   println(io, `accounts: ${list(Object.entries(prof.accounts).map(([id, v]) => `${id} (${v})`))}` + (prof.lead_account ? `; lead ${prof.lead_account}` : ""));
   println(io, `agents: ${list(Object.entries<string>(prof.raw.agents ?? {}).map(([n, id]) => `${n}=${id}`))}`);
   println(io, `teammates: ${list(prof.teammates)}`);
@@ -876,13 +877,21 @@ const cmdProfile: Run = (a, io) => {
     throw e;
   }
   if (cfg.profile === undefined && !(a.compute && a.people)) return fail("no [profile] yet: creating one needs both --compute and --people");
-  const raw: Record<string, any> = structuredClone(cfg.profile ?? {});
+  // a NEW profile starts from the public example policy, written out in full. An existing profile
+  // without a policy key (written for the removed table) gets nothing filled in: it stays refused
+  // until --policy, --required-review and --max-workers are given.
+  const raw: Record<string, any> = cfg.profile === undefined ? { ...P.EXAMPLE_POLICY } : structuredClone(cfg.profile);
   try {
+    if (a.policy) raw.policy = a.policy;
+    if (a.required_review) raw.required_review = a.required_review;
     if (a.compute) raw.compute = a.compute;
     if (a.people) raw.people = a.people;
     if (a.default_tier) raw.default_tier = a.default_tier;
     if (a.lead_account) raw.lead_account = a.lead_account;
-    if (a.max_workers !== null) raw.max_workers = a.max_workers;
+    if (a.max_workers !== null) {
+      raw.max_workers = a.max_workers;
+      delete raw.workers_per_account; // the explicit limit replaces the removed per-account derivation
+    }
     for (const [t, add, del, what] of [["accounts", pairs(a.account, "--account"), a.remove_account, "account"],
       ["agents", pairs(a.agent, "--agent"), a.remove_agent, "agent"]] as const) {
       if (!add.length && !del.length) continue;
@@ -1046,20 +1055,22 @@ export function buildTree(): CmdSpec<Run> {
           opt("reviews", ["--reviews"], "str", "where approvals come from (default [review] source, else github)", { choices: M.REVIEW_SOURCES }),
           opt("task", ["--task"], "str", "comments mode: the task id whose holder authored the PR", { metavar: "ID" }),
           opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
-          opt("auto", ["--auto"], "bool", "profile only: the caller merges automatically on PASS; passes only under auto authority"),
+          opt("auto", ["--auto"], "bool", "profile only: the caller would merge automatically on PASS; always BLOCKED, a person performs every merge"),
           JSON_OPT,
         ],
       },
       {
-        name: "profile", help: "the [profile] setup (accounts x people) and the review policy it gives",
+        name: "profile", help: "the [profile] tables: declared accounts and people, and the review policy you selected",
         sub: [
           { name: "show", help: "cell, accounts, agents, the policy per tier, and missing capabilities", run: cmdProfile, opts: [JSON_OPT] },
           {
             name: "update", help: "change only the [profile] tables of config.toml", run: cmdProfile,
-            usage: "orch profile update [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... " +
+            usage: "orch profile update [--policy human-merge] [--required-review S] [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... " +
               "[--remove-agent NAME]... [--teammate LOGIN]... [--remove-teammate LOGIN]... [--high-path GLOB]... [--remove-high-path GLOB]... " +
               "[--default-tier low|high] [--lead-account ID] [--max-workers N] [--dry-run]",
             opts: [
+              opt("policy", ["--policy"], "str", "the review policy: human-merge", { choices: P.POLICIES }),
+              opt("required_review", ["--required-review"], "str", "weakest agent review that passes: single-agent, cross-account or cross-vendor", { choices: P.STRENGTHS }),
               opt("compute", ["--compute"], "str", "one, same-vendor or multi-vendor", { choices: P.COMPUTES }),
               opt("people", ["--people"], "str", "solo or team", { choices: P.PEOPLE }),
               opt("account", ["--account"], "list", "add or change an account: ID=VENDOR (repeatable)", { metavar: "ID=VENDOR" }),
@@ -1072,7 +1083,7 @@ export function buildTree(): CmdSpec<Run> {
               opt("remove_high_path", ["--remove-high-path"], "list", "remove a path glob (repeatable)", { metavar: "GLOB" }),
               opt("default_tier", ["--default-tier"], "str", "tier when neither --tier nor a path rule decides", { choices: P.TIERS }),
               opt("lead_account", ["--lead-account"], "str", "the account the lead runs on", { metavar: "ID" }),
-              opt("max_workers", ["--max-workers"], "int", "worker cap (0 = derived from the cell)", { metavar: "N" }),
+              opt("max_workers", ["--max-workers"], "int", "most workers running at once (an integer >= 1)", { metavar: "N" }),
               opt("dry_run", ["--dry-run"], "bool", "print the new tables; write nothing"),
             ],
           },
