@@ -1,18 +1,20 @@
 #!/bin/sh
 # ORCH-os installer for a checkout or a git source (POSIX sh, no sudo).
 # The usual install is npm:  npm i -g orch-os   or   npx orch-os init
-# This script is for installing straight from a repository:
+# This script is for installing straight from a repository you have already inspected:
 #
 #   From a checkout:            sh install.sh
-#   Piped, private repo (gh):   gh api -H "Accept: application/vnd.github.raw" \
-#                                 repos/Acephalt-Inc/orch-os/contents/install.sh | ORCH_OS_GH_REPO=Acephalt-Inc/orch-os sh
-#   Piped, public repo:         curl -fsSL https://raw.githubusercontent.com/Acephalt-Inc/orch-os/main/install.sh \
-#                                 | ORCH_OS_GH_REPO=Acephalt-Inc/orch-os sh
+#
+# It replaces, on every run: ~/.orch/lib/orch-os, the launcher ~/.local/bin/orch (or
+# $ORCH_PREFIX/bin/orch), and ~/.orch/src when it fetches the source. Do not use it for an
+# isolated trial next to an existing install: install a packed tarball into its own prefix
+# (npm install --prefix DIR orch-os-<version>.tgz) and set ORCH_HOME for that trial.
 #
 # Source, in order: the checkout install.sh lives in; else ORCH_OS_REPO (any git URL or local
 # path); else the current directory if it is a checkout; else ORCH_OS_GH_REPO (owner/name),
 # fetched with `gh repo clone` when gh is logged in (works for a private repo) or a plain https
-# clone otherwise (public repo only). ORCH_OS_REF picks a branch or tag.
+# clone otherwise (public repo only). ORCH_OS_REF picks a branch or tag; without it the clone
+# is the default branch as it is at that moment, so name a tag when you need a fixed version.
 # A source without a built dist/ is built with `npm install && npm run build` (this fetches the
 # build tools from the npm registry once). Installs the package to ~/.orch/lib/orch-os and a
 # launcher to ~/.local/bin/orch (override with ORCH_PREFIX). Re-running upgrades in place.
@@ -27,7 +29,7 @@ LIB="$HOME/.orch/lib"
 say() { printf 'orch-install: %s\n' "$*"; }
 die() { printf 'orch-install: ERROR: %s\n' "$*" >&2; exit 1; }
 
-# 1. a Node.js >= 22
+# 1. a Node.js >= 22 (package.json engines)
 NODE=""
 for c in "${ORCH_NODE:-node}" node; do
   p=$(command -v "$c" 2>/dev/null || true)

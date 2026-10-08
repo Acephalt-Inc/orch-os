@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-// `orch review watch`: CI at the head, reviewer choice per profile cell, one dispatch per head.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+// `orch review watch`: CI at the head, reviewer choice under the profile's selected policy, one dispatch per head.
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { reviewStart } from "../src/cli.js";
 import * as P from "../src/profile.js";
 import * as RW from "../src/reviewwatch.js";
 import { parseToml } from "../src/toml.js";
 import { AttendedWorkers as Workers, useAttendedTerminal } from "./_attended.js";
-import { run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { fakeBin, keepEnv, run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { which } from "../src/util.js";
+
+const timeoutTool = which("timeout") ?? which("gtimeout");
 
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";
@@ -52,11 +57,11 @@ function input(agents: RW.ReviewAgent[], extra: Partial<RW.WatchInput> = {}): RW
   return { pr: 7, repo: "acme/widgets", authors: ["w1"], agents, profile: null, settings: settings(), ...extra };
 }
 
-/** A profile from TOML text: compute, people and the accounts/agents tables. */
-function profile(compute: P.Compute, people: P.People, accounts: Record<string, string>, agents: Record<string, string>, extra = ""): P.Profile {
+/** A profile from TOML text: the human-merge policy with `review` as required_review, the declared compute and people, and the accounts/agents tables. */
+function profile(review: P.Strength, compute: P.Compute, people: P.People, accounts: Record<string, string>, agents: Record<string, string>, extra = ""): P.Profile {
   const acc = Object.entries(accounts).map(([k, v]) => `${k} = "${v}"`).join("\n");
   const ag = Object.entries(agents).map(([k, v]) => `${k} = "${v}"`).join("\n");
-  const text = `[profile]\ncompute = "${compute}"\npeople = "${people}"\nteammates = ["mate"]\n${extra}\n[profile.accounts]\n${acc}\n\n[profile.agents]\n${ag}\n`;
+  const text = `[profile]\npolicy = "human-merge"\nrequired_review = "${review}"\nmax_workers = 2\ncompute = "${compute}"\npeople = "${people}"\nteammates = ["mate"]\n${extra}\n[profile.accounts]\n${acc}\n\n[profile.agents]\n${ag}\n`;
   return P.readProfile(parseToml(text))!;
 }
 
@@ -148,67 +153,71 @@ describe("ReviewWatchChoice", () => {
   const r2 = agent("r2");
   const r3 = agent("r3");
 
-  it("cell_A_one_account_solo_gives_a_labelled_single_agent_review", () => {
-    const c = choose([r1], profile("one", "solo", A1, { w1: "a1", r1: "a1" }));
-    expect([c.cell, c.need, c.pick?.name, c.pick?.label]).toEqual(["A", "single-agent", "r1", "single-agent (fresh context)"]);
+  it("required_review_single_agent_gives_a_labelled_single_agent_review", () => {
+    for (const people of P.PEOPLE) {
+      const c = choose([r1], profile("single-agent", "one", people, A1, { w1: "a1", r1: "a1" }));
+      expect([c.policy, c.need, c.pick?.name, c.pick?.label]).toEqual(["human-merge", "single-agent", "r1", "single-agent (fresh context)"]);
+    }
   });
 
-  it("cell_B_same_vendor_solo_prefers_cross_account_and_blocks_on_the_author_account_only", () => {
-    const p = profile("same-vendor", "solo", SAME, { w1: "a1", r1: "a1", r2: "a2" });
-    const c = choose([r1, r2], p);
-    expect([c.cell, c.need, c.pick?.name, c.pick?.label]).toEqual(["B", "cross-account", "r2", "cross-account"]);
-    const only = choose([r1], p);
-    expect(only.pick).toBeNull();
-    expect(only.reason).toContain("r1, is single-agent (fresh context); profile B at tier high needs cross-account");
+  it("required_review_cross_account_prefers_another_account_and_blocks_on_the_author_account_only", () => {
+    for (const people of P.PEOPLE) {
+      const p = profile("cross-account", "same-vendor", people, SAME, { w1: "a1", r1: "a1", r2: "a2" });
+      const c = choose([r1, r2], p);
+      expect([c.policy, c.need, c.pick?.name, c.pick?.label]).toEqual(["human-merge", "cross-account", "r2", "cross-account"]);
+      // only a reviewer on the author's account is available: BLOCKED, never a weaker dispatch, on either tier
+      for (const tier of P.TIERS) {
+        const only = choose([r1], p, ["w1"], tier);
+        expect(only.pick).toBeNull();
+        expect(only.reason).toContain(`r1, is single-agent (fresh context); policy human-merge at tier ${tier} needs cross-account`);
+        expect(only.reason).toContain("Add a reviewer on another account");
+      }
+    }
   });
 
-  it("cell_C_multi_vendor_solo_prefers_cross_vendor_and_the_tier_decides_the_fallback", () => {
-    const p = profile("multi-vendor", "solo", MULTI, MAP);
-    const c = choose([r1, r2, r3], p);
-    expect([c.cell, c.pick?.name, c.pick?.label]).toEqual(["C", "r3", "cross-vendor"]);
-    // high tier needs another vendor: a same-vendor reviewer is BLOCKED, never dispatched
-    const high = choose([r1, r2], p, ["w1"], "high");
-    expect([high.need, high.pick]).toEqual(["cross-vendor", null]);
-    expect(high.reason).toContain("Add a reviewer on another vendor");
-    // low tier: cross-account is enough
-    const low = choose([r1, r2], p, ["w1"], "low");
-    expect([low.need, low.pick?.name, low.pick?.label]).toEqual(["cross-account", "r2", "cross-account"]);
-    expect(choose([r1], p, ["w1"], "low").pick).toBeNull();
+  it("required_review_cross_vendor_needs_another_vendor_on_both_tiers", () => {
+    for (const people of P.PEOPLE) {
+      const p = profile("cross-vendor", "multi-vendor", people, MULTI, MAP);
+      const c = choose([r1, r2, r3], p);
+      expect([c.need, c.pick?.name, c.pick?.label]).toEqual(["cross-vendor", "r3", "cross-vendor"]);
+      // a same-vendor reviewer is BLOCKED, never dispatched; the low tier does not lower the strength
+      for (const tier of P.TIERS) {
+        const same = choose([r1, r2], p, ["w1"], tier);
+        expect([same.tier, same.need, same.pick], tier).toEqual([tier, "cross-vendor", null]);
+        expect(same.reason).toContain("Add a reviewer on another vendor");
+        expect(choose([r2, r3], p, ["w1"], tier).pick?.name).toBe("r3");
+      }
+    }
   });
 
-  it("cell_D_one_account_team_gives_a_labelled_single_agent_review", () => {
-    const c = choose([r1], profile("one", "team", A1, { w1: "a1", r1: "a1" }));
-    expect([c.cell, c.need, c.pick?.name, c.pick?.label]).toEqual(["D", "single-agent", "r1", "single-agent (fresh context)"]);
+  it("the_strongest_available_reviewer_is_picked_above_the_requirement", () => {
+    // the profile asks for cross-account only; a cross-vendor reviewer is still preferred when one is available
+    const p = profile("cross-account", "multi-vendor", "solo", MULTI, MAP);
+    expect([choose([r1, r2, r3], p).pick?.name, choose([r1, r2], p).pick?.name]).toEqual(["r3", "r2"]);
+    expect(choose([r1], p).pick).toBeNull();
   });
 
-  it("cell_E_same_vendor_team_prefers_cross_account_and_blocks_on_the_author_account_only", () => {
-    const p = profile("same-vendor", "team", SAME, { w1: "a1", r1: "a1", r2: "a2" });
-    expect([choose([r1, r2], p).cell, choose([r1, r2], p).pick?.name]).toEqual(["E", "r2"]);
-    expect(choose([r1], p, ["w1"], "low").pick).toBeNull();
-  });
-
-  it("cell_F_multi_vendor_team_needs_another_vendor_even_at_low_tier", () => {
-    const p = profile("multi-vendor", "team", MULTI, MAP);
-    expect([choose([r2, r3], p, ["w1"], "low").cell, choose([r2, r3], p, ["w1"], "low").pick?.name]).toEqual(["F", "r3"]);
-    const low = choose([r1, r2], p, ["w1"], "low");
-    expect([low.need, low.pick]).toEqual(["cross-vendor", null]);
-  });
-
-  it("a_degraded_profile_follows_the_effective_cell", () => {
-    // same-vendor declared with one account: the rule is cell A's, so a single-agent review is allowed and labelled
-    const c = choose([r1], profile("same-vendor", "solo", A1, { w1: "a1", r1: "a1" }));
-    expect([c.cell, c.pick?.name, c.pick?.label]).toEqual(["A", "r1", "single-agent (fresh context)"]);
+  it("declared_accounts_never_lower_the_requirement", () => {
+    // same-vendor declared with one account: the removed table fell back to a single-agent rule here. Now the
+    // strength written in the profile holds, and the watch is BLOCKED until a reviewer on another account exists.
+    const c = choose([r1], profile("cross-account", "same-vendor", "solo", A1, { w1: "a1", r1: "a1" }));
+    expect([c.need, c.pick]).toEqual(["cross-account", null]);
+    expect(c.reason).toContain("policy human-merge at tier high needs cross-account");
+    // through watchOnce: nothing is started
+    const f = fakeHost();
+    const out = RW.watchOnce(input([r1], { profile: profile("cross-account", "same-vendor", "solo", A1, { w1: "a1", r1: "a1" }) }), f.host);
+    expect([out.outcome, f.calls.dispatch]).toEqual(["BLOCKED", []]);
   });
 
   it("the_author_is_never_chosen", () => {
-    const p = profile("one", "solo", A1, { w1: "a1", r1: "a1" });
+    const p = profile("single-agent", "one", "solo", A1, { w1: "a1", r1: "a1" });
     // the author is first in config order and ties with r1: it is still skipped
     const c = choose([agent("w1"), r1], p);
     expect([c.pick?.name, c.excluded]).toEqual(["r1", ["w1"]]);
     // names compare case-insensitively
     expect(choose([agent("W1"), r1], p).pick?.name).toBe("r1");
     // a hand-off: every holder is an author, even the strongest reviewer
-    const m = profile("multi-vendor", "solo", MULTI, MAP);
+    const m = profile("cross-account", "multi-vendor", "solo", MULTI, MAP);
     const h = choose([r3, r2], m, ["w1", "r3"], "low");
     expect([h.pick?.name, h.excluded]).toEqual(["r2", ["r3"]]);
     // only the author is configured: BLOCKED with the reason, never a self-review
@@ -225,6 +234,8 @@ describe("ReviewWatchChoice", () => {
     // the author w1 is a declared review agent too, so its vendor and account are known
     const agents = [agent("w1", "claude", "a1"), agent("s1", "claude", "a1"), agent("s2", "claude", "a2"), agent("x1", "codex", "a3")];
     expect([choose(agents, null).pick?.name, choose(agents, null).pick?.label, choose(agents, null).need]).toEqual(["x1", "cross-vendor", null]);
+    // the --json key is `policy` (it was `cell`), and it is null without a profile
+    expect([choose(agents, null).policy, "cell" in choose(agents, null)]).toEqual([null, false]);
     expect(choose(agents.slice(0, 3), null).pick?.label).toBe("cross-account");
     expect(choose(agents.slice(0, 2), null).pick?.label).toBe("single-agent (fresh context)");
     // nothing declared: unmapped, first in config order
@@ -233,7 +244,7 @@ describe("ReviewWatchChoice", () => {
 
   it("a_reviewer_whose_command_is_missing_is_skipped", () => {
     const missing: RW.ReviewAgent = { ...r3, argv: ["missing-bin"] };
-    const p = profile("multi-vendor", "solo", MULTI, MAP);
+    const p = profile("cross-account", "multi-vendor", "solo", MULTI, MAP);
     const c = choose([missing, r2], p, ["w1"], "low");
     expect([c.pick?.name, c.candidates.find((x) => x.name === "r3")?.available]).toEqual(["r2", false]);
     expect(choose([missing], p, ["w1"], "low").reason).toContain("no reviewer command found on PATH (r3)");
@@ -353,7 +364,7 @@ describe("ReviewWatchConfig", () => {
     expect(bad(`[review.watch]\nstale_minutes = 0\n`)).toThrow(/stale_minutes/);
     expect(bad(`[review.watch]\nevery = 1\n`)).toThrow(/unknown key 'every'/);
     // a vendor that contradicts [profile.accounts] is a config error, not a silent pick
-    const p = profile("multi-vendor", "solo", { a1: "claude", a3: "codex" }, { w1: "a1" });
+    const p = profile("cross-vendor", "multi-vendor", "solo", { a1: "claude", a3: "codex" }, { w1: "a1" });
     expect(() => choose([agent("x1", "claude", "a3")], p)).toThrow(/is on 'codex'/);
   });
 });
@@ -465,5 +476,52 @@ describe("ReviewWatchDispatch", () => {
     });
     expect(await waitFor(() => existsSync(out) && readFileSync(out, "utf8").includes("review this"))).toBe(true);
     expect(readFileSync(out, "utf8")).toBe(`r1 7 ${H1}\nreview this\n`);
+  });
+});
+
+describe("ReviewWatchWorkerLimit", () => {
+  const ctx = useTmpHome();
+  keepEnv(["PATH"]);
+
+  it("a_review_dispatch_is_refused_at_the_written_worker_limit", async () => {
+    const prof = profile("single-agent", "one", "solo", { a1: "codex" }, { w1: "a1", r1: "a1" }); // max_workers = 2
+    const prompt = join(ctx.home, "p.md");
+    writeFileSync(prompt, "review this\n");
+    // A dispatch runs the launch admission, so the reviewer is a stand-in `codex` whose login-status
+    // command exits 0 and which otherwise sleeps; gh, a time-limit tool and fresh load state are supplied.
+    const bins = join(ctx.home, "bin");
+    mkdirSync(bins);
+    const codex = fakeBin(bins, "codex", 'if [ "$1" = "login" ]; then exit 0; fi; exec /bin/sleep 30');
+    fakeBin(bins, "gh", "exit 0");
+    expect(timeoutTool).toBeTruthy();
+    symlinkSync(timeoutTool!, join(bins, "timeout"));
+    process.env.PATH = `${bins}:/usr/bin:/bin`;
+    const repo = join(ctx.home, "repo");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    expect(spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/acme/widgets.git"]).status).toBe(0);
+    const cwd = process.cwd();
+    process.chdir(repo);
+    writeFileSync(join(ctx.home, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
+    const cfg = { workers: { nice: 0 }, merge: { repo: "acme/widgets" }, review: { agents: { r1: { cmd: [codex] } } } };
+    const start = reviewStart(cfg, prof);
+    const spec = (worker: string): RW.DispatchSpec => ({ worker, argv: [codex], env: { ORCH_AGENT: "r1", ORCH_REVIEW_PR: "7" }, prompt, minutes: 1 });
+    const running = async () => (await run("worker", "list"))[1].split("\n").filter((l) => l.includes("RUNNING")).length;
+    try {
+      expect(start(spec("review-7-a")).pid).toBeGreaterThan(0);
+      expect(start(spec("review-7-b")).pid).toBeGreaterThan(0);
+      expect(await running()).toBe(2);
+      // the third dispatch is refused by the same limit `orch worker start` uses
+      expect(() => start(spec("review-7-c"))).toThrow("2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers");
+      // through the watch it is a BLOCKED result: nothing is started
+      const { host } = fakeHost();
+      const r = RW.watchOnce(input([{ ...agent("r1", "codex", "a1"), argv: [codex] }], { profile: prof }), { ...host, dispatch: start });
+      expect([r.outcome, r.detail]).toEqual(["BLOCKED", "starting r1 failed: 2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers"]);
+      expect(await running()).toBe(2);
+      // without a profile there is no limit
+      expect(reviewStart(cfg, null)(spec("review-7-d")).pid).toBeGreaterThan(0);
+    } finally {
+      process.chdir(cwd);
+      for (const n of ["a", "b", "c", "d"]) await run("worker", "stop", `review-7-${n}`);
+    }
   });
 });

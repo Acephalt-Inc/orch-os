@@ -12,8 +12,8 @@
  * - The reviewer comes from [review.agents.NAME] (cmd, vendor, account). chooseReviewer() drops
  *   every author agent (every holder of the task, as in the comments merge gate), grades the
  *   rest against the authors (cross-vendor, cross-account, single-agent in a fresh context) and
- *   takes the strongest, config order breaking ties. With a [profile], policy() for the PR's
- *   tier sets the strength needed; a best reviewer below it is BLOCKED, never a weaker dispatch.
+ *   takes the strongest, config order breaking ties. With a [profile], its selected policy
+ *   sets the strength needed; a best reviewer below it is BLOCKED, never a weaker dispatch.
  * - One dispatch per (PR, head), recorded in a state file under $ORCH_HOME. A new head gets a
  *   new dispatch; the same head never gets a second one unless --force. A reviewer that posts
  *   no line for the head within stale_minutes is STALE (and `orch doctor` lists it).
@@ -23,6 +23,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { ciVerdict, type CheckRow } from "./mergegate.js";
 import { ConfigError, configNumber, expand, orchHome } from "./config.js";
 import { withLock } from "./lock.js";
 import * as M from "./mergegate.js";
@@ -30,35 +31,44 @@ import * as P from "./profile.js";
 import { dumps } from "./pyjson.js";
 import { atomicWrite, isPlainObject, sleep, validName, which } from "./util.js";
 
+export type { CheckRow } from "./mergegate.js";
+
 const SHA_RE = /^[0-9a-f]{40}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const CI_OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const CI_FAILED = new Set(["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"]);
 
 // ---- CI at the head -----------------------------------------------------------------------------
 
-/** One check run or status context, with the commit it reports on. */
-export interface CheckRow {
-  sha: string;
-  name: string;
-  /** conclusion when completed, else the run's status (QUEUED, IN_PROGRESS, PENDING, ...) */
-  state: string;
+/** Join each check suite to its workflow; an absent/blank/conflicting join is unknown. */
+export function checkRows(runs: any[][], statuses: any[][], workflowRuns: any[][] | null): CheckRow[] {
+  const bySuite = new Map<string, string | null>();
+  for (const w of workflowRuns ?? []) {
+    if (w[0] == null) continue;
+    const suite = String(w[0]);
+    const name = typeof w[1] === "string" && w[1] !== "" ? w[1] : null;
+    bySuite.set(suite, bySuite.has(suite) && bySuite.get(suite) !== name ? null : name);
+  }
+  const row = (r: any[], workflow: string | null): CheckRow =>
+    ({ sha: String(r[0] ?? ""), name: String(r[1] ?? "?"), state: String(r[2] ?? ""), workflow });
+  return [
+    ...runs.map((r) => row(r, bySuite.get(String(r[3])) ?? null)),
+    ...statuses.map((r) => row(r, "")),
+  ];
 }
 
-export type CiState = "green" | "pending" | "failed" | "none";
+export type CiState = "green" | "pending" | "failed" | "none" | "not-passed";
 
-/**
- * CI of one commit. Only rows whose sha IS the head count: rows for any other commit are
- * ignored, so a green older commit never makes a new head green. No row at the head = "none".
- */
-export function ciAtHead(head: string, rows: CheckRow[]): { state: CiState; bad: string[] } {
-  const at = rows.filter((r) => r.sha.toLowerCase() === head.toLowerCase());
-  if (!at.length) return { state: "none", bad: [] };
-  const failed = at.filter((r) => CI_FAILED.has(r.state.toUpperCase())).map((r) => `${r.name}=${r.state.toUpperCase()}`);
+/** Classify the shared verdict for watch's status messages; only ciVerdict decides green. */
+export function ciAtHead(head: string, rows: CheckRow[], requiredChecks: string[] = []): { state: CiState; bad: string[] } {
+  const v = ciVerdict(head, rows, requiredChecks);
+  const show = (c: CheckRow) => `${c.name}=${c.state.toUpperCase() || "PENDING"}`;
+  if (v.ok) return { state: "green", bad: [] };
+  const failed = v.bad.filter((c) => CI_FAILED.has(c.state.toUpperCase())).map(show);
   if (failed.length) return { state: "failed", bad: failed };
-  const pending = at.filter((r) => !CI_OK.has(r.state.toUpperCase())).map((r) => `${r.name}=${r.state.toUpperCase()}`);
-  if (pending.length) return { state: "pending", bad: pending };
-  return { state: "green", bad: [] };
+  if (v.bad.length) return { state: "pending", bad: v.bad.map(show) };
+  if (v.unmet.length) return { state: "not-passed", bad: v.unmet.map(([name, why]) => `${name}=${why}`) };
+  if (!v.at.length) return { state: "none", bad: [] };
+  return { state: "not-passed", bad: v.at.map(show) };
 }
 
 // ---- configuration ------------------------------------------------------------------------------
@@ -192,7 +202,7 @@ export interface Choice {
   excluded: string[];
   tier: P.Tier | null;
   tierSource: string | null;
-  cell: P.Cell | null;
+  policy: P.PolicyName | null;
   need: P.Strength | null;
   reason: string | null;
 }
@@ -223,11 +233,11 @@ export function chooseReviewer(inp: ChooseInput): Choice {
       const w = where(a.name, inp.profile, inp.agents);
       return { name: a.name, label: gradeReviewer(w, authorsAt), ...w, available: a.shell !== null || inp.which(a.argv![0]) !== null };
     });
-  const res: Choice = { pick: null, candidates, excluded, tier: null, tierSource: null, cell: null, need: null, reason: null };
+  const res: Choice = { pick: null, candidates, excluded, tier: null, tierSource: null, policy: null, need: null, reason: null };
   if (inp.profile) {
     const t = P.chooseTier(inp.profile, inp.tierFlag, inp.files === undefined ? [] : inp.files);
     const pol = P.policyFor(inp.profile, t.tier);
-    Object.assign(res, { tier: t.tier, tierSource: t.source, cell: pol.cell, need: pol.needAgent });
+    Object.assign(res, { tier: t.tier, tierSource: t.source, policy: pol.name, need: pol.needAgent });
   }
   const ready = candidates.filter((c) => c.available);
   if (!inp.agents.length) {
@@ -243,7 +253,7 @@ export function chooseReviewer(inp: ChooseInput): Choice {
   let best = ready[0];
   for (const c of ready) if (LABELS.indexOf(c.label) > LABELS.indexOf(best.label)) best = c;
   if (res.need && !P.meets(strengthOf(best.label), res.need)) {
-    res.reason = `the strongest available reviewer, ${best.name}, is ${best.label}; profile ${res.cell} at tier ${res.tier} needs ${res.need}. ` +
+    res.reason = `the strongest available reviewer, ${best.name}, is ${best.label}; policy ${res.policy} at tier ${res.tier} needs ${res.need}. ` +
       "Add a reviewer on another " + (res.need === "cross-vendor" ? "vendor" : "account") + " to [review.agents]";
     return res;
   }
@@ -340,10 +350,18 @@ export function realHost(start: (d: DispatchSpec) => { pid: number | null }): Ho
     },
     checks(repo, sha) {
       const runs = jsonLines(gh(["api", "--paginate", `repos/${repo}/commits/${sha}/check-runs`,
-        "--jq", ".check_runs[] | [.head_sha, .name, (.conclusion // .status)] | @json"]));
+        "--jq", ".check_runs[] | [.head_sha, .name, (.conclusion // .status), .check_suite.id] | @json"]));
       const statuses = jsonLines(gh(["api", "--paginate", `repos/${repo}/commits/${sha}/status`,
         "--jq", ".sha as $s | .statuses[] | [$s, .context, .state] | @json"]));
-      return [...runs, ...statuses].map((r) => ({ sha: String(r[0] ?? ""), name: String(r[1] ?? "?"), state: String(r[2] ?? "") }));
+      // A missing suite may be a lagging or incomplete list, never evidence of another workflow.
+      let workflowRuns: any[][] | null;
+      try {
+        workflowRuns = jsonLines(gh(["api", "--paginate", `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`,
+          "--jq", ".workflow_runs[] | [.check_suite_id, .name] | @json"]));
+      } catch {
+        workflowRuns = null;
+      }
+      return checkRows(runs, statuses, workflowRuns);
     },
     which,
     dispatch: start,
@@ -360,6 +378,7 @@ export type Outcome = "WAITING" | "DISPATCHED" | "REVIEWED" | "STALE" | "BLOCKED
 export const FINAL: Outcome[] = ["REVIEWED", "STALE", "BLOCKED"];
 
 export interface WatchInput {
+  requiredChecks?: string[];
   pr: number;
   repo: string;
   authors: string[];
@@ -496,10 +515,14 @@ export function watchOnce(inp: WatchInput, host: Host): WatchResult {
   } catch (e: any) {
     return done("ERROR", `reading CI failed: ${e.message ?? e}`);
   }
-  const ci = ciAtHead(head, rows);
+  // Evaluate the full requirement list even when fewer workflows could be joined.
+  const ci = ciAtHead(head, rows, inp.requiredChecks ?? []);
   res.ci = ci.state;
   if (ci.state === "pending") return done("WAITING", `CI pending at the head: ${ci.bad.join(", ")}`);
   if (ci.state === "failed") return done("WAITING", `CI failed at the head: ${ci.bad.join(", ")}; no review until a new head or a re-run is green`);
+  if (ci.state === "not-passed") {
+    return done("WAITING", `CI has not passed at the head: ${ci.bad.join(", ")}; required checks must report SUCCESS. WORKFLOW_UNKNOWN means a same-name check could not be joined to a workflow; no review until CI is established`);
+  }
   if (ci.state === "none" && inp.settings.requireCi) {
     return done("WAITING", "no CI check reported at the head yet; if this repository has no CI, set [review.watch] require_ci = false");
   }

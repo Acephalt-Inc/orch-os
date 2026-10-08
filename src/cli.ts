@@ -22,7 +22,7 @@ import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
-import { WorkerError, Workers } from "./workers.js";
+import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -157,14 +157,37 @@ function askChoice(io: IO, q: string, map: Record<string, string>): string | nul
   return null;
 }
 
-/** The two `orch init` questions. Detected agent CLIs pre-fill the account vendors. */
+/** Ask for a whole number >= 1 (3 tries); null = no answer. There is no default. */
+function askCount(io: IO, q: string): number | null {
+  for (let i = 0; i < 3; i++) {
+    const ans = io.ask!(q);
+    if (ans === null) return null;
+    const k = ans.trim();
+    if (/^[1-9]\d{0,8}$/.test(k)) return Number(k);
+    println(io, "  answer a whole number, 1 or more");
+  }
+  return null;
+}
+
+/**
+ * The `orch init` questions. Detected agent CLIs pre-fill the account vendors. The policy, the
+ * review requirement and the worker limit have no default: without an answer no profile is written.
+ */
 function askProfile(io: IO, found: string[]): Record<string, any> | null {
   const compute = askChoice(io, "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs? [1/2/3, default 1] ",
     { "": "one", "1": "one", one: "one", "2": "same-vendor", "same-vendor": "same-vendor", "3": "multi-vendor", "multi-vendor": "multi-vendor" });
   if (!compute) return null;
   const people = askChoice(io, "Solo, or with teammates? [solo/team, default solo] ", { "": "solo", solo: "solo", team: "team", teammates: "team" });
   if (!people) return null;
-  return P.initialProfile(compute as P.Compute, people as P.People, found);
+  const policy = askChoice(io, "Merge policy. The one available is human-merge: a person performs every merge and `orch merge-gate --auto` is always BLOCKED. Select it? [yes/no, no default] ",
+    { yes: "human-merge", y: "human-merge", "human-merge": "human-merge", no: "", n: "" });
+  if (!policy) return null;
+  const review = askChoice(io, "Weakest agent review that lets the gate pass: single-agent, cross-account or cross-vendor? [1/2/3, no default] ",
+    { "1": "single-agent", "single-agent": "single-agent", "2": "cross-account", "cross-account": "cross-account", "3": "cross-vendor", "cross-vendor": "cross-vendor" });
+  if (!review) return null;
+  const max = askCount(io, "Most workers running at once? [a whole number, 1 or more, no default] ");
+  if (max === null) return null;
+  return P.initialProfile(compute as P.Compute, people as P.People, found, { policy: policy as P.PolicyName, required_review: review as P.Strength, max_workers: max });
 }
 
 const cmdInit: Run = (a, io) => {
@@ -176,6 +199,16 @@ const cmdInit: Run = (a, io) => {
     eprintln(io, "init: --no-profile cannot be combined with --compute/--people");
     return 2;
   }
+  const hasLimit = a.max_workers !== null && a.max_workers !== undefined;
+  if ((a.policy || a.required_review || hasLimit) && !a.compute) {
+    eprintln(io, "init: --policy, --required-review and --max-workers describe a profile: give them with --compute and --people");
+    return 2;
+  }
+  // a profile is written from flags only when the person gave all three selected values
+  const missing = a.compute ? [a.policy ? "" : "--policy", a.required_review ? "" : "--required-review", hasLimit ? "" : "--max-workers"].filter((x) => x) : [];
+  const fromFlags = Boolean(a.compute) && !missing.length;
+  const createHint = `orch profile update --compute ${a.compute ?? "V"} --people ${a.people ?? "V"} ${P.SELECT_FLAGS}`;
+  let keptProblem = "";
   const home = C.orchHome();
   mkdirSync(home, { recursive: true });
   const p = C.configPath();
@@ -187,15 +220,22 @@ const cmdInit: Run = (a, io) => {
   const def = a.agent || (agents.length ? agents[0].name : null);
   if (existsSync(p) && !a.force) {
     if (a.compute) {
-      eprintln(io, `init: ${p} exists and is not rewritten without --force; set the profile with \`orch profile update --compute ${a.compute} --people ${a.people}\``);
+      eprintln(io, `init: ${p} exists and is not rewritten without --force; set the profile with \`orch profile update --compute ${a.compute} --people ${a.people}\` ` +
+        `(a new profile also needs ${P.SELECT_FLAGS})`);
       return 2;
     }
     println(io, `config exists: ${p} (unchanged; --force rewrites it)`);
     printAgents(io, agents);
+    try {
+      P.readProfile(parseToml(readFileSync(p, "utf8")));
+    } catch (e: any) {
+      if (!(e instanceof C.ConfigError)) throw e;
+      eprintln(io, `init: the existing [profile] cannot be used as it is: ${e.message}`);
+    }
   } else {
-    // --force keeps an existing [profile] as it was, unless --compute/--people replace it
+    // --force keeps an existing [profile] as it was, unless a complete set of profile flags replaces it
     let kept = "";
-    if (existsSync(p) && !a.compute) {
+    if (existsSync(p) && !fromFlags) {
       const old = readFileSync(p, "utf8");
       try {
         kept = P.profileBlock(old);
@@ -209,8 +249,10 @@ const cmdInit: Run = (a, io) => {
     }
     printAgents(io, agents, def);
     const found = agents.map((x) => x.name);
-    const fresh = kept ? null : a.compute ? P.initialProfile(a.compute, a.people, found)
-      : !a.no_profile && io.isTTY?.() && io.ask ? askProfile(io, found) : null;
+    const asked = !kept && !a.compute && !a.no_profile && Boolean(io.isTTY?.() && io.ask);
+    const fresh = kept ? null
+      : fromFlags ? P.initialProfile(a.compute, a.people, found, { policy: a.policy, required_review: a.required_review, max_workers: a.max_workers })
+      : asked ? askProfile(io, found) : null;
     let text = C.renderDefault(home, agents, def);
     if (kept) text = P.withProfileBlock(text, kept);
     else if (fresh) {
@@ -219,9 +261,24 @@ const cmdInit: Run = (a, io) => {
     }
     writeFileSync(p, text);
     println(io, `wrote ${p}`);
-    if (kept) println(io, "kept the existing [profile] tables");
-    else if (fresh) println(io, `profile: ${P.cellLabel(P.readProfile(parseToml(text))!)} (\`orch profile show\`; add agents with \`orch profile update --agent NAME=ACCOUNT\`)`);
-    else if (io.isTTY?.() && io.ask && !a.no_profile) println(io, "no profile written (`orch profile update --compute ... --people ...` adds one later)");
+    if (kept) {
+      println(io, "kept the existing [profile] tables");
+      try {
+        P.readProfile(parseToml(text));
+      } catch (e: any) {
+        if (!(e instanceof C.ConfigError)) throw e;
+        keptProblem = e.message;
+      }
+    } else if (fresh) {
+      const written = P.readProfile(parseToml(text))!;
+      println(io, `profile: ${P.profileLabel(written)}, required_review = ${written.required_review}, max_workers = ${written.max_workers} ` +
+        "(`orch profile show`; add agents with `orch profile update --agent NAME=ACCOUNT`)");
+    } else if (asked) {
+      println(io, `no profile written: the profile questions were not all answered, and no value is chosen for you. Create one with \`${createHint}\``);
+    }
+    if (missing.length) {
+      println(io, `no profile written from the flags: ${missing.join(", ")} not given, and no value is chosen for you. Create one with \`${createHint}\``);
+    }
   }
   const cfg = C.load();
   mkdirSync(join(home, "workers"), { recursive: true });
@@ -239,6 +296,12 @@ const cmdInit: Run = (a, io) => {
     for (const r of wrote) println(io, `wrote ${r.file}`);
     if (wrote.length < rows.length) println(io, `kept ${rows.length - wrote.length} existing handbook file(s) in ${dir} (--force-handbook rewrites them)`);
     println(io, `boot: point each agent session at its role file, e.g. ${targetFile(dir, "lead-boot", layout)} (see docs/faq.md)`);
+  }
+  if (keptProblem) {
+    // the kept block is unchanged byte for byte, and it is not usable: say so instead of "next: orch doctor"
+    eprintln(io, `init: the kept [profile] cannot be used as it is: ${keptProblem}`);
+    eprintln(io, "init: the [profile] tables were kept byte for byte; `orch merge-gate`, `orch review watch`, `orch worker start` and `orch profile show` refuse them until they are fixed");
+    return 2;
   }
   println(io, "next: orch doctor");
   return 0;
@@ -489,6 +552,7 @@ function taskAuthors(cfg: Record<string, any>, id: string): string[] {
 const cmdMergeGate: Run = (a, io) => {
   const cfg = C.loadOrDefault();
   const mc = cfg.merge ?? {};
+  const checks = M.configuredRequiredChecks(cfg, a.require_check);
   const source = reviewSource(cfg, a);
   const prof = P.readProfile(cfg);
   if (!prof && (a.tier || a.auto)) {
@@ -524,8 +588,8 @@ const cmdMergeGate: Run = (a, io) => {
   let r: Record<string, any>;
   try {
     r = source === "comments"
-      ? M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head, reviewSource: source, authorAgents: authors })
-      : M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head });
+      ? M.evaluate(info, { requiredApprovals: need, requiredLabel: label, requiredChecks: checks, head: a.head, reviewSource: source, authorAgents: authors })
+      : M.evaluate(info, { requiredApprovals: need, requiredLabel: label, requiredChecks: checks, head: a.head });
   } catch (e: any) {
     // malformed PR data fails closed
     println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
@@ -598,6 +662,7 @@ const cmdReviewWatch: Run = async (a, io) => {
   }
   const agents = RW.readAgents(cfg);
   const settings = RW.readSettings(cfg);
+  const checks = M.configuredRequiredChecks(cfg);
   if (!a.task) {
     println(io, `#${a.pr} => BLOCKED (review watch needs --task ID: the task whose holder authored this PR, so the author is never its reviewer)`);
     return 1;
@@ -609,14 +674,10 @@ const cmdReviewWatch: Run = async (a, io) => {
     println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
     return 1;
   }
-  const liveWorkers = workers(cfg);
-  const host = RW.override.host ?? RW.realHost((d) => {
-    const m = liveWorkers.start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
-    return { pid: typeof m.pid === "number" ? m.pid : null };
-  });
-  if (!RW.override.host) host.admit = (d) => liveWorkers.admit(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
+  const host = RW.override.host ?? RW.realHost(reviewStart(cfg, prof));
+  if (!RW.override.host) host.admit = (d) => workers(cfg).admit(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
   const inp: RW.WatchInput = {
-    pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings,
+    pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings, requiredChecks: checks,
     tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
   };
   const emit = (r: RW.WatchResult) => println(io, a.json ? dumps(r) : RW.renderResult(r));
@@ -630,6 +691,17 @@ const cmdReviewWatch: Run = async (a, io) => {
   return r.outcome === "REVIEWED" ? 0 : 1;
 };
 
+/**
+ * How `review watch` starts a reviewer: an ordinary worker, under the same [profile] max_workers
+ * limit as `orch worker start`. There is no override here: at the limit the dispatch is refused.
+ */
+export function reviewStart(cfg: Record<string, any>, prof: P.Profile | null): (d: RW.DispatchSpec) => { pid: number | null } {
+  return (d) => {
+    const m = workers(cfg).start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env, limit: prof ? prof.max_workers : null });
+    return { pid: typeof m.pid === "number" ? m.pid : null };
+  };
+}
+
 const cmdWorker: Run = async (a, io) => {
   const cfg = C.loadOrDefault();
   const w = workers(cfg);
@@ -637,18 +709,25 @@ const cmdWorker: Run = async (a, io) => {
     const action = a._path[2];
     if (action === "start") {
       const prof = P.readProfile(cfg);
-      if (prof && !a.force) {
-        const cap = P.policyFor(prof, "high").workerCap;
+      // the limit itself is checked in Workers.start(); --force is the one override, and it says so
+      if (prof && a.force) {
         const running = w.list().filter((x) => x.state === "RUNNING").length;
-        if (running >= cap) {
-          eprintln(io, `worker: ${running} worker(s) running and the profile's worker cap is ${cap} (${P.cellLabel(prof)}); stop one, or pass --force`);
-          return 2;
+        if (running >= prof.max_workers) {
+          eprintln(io, `worker: warning: --force starts ${a.name} above [profile] max_workers (${running} running, limit ${prof.max_workers})`);
         }
       }
-      const m = w.start(a.name, {
-        command: a.cmd?.length ? a.cmd : null, task: a.task, workdir: a.workdir, minutes: a.minutes,
-        force: a.force, agent: a.agent, reviewer: a.reviewer, worktree: a.worktree, branch: a.branch, base: a.base,
-      });
+      let m: Record<string, any>;
+      try {
+        m = w.start(a.name, {
+          command: a.cmd?.length ? a.cmd : null, task: a.task, workdir: a.workdir, minutes: a.minutes,
+          force: a.force, agent: a.agent, reviewer: a.reviewer, worktree: a.worktree, branch: a.branch, base: a.base,
+          limit: prof ? prof.max_workers : null,
+        });
+      } catch (e) {
+        if (!(e instanceof WorkerLimitError)) throw e;
+        eprintln(io, `worker: ${e.running} worker(s) running and [profile] max_workers is ${e.limit}; stop one, raise max_workers, or pass --force`);
+        return 2;
+      }
       println(io, `worker ${m.name} started pid=${m.pid} load=${m.load_tier} dir=${w.dir(m.name)}`);
       if (m.worktree) println(io, `worktree ${m.worktree.path} branch=${m.worktree.branch} (${m.worktree.created ? "created" : "attached"})`);
     } else if (action === "list") {
@@ -831,26 +910,23 @@ function showProfile(io: IO, cfg: Record<string, any>, json: boolean): number {
     println(io, json ? dumps({ profile: null }) : "profile: not set (merge gate uses the plain rule)");
     return 0;
   }
-  const eff = P.effective(prof);
   const rows = P.capabilityRows(prof, profileEnv(cfg));
   const pol = (t: P.Tier) => {
     const x = P.policyFor(prof, t);
     return { need_agent: x.needAgent, need_teammate: x.needTeammate, authority: x.authority, worker_cap: x.workerCap };
   };
-  const cell = P.cellOf(eff.compute, prof.people);
-  const declared = P.cellOf(prof.compute, prof.people);
   const missing = rows.filter(([ok]) => !ok).map(([, name, detail]) => `${name}: ${detail}`);
   if (json) {
     println(io, dumps({
-      cell, declared_cell: declared, compute: prof.compute, effective_compute: eff.compute, people: prof.people,
-      lead_account: prof.lead_account, default_tier: prof.default_tier, high_paths: prof.high_paths, teammates: prof.teammates,
-      accounts: prof.accounts, agents: prof.raw.agents ?? {}, max_workers: prof.max_workers, workers_per_account: prof.workers_per_account,
-      policy: { low: pol("low"), high: pol("high") }, degraded: eff.degraded, missing,
+      policy: prof.policy, compute: prof.compute, people: prof.people, lead_account: prof.lead_account,
+      required_review: prof.required_review, default_tier: prof.default_tier, high_paths: prof.high_paths, teammates: prof.teammates,
+      accounts: prof.accounts, agents: prof.raw.agents ?? {}, max_workers: prof.max_workers,
+      rules: { low: pol("low"), high: pol("high") }, missing,
     }));
     return 0;
   }
   const list = (xs: string[]) => (xs.length ? xs.join(", ") : "none");
-  println(io, `profile: ${P.cellLabel(prof)}` + (declared !== cell ? `, declared cell ${declared} (${prof.compute} · ${prof.people})` : ""));
+  println(io, `profile: ${P.profileLabel(prof)}`);
   println(io, `accounts: ${list(Object.entries(prof.accounts).map(([id, v]) => `${id} (${v})`))}` + (prof.lead_account ? `; lead ${prof.lead_account}` : ""));
   println(io, `agents: ${list(Object.entries<string>(prof.raw.agents ?? {}).map(([n, id]) => `${n}=${id}`))}`);
   println(io, `teammates: ${list(prof.teammates)}`);
@@ -895,14 +971,28 @@ const cmdProfile: Run = (a, io) => {
     if (e instanceof C.ConfigError) return fail(e.message);
     throw e;
   }
-  if (cfg.profile === undefined && !(a.compute && a.people)) return fail("no [profile] yet: creating one needs both --compute and --people");
-  const raw: Record<string, any> = structuredClone(cfg.profile ?? {});
+  // nothing is filled in for the user: a NEW profile needs every selected value as a flag, and an
+  // existing profile without a policy key (written for the removed table) stays refused until
+  // --policy, --required-review and --max-workers are given.
+  if (cfg.profile === undefined) {
+    const need = [a.compute ? "" : "--compute", a.people ? "" : "--people", a.policy ? "" : "--policy", a.required_review ? "" : "--required-review",
+      a.max_workers !== null && a.max_workers !== undefined ? "" : "--max-workers"].filter((x) => x);
+    if (need.length) {
+      return fail(`no [profile] yet: creating one needs --compute, --people, --policy, --required-review and --max-workers (missing: ${need.join(", ")}); no value is chosen for you`);
+    }
+  }
+  const raw: Record<string, any> = cfg.profile === undefined ? {} : structuredClone(cfg.profile);
   try {
+    if (a.policy) raw.policy = a.policy;
+    if (a.required_review) raw.required_review = a.required_review;
     if (a.compute) raw.compute = a.compute;
     if (a.people) raw.people = a.people;
     if (a.default_tier) raw.default_tier = a.default_tier;
     if (a.lead_account) raw.lead_account = a.lead_account;
-    if (a.max_workers !== null) raw.max_workers = a.max_workers;
+    if (a.max_workers !== null) {
+      raw.max_workers = a.max_workers;
+      delete raw.workers_per_account; // the explicit limit replaces the removed per-account derivation
+    }
     for (const [t, add, del, what] of [["accounts", pairs(a.account, "--account"), a.remove_account, "account"],
       ["agents", pairs(a.agent, "--agent"), a.remove_agent, "agent"]] as const) {
       if (!add.length && !del.length) continue;
@@ -978,6 +1068,9 @@ export function buildTree(): CmdSpec<Run> {
           opt("no_handbook", ["--no-handbook"], "bool", "do not write the handbook"),
           opt("compute", ["--compute"], "str", "profile: the agent accounts (with --people; no questions)", { choices: P.COMPUTES }),
           opt("people", ["--people"], "str", "profile: who approves merges (with --compute)", { choices: P.PEOPLE }),
+          opt("policy", ["--policy"], "str", "profile: the review policy, human-merge (no default; with --compute and --people)", { choices: P.POLICIES }),
+          opt("required_review", ["--required-review"], "str", "profile: weakest agent review that passes (no default)", { choices: P.STRENGTHS }),
+          opt("max_workers", ["--max-workers"], "int", "profile: most workers running at once, an integer >= 1 (no default)", { metavar: "N" }),
           opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
         ],
       },
@@ -1066,26 +1159,29 @@ export function buildTree(): CmdSpec<Run> {
         opts: [
           opt("repo", ["--repo"], "str", "owner/name"),
           opt("head", ["--head"], "str", "expected head commit: BLOCKED (head moved) if the PR is elsewhere"),
+          opt("require_check", ["--require-check"], "list", "required name or workflow/name; repeat to add to [merge] required_checks"),
           opt("approvals", ["--approvals"], "int", "required approvals (default [merge] required_approvals)"),
           opt("label", ["--label"], "str", "required label (default [merge] required_label; '' = none)"),
           opt("fixture", ["--fixture"], "str", "offline: a bundled fixture (" + M.fixtureNames().join(", ") + ") or a path to `gh pr view --json` output"),
           opt("reviews", ["--reviews"], "str", "where approvals come from (default [review] source, else github)", { choices: M.REVIEW_SOURCES }),
           opt("task", ["--task"], "str", "comments mode: the task id whose holder authored the PR", { metavar: "ID" }),
           opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
-          opt("auto", ["--auto"], "bool", "profile only: the caller merges automatically on PASS; passes only under auto authority"),
+          opt("auto", ["--auto"], "bool", "profile only: the caller would merge automatically on PASS; always BLOCKED, a person performs every merge"),
           JSON_OPT,
         ],
       },
       {
-        name: "profile", help: "the [profile] setup (accounts x people) and the review policy it gives",
+        name: "profile", help: "the [profile] tables: declared accounts and people, and the review policy you selected",
         sub: [
-          { name: "show", help: "cell, accounts, agents, the policy per tier, and missing capabilities", run: cmdProfile, opts: [JSON_OPT] },
+          { name: "show", help: "the selected policy, accounts, agents, the rule per tier, and missing capabilities", run: cmdProfile, opts: [JSON_OPT] },
           {
             name: "update", help: "change only the [profile] tables of config.toml", run: cmdProfile,
-            usage: "orch profile update [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... " +
+            usage: "orch profile update [--policy human-merge] [--required-review S] [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... " +
               "[--remove-agent NAME]... [--teammate LOGIN]... [--remove-teammate LOGIN]... [--high-path GLOB]... [--remove-high-path GLOB]... " +
               "[--default-tier low|high] [--lead-account ID] [--max-workers N] [--dry-run]",
             opts: [
+              opt("policy", ["--policy"], "str", "the review policy: human-merge", { choices: P.POLICIES }),
+              opt("required_review", ["--required-review"], "str", "weakest agent review that passes: single-agent, cross-account or cross-vendor", { choices: P.STRENGTHS }),
               opt("compute", ["--compute"], "str", "one, same-vendor or multi-vendor", { choices: P.COMPUTES }),
               opt("people", ["--people"], "str", "solo or team", { choices: P.PEOPLE }),
               opt("account", ["--account"], "list", "add or change an account: ID=VENDOR (repeatable)", { metavar: "ID=VENDOR" }),
@@ -1098,7 +1194,7 @@ export function buildTree(): CmdSpec<Run> {
               opt("remove_high_path", ["--remove-high-path"], "list", "remove a path glob (repeatable)", { metavar: "GLOB" }),
               opt("default_tier", ["--default-tier"], "str", "tier when neither --tier nor a path rule decides", { choices: P.TIERS }),
               opt("lead_account", ["--lead-account"], "str", "the account the lead runs on", { metavar: "ID" }),
-              opt("max_workers", ["--max-workers"], "int", "worker cap (0 = derived from the cell)", { metavar: "N" }),
+              opt("max_workers", ["--max-workers"], "int", "most workers running at once (an integer >= 1)", { metavar: "N" }),
               opt("dry_run", ["--dry-run"], "bool", "print the new tables; write nothing"),
             ],
           },
@@ -1151,7 +1247,7 @@ export function buildTree(): CmdSpec<Run> {
               opt("worktree", ["--worktree"], "bool", "run in its own git worktree under [workers] worktree_root"),
               opt("branch", ["--branch"], "str", "worktree branch (default <worktree_branch_prefix>NAME)"),
               opt("base", ["--base"], "str", "start point for a new branch (default HEAD)"),
-              opt("force", ["--force"], "bool", "attended override of readiness and load admission; requires terminal stdin and warns"),
+              opt("force", ["--force"], "bool", "attended override of readiness, load admission and [profile] max_workers; requires terminal stdin and warns"),
             ],
           },
           { name: "list", help: "every worker with RUNNING / STOPPED / UNKNOWN", run: cmdWorker },
