@@ -280,7 +280,7 @@ describe("OwnershipCli", () => {
       expect(await waitFor(() => existsSync(ready))).toBe(true);
       expect(holder.kill("SIGSTOP")).toBe(true); // holder acknowledged readiness and waits for resume-write
       if (!displaced) {
-        // A polling acknowledgment proves the contender completed the lock's stale decision.
+        // A polling acknowledgment proves the contender attempted the held lock.
         const contenderScript = `import fs from "node:fs";
           const wait = Atomics.wait;
           Atomics.wait = function(...args) {

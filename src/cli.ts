@@ -9,7 +9,7 @@ import * as C from "./config.js";
 import * as D from "./detect.js";
 import { Lease } from "./lease.js";
 import * as LD from "./load.js";
-import { LockLostError, LockOwnerError, LockTimeoutError } from "./lock.js";
+import { LockCleanupError, LockLostError, LockOwnerError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
 import * as M from "./mergegate.js";
@@ -1211,6 +1211,10 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     if (e instanceof ConfigError) {
       eprintln(io, `orch: ${C.configPath()}: ${e.message}`);
       return 2;
+    }
+    if (e instanceof LockCleanupError || (e instanceof AggregateError && e.errors.some((error) => error instanceof LockCleanupError))) {
+      eprintln(io, `orch: ${e.message}`);
+      return 1;
     }
     if (e instanceof LockOwnerError) {
       eprintln(io, `orch: ${e.message}`);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,28 +35,22 @@ describe("LockV2", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
-  it("a_lock_left_by_a_dead_process_is_broken", () => {
-    const lock = join(ctx.home, "dead.lock.d");
+  it.each(["dead local", "old foreign", "ownerless"])("abandoned_locks_require_quiescent_reset: %s", (kind) => {
+    const lock = join(ctx.home, "abandoned.lock.d");
     mkdirSync(lock);
-    // pid 2^22+123 is above the default pid range on both Linux and macOS: never alive
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: 4194427, host: hostname(), token: "dead", created_ms: Date.now() }));
-    expect(withLock(lock, () => 42, { timeoutMs: 2000 })).toBe(42);
-  });
-
-  it("an_old_lock_from_another_host_is_broken_after_stale_ms", () => {
-    const lock = join(ctx.home, "old.lock.d");
-    mkdirSync(lock);
-    writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, host: "elsewhere", token: "old", created_ms: Date.now() - 120_000 }));
-    expect(withLock(lock, () => "ok", { timeoutMs: 2000 })).toBe("ok");
-  });
-
-  it("an_ownerless_lock_dir_is_broken_only_once_it_is_old", () => {
-    const lock = join(ctx.home, "bare.lock.d");
-    mkdirSync(lock);
-    expect(() => withLock(lock, () => 1, { timeoutMs: 150, staleMs: 60_000 })).toThrow(LockTimeoutError);
+    if (kind !== "ownerless") writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      pid: 4194427, host: kind === "old foreign" ? "elsewhere" : hostname(), token: "dead", created_ms: 0,
+    }));
     const past = (Date.now() - 120_000) / 1000;
     utimesSync(lock, past, past);
-    expect(withLock(lock, () => 2, { timeoutMs: 2000 })).toBe(2);
+    let callbacks = 0;
+    expect(() => withLock(lock, () => ++callbacks, { timeoutMs: 80, staleMs: 1 })).toThrow(kind === "ownerless" ? LockOwnerError : LockTimeoutError);
+    expect(callbacks).toBe(0);
+    expect(existsSync(lock)).toBe(true);
+    // All lock users are stopped, launches disabled; remove only the named lock directory.
+    rmSync(lock, { recursive: true });
+    expect(withLock(lock, () => ++callbacks)).toBe(1);
+    expect(existsSync(lock)).toBe(false);
   });
 
   it("a_live_holder_blocks_until_timeout", () => {
@@ -122,99 +116,6 @@ describe("LockV2", () => {
     expect(readFileSync(file, "utf8")).toBe(owner);
     holder.assertHeld();
     holder.release();
-  });
-
-  it("publication_and_stale_removal_never_let_a_displaced_holder_overwrite_its_successor", async () => {
-    const lock = join(ctx.home, "schedule.lock.d");
-    const dest = join(ctx.home, "protected");
-    writeFileSync(dest, "old snapshot");
-    const common = `import fs from "node:fs";
-      import { syncBuiltinESMExports } from "node:module";
-      import { withLock } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist/lock.js")).href)};
-      import { atomicWrite } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist/util.js")).href)};
-      const dir = ${JSON.stringify(ctx.home)}, lock = ${JSON.stringify(lock)}, dest = ${JSON.stringify(dest)};
-      function signal(name) { fs.writeFileSync(dir + "/" + name, ""); }
-      function wait(name) {
-        const cell = new Int32Array(new SharedArrayBuffer(4)), end = Date.now() + 15000;
-        while (!fs.existsSync(dir + "/" + name)) {
-          if (Date.now() > end) throw Error("signal timeout: " + name);
-          Atomics.wait(cell, 0, 0, 5);
-        }
-      }`;
-    const aScript = common + `
-      const mkdir = fs.mkdirSync, rename = fs.renameSync;
-      let first = true;
-      fs.mkdirSync = function(path, ...args) {
-        let result;
-        try { result = mkdir(path, ...args); }
-        catch (e) {
-          if (path === lock + ".break" && e.code === "EEXIST") {
-            signal("publicationExcluded"); wait("goPublication");
-          }
-          throw e;
-        }
-        if (path === lock && first) { first = false; signal("initDir"); wait("goInit"); }
-        return result;
-      };
-      fs.renameSync = function(from, to) {
-        if (to === dest) { signal("writeChecked"); wait("goWrite"); }
-        return rename(from, to);
-      };
-      syncBuiltinESMExports();
-      try { withLock(lock, () => atomicWrite(dest, "old snapshot"), { timeoutMs: 15000 }); }
-      catch (e) { console.error(e.name); process.exitCode = 5; }`;
-    const bScript = common + `
-      const rename = fs.renameSync;
-      fs.renameSync = function(from, to) {
-        if (from === lock && to.includes(".stale.")) { signal("breakChecked"); wait("goBreak"); }
-        return rename(from, to);
-      };
-      syncBuiltinESMExports();
-      withLock(lock, () => {
-        atomicWrite(dest, "newer writer"); signal("successorWritten"); wait("goSuccessorFinish");
-      }, { staleMs: 1, timeoutMs: 15000 });`;
-    const children: Array<{ child: ReturnType<typeof spawn>; done: Promise<number | null>; error: () => string }> = [];
-    const start = (script: string) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "pipe"] });
-      let stderr = "";
-      child.stderr!.on("data", (chunk) => { stderr += chunk; });
-      const entry = { child, done: new Promise<number | null>((resolve) => child.on("exit", resolve)), error: () => stderr };
-      children.push(entry);
-      return entry;
-    };
-    const signal = (name: string) => writeFileSync(join(ctx.home, name), "");
-    const ready = (name: string) => existsSync(join(ctx.home, name));
-    const until = async (pred: () => boolean) => expect(await waitFor(pred, 1500, 5)).toBe(true);
-    try {
-      const a = start(aScript);
-      await until(() => ready("initDir"));
-      const past = (Date.now() - 120000) / 1000;
-      utimesSync(lock, past, past);
-      const b = start(bScript);
-      await until(() => ready("breakChecked"));
-      signal("goInit");
-      await until(() => ready("writeChecked") || ready("publicationExcluded"));
-      // Unfixed code publishes and passes the final write check while the breaker is paused.
-      if (ready("writeChecked")) {
-        const owner = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8"));
-        expect(owner.pid).toBe(a.child.pid);
-        expect(() => process.kill(owner.pid, 0)).not.toThrow();
-      }
-      signal("goBreak");
-      await until(() => ready("successorWritten"));
-      expect(readFileSync(dest, "utf8")).toBe("newer writer");
-      signal("goPublication");
-      signal("goWrite");
-      expect(await a.done, a.error()).toBe(5);
-      expect(a.error()).toContain("LockLostError");
-      // The successor remains live until the displaced initializer has finished.
-      expect(readFileSync(dest, "utf8")).toBe("newer writer");
-      signal("goSuccessorFinish");
-      expect(await b.done, b.error()).toBe(0);
-    } finally {
-      for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
-      await Promise.all(children.map(({ done }) => done));
-    }
   });
 
   it.each(["changed", "unreadable", "missing"])("lost_or_unknown_owner_rejects_atomic_write_before_effect: %s", (kind) => {
@@ -289,6 +190,305 @@ describe("LockV2", () => {
   it("a_leftover_v1_lock_file_does_not_block", () => {
     writeFileSync(join(ctx.home, "lease.json.lock"), ""); // what v1.1 flock left behind
     expect(withLock(join(ctx.home, "lease.json.lock.d"), () => "free")).toBe("free");
+  });
+});
+
+describe("LockRecovery", () => {
+  const ctx = useTmpHome();
+  const mod = pathToFileURL(join(ROOT, "dist/lock.js")).href;
+  const util = pathToFileURL(join(ROOT, "dist/util.js")).href;
+  const cli = pathToFileURL(join(ROOT, "dist/cli.js")).href;
+  const base = () => `import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import { withLock } from ${JSON.stringify(mod)};
+    import { atomicWrite } from ${JSON.stringify(util)};
+    const dir = ${JSON.stringify(ctx.home)}, lock = dir + "/schedule.lock.d", dest = dir + "/protected";
+    function signal(name) { fs.writeFileSync(dir + "/" + name, "ready"); }
+    function wait(name) {
+      const cell = new Int32Array(new SharedArrayBuffer(4)), end = Date.now() + 15000;
+      while (!fs.existsSync(dir + "/" + name)) {
+        if (Date.now() > end) throw Error("signal timeout: " + name);
+        Atomics.wait(cell, 0, 0, 5);
+      }
+    }`;
+  function start(script: string) {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { err += chunk; });
+    return { child, done: new Promise<number | null>((resolve) => child.on("exit", resolve)), out: () => out, err: () => err };
+  }
+  async function ready(name: string) {
+    expect(await waitFor(() => existsSync(join(ctx.home, name)), 5000, 5), name).toBe(true);
+  }
+  const signal = (name: string) => writeFileSync(join(ctx.home, name), "go");
+  const attempt = (name: string) => base() + `
+    const mkdir = fs.mkdirSync;
+    fs.mkdirSync = function(path, ...args) {
+      try { return mkdir(path, ...args); }
+      catch (e) { if (path === lock && e.code === "EEXIST") signal(${JSON.stringify(name)}); throw e; }
+    };
+    syncBuiltinESMExports();
+    let callbacks = 0;
+    try { withLock(lock, () => { callbacks++; atomicWrite(dest, "wrongful contender"); }, { timeoutMs: 100, staleMs: 1 }); }
+    catch (e) { console.log(JSON.stringify({ callbacks, error: e.name, message: e.message })); process.exitCode = e.name === "LockOwnerError" ? 6 : 2; }`;
+  function assertRefusal(entry: ReturnType<typeof start>, ownerless: boolean) {
+    const r = JSON.parse(entry.out());
+    expect(r.callbacks).toBe(0);
+    expect(r.error).toBe(ownerless ? "LockOwnerError" : "LockTimeoutError");
+    expect(r.message).toContain(join(ctx.home, "schedule.lock.d"));
+    expect(r.message).toContain("stop every orch process and disable new launches");
+    expect(r.message).toContain("preserve lease, epoch, author and journal files");
+  }
+  async function finish(entries: ReturnType<typeof start>[]) {
+    for (const { child } of entries) if (child.exitCode === null && child.signalCode === null) { child.kill("SIGCONT"); child.kill("SIGKILL"); }
+    await Promise.all(entries.map((entry) => entry.done));
+  }
+
+  it.each(["mkdir", "temporary_owner", "linked_owner", "callback"])("dead_owner_or_initializer_is_refused_until_reset: %s", async (cut) => {
+    const lock = join(ctx.home, "schedule.lock.d"), dest = join(ctx.home, "protected");
+    writeFileSync(dest, "old snapshot");
+    const sentinels = ["lease.json", "lease.json.epoch.max", "authors", "lease.json.recovery.jsonl"];
+    for (const file of sentinels) writeFileSync(join(ctx.home, file), "preserved " + file);
+    const holder = start(base() + `
+      const mkdir = fs.mkdirSync, write = fs.writeFileSync, link = fs.linkSync;
+      fs.mkdirSync = function(path, ...args) { const r = mkdir(path, ...args); if (path === lock && ${JSON.stringify(cut)} === "mkdir") { signal("ready"); wait("resume"); } return r; };
+      fs.writeFileSync = function(path, ...args) { const r = write(path, ...args); if (String(path).startsWith(lock + "/.owner-") && ${JSON.stringify(cut)} === "temporary_owner") { signal("ready"); wait("resume"); } return r; };
+      fs.linkSync = function(from, to) { const r = link(from, to); if (to === lock + "/owner.json" && ${JSON.stringify(cut)} === "linked_owner") { signal("ready"); wait("resume"); } return r; };
+      syncBuiltinESMExports();
+      withLock(lock, () => { signal("callback-entered"); if (${JSON.stringify(cut)} === "callback") { signal("ready"); wait("resume"); } atomicWrite(dest, "holder effect"); });`);
+    const entries = [holder];
+    try {
+      await ready("ready");
+      expect(existsSync(join(ctx.home, "callback-entered"))).toBe(cut === "callback");
+      const past = Date.now() / 1000 - 120;
+      utimesSync(lock, past, past);
+      const live = start(attempt("live-attempt")); entries.push(live);
+      await ready("live-attempt");
+      expect(await live.done, live.err()).toBe(["mkdir", "temporary_owner"].includes(cut) ? 6 : 2);
+      assertRefusal(live, ["mkdir", "temporary_owner"].includes(cut));
+      expect(holder.child.kill("SIGKILL")).toBe(true);
+      await holder.done;
+      expect(holder.child.signalCode).toBe("SIGKILL");
+      for (let i = 0; i < 2; i++) {
+        const contender = start(attempt("dead-attempt-" + i)); entries.push(contender);
+        await ready("dead-attempt-" + i);
+        expect(await contender.done, contender.err()).toBe(["mkdir", "temporary_owner"].includes(cut) ? 6 : 2);
+        assertRefusal(contender, ["mkdir", "temporary_owner"].includes(cut));
+        expect(readFileSync(dest, "utf8")).toBe("old snapshot");
+        expect(existsSync(lock)).toBe(true);
+      }
+      // Every child has exited. Disable launches in this schedule, remove only the named lock.
+      rmSync(lock, { recursive: true });
+      const reset = start(base() + `let callbacks = 0; withLock(lock, () => { callbacks++; atomicWrite(dest, "after reset"); }); console.log(callbacks);`);
+      entries.push(reset);
+      expect(await reset.done, reset.err()).toBe(0);
+      expect(reset.out().trim()).toBe("1");
+      expect(readFileSync(dest, "utf8")).toBe("after reset");
+      expect(existsSync(lock)).toBe(false);
+      for (const file of sentinels) expect(readFileSync(join(ctx.home, file), "utf8")).toBe("preserved " + file);
+    } finally { await finish(entries); }
+  });
+
+  it.each(["initializer", "callback"])("paused_live_owner_is_never_reclaimed: %s", async (stage) => {
+    const lock = join(ctx.home, "schedule.lock.d"), dest = join(ctx.home, "protected");
+    writeFileSync(dest, "old snapshot");
+    const holder = start(base() + `
+      const mkdir = fs.mkdirSync;
+      fs.mkdirSync = function(path, ...args) { const r = mkdir(path, ...args); if (path === lock && ${JSON.stringify(stage)} === "initializer") { signal("ready"); wait("resume"); } return r; };
+      syncBuiltinESMExports();
+      let callbacks = 0;
+      withLock(lock, () => { callbacks++; signal("callback-entered"); if (${JSON.stringify(stage)} === "callback") { signal("ready"); wait("resume"); } atomicWrite(dest, "old snapshot"); });
+      console.log(callbacks);`);
+    const entries = [holder];
+    try {
+      await ready("ready");
+      expect(holder.child.kill("SIGSTOP")).toBe(true);
+      const past = Date.now() / 1000 - 120;
+      utimesSync(lock, past, past);
+      if (stage === "callback") {
+        const file = lock + "/owner.json", owner = JSON.parse(readFileSync(file, "utf8"));
+        writeFileSync(file, JSON.stringify({ ...owner, created_ms: 0 }));
+      }
+      // Two acknowledged contenders replace the former initializer/two-breaker schedule.
+      const contenders = [start(attempt("attempt-a")), start(attempt("attempt-b"))]; entries.push(...contenders);
+      await ready("attempt-a"); await ready("attempt-b");
+      for (const contender of contenders) {
+        expect(await contender.done, contender.err()).toBe(stage === "initializer" ? 6 : 2);
+        assertRefusal(contender, stage === "initializer");
+      }
+      expect(existsSync(lock)).toBe(true);
+      expect(readFileSync(dest, "utf8")).toBe("old snapshot");
+      signal("resume"); holder.child.kill("SIGCONT");
+      expect(await holder.done, holder.err()).toBe(0);
+      expect(holder.out().trim()).toBe("1");
+      expect(existsSync(lock)).toBe(false);
+      const successor = start(base() + `let callbacks = 0; withLock(lock, () => { callbacks++; atomicWrite(dest, "newer writer"); signal("successor-written"); wait("successor-release"); }); console.log(callbacks);`);
+      entries.push(successor);
+      await ready("successor-written");
+      expect(readFileSync(dest, "utf8")).toBe("newer writer");
+      signal("successor-release");
+      expect(await successor.done, successor.err()).toBe(0);
+      expect(successor.out().trim()).toBe("1");
+      expect(readFileSync(dest, "utf8")).toBe("newer writer");
+      expect(existsSync(lock)).toBe(false);
+    } finally { await finish(entries); }
+  });
+
+  it.each(["ownerless", "corrupt", "legacy"])("unknown_owner_and_legacy_artifacts_block: %s", (kind) => {
+    const lock = join(ctx.home, "schedule.lock.d"), dest = join(ctx.home, "protected");
+    writeFileSync(dest, "old snapshot");
+    const artifact = kind === "legacy" ? lock + ".break" : lock;
+    mkdirSync(artifact);
+    if (kind === "corrupt") writeFileSync(lock + "/owner.json", "{");
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", attempt("attempt")], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(6);
+    const r = JSON.parse(child.stdout);
+    expect(r.callbacks).toBe(0);
+    expect(r.message).toContain(artifact);
+    expect(r.message).toContain("stop every orch process and disable new launches");
+    expect(r.message).toContain("remove the named lock directory " + artifact);
+    expect(existsSync(artifact)).toBe(true);
+    expect(readFileSync(dest, "utf8")).toBe("old snapshot");
+    if (kind === "legacy") expect(existsSync(lock)).toBe(false);
+  });
+
+  // Hooks affect built Node modules through syncBuiltinESMExports, not Vitest mocks.
+  function faultScript(mode: string, errno: string, callbackFails: boolean, useCli: boolean) {
+    return base() + `
+      const mode = ${JSON.stringify(mode)}, errno = ${JSON.stringify(errno)};
+      const targetLock = ${useCli ? 'dir + "/lease.json.lock.d"' : 'lock'};
+      const unlink = fs.unlinkSync, rmdir = fs.rmdirSync, rename = fs.renameSync, write = fs.writeFileSync;
+      function fail(path) { signal("fault-ready"); fs.writeFileSync(dir + "/fault-path", path); throw Object.assign(Error("injected cleanup " + errno), { code: errno }); }
+      fs.writeFileSync = function(path, ...args) {
+        if (mode === "acquisition_rmdir" && String(path).startsWith(targetLock + "/.owner-")) throw Object.assign(Error("initialization ENOSPC"), { code: "ENOSPC" });
+        return write(path, ...args);
+      };
+      fs.unlinkSync = function(path, ...args) {
+        if (mode === "acquisition_unlink" && String(path).startsWith(targetLock + "/.owner-")) fail(path);
+        if (mode === "release_unlink" && String(path).startsWith(targetLock + ".rel.") && String(path).endsWith("/owner.json")) fail(path);
+        return unlink(path, ...args);
+      };
+      fs.rmdirSync = function(path, ...args) {
+        if (mode === "acquisition_rmdir" && path === targetLock) fail(path);
+        if (mode === "release_rmdir" && String(path).startsWith(targetLock + ".rel.")) fail(path);
+        return rmdir(path, ...args);
+      };
+      fs.renameSync = function(from, to, ...args) {
+        if (mode === "release_rename" && from === targetLock) fail(from);
+        return rename(from, to, ...args);
+      };
+      syncBuiltinESMExports();
+      ${useCli ? `const { main } = await import(${JSON.stringify(cli)}); process.exitCode = await main(["lease", "acquire", "--session", "cleanup"]);` : `
+        let callbacks = 0;
+        try { withLock(lock, () => { callbacks++; atomicWrite(dest, "committed effect"); ${callbackFails ? 'throw Error("callback boom");' : ''} }); }
+        catch (e) { console.log(JSON.stringify({ callbacks, error: e.name, message: e.message, errors: e.errors?.map(error => error.message) })); process.exitCode = 1; }
+      `}`;
+  }
+
+  it.each(["acquisition_unlink", "acquisition_rmdir", "release_unlink", "release_rmdir", "release_rename"].flatMap(mode =>
+    ["EIO", "EACCES", "ENOSPC"].map(errno => ({ mode, errno }))))("cleanup_error_is_nonzero_and_names_residual_state: $mode/$errno", ({ mode, errno }) => {
+    const lock = join(ctx.home, "schedule.lock.d"), dest = join(ctx.home, "protected");
+    writeFileSync(dest, "old snapshot");
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", faultScript(mode, errno, false, false)], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(1);
+    expect(existsSync(join(ctx.home, "fault-ready"))).toBe(true);
+    const r = JSON.parse(child.stdout), faultPath = readFileSync(join(ctx.home, "fault-path"), "utf8");
+    const acquisition = mode.startsWith("acquisition");
+    expect(r.callbacks).toBe(acquisition ? 0 : 1);
+    expect(r.message).toContain("lock cleanup failed: " + mode.split("_")[1] + " " + faultPath + ": " + errno);
+    expect(r.message).toContain(acquisition ? "callback not entered" : "callback completed; effects may already be committed");
+    expect(r.message).toContain(mode === "release_rmdir" || mode === "acquisition_rmdir" ? "ownerless directory" : "owner record remains");
+    expect(r.message).toContain("stop every orch process and disable new launches");
+    expect(readFileSync(dest, "utf8")).toBe(acquisition ? "old snapshot" : "committed effect");
+    const residualDir = acquisition || mode === "release_rename" ? lock : join(ctx.home, readdirSync(ctx.home).find(name => name.startsWith("schedule.lock.d.rel."))!);
+    expect(existsSync(residualDir)).toBe(true);
+    expect(existsSync(residualDir + "/owner.json")).toBe(!["acquisition_rmdir", "release_rmdir"].includes(mode));
+    if (mode === "acquisition_unlink") expect(readdirSync(lock).filter(name => name.startsWith(".owner-")).length).toBe(1);
+    const next = spawnSync(process.execPath, ["--input-type=module", "-e", attempt("next-attempt")], { encoding: "utf8", timeout: 5000 });
+    if (acquisition || mode === "release_rename") {
+      expect(next.status).toBe(mode === "acquisition_rmdir" ? 6 : 2);
+      const refusal = JSON.parse(next.stdout);
+      expect(refusal.callbacks).toBe(0);
+      expect(refusal.message).toContain(lock);
+      expect(refusal.message).toContain("remove the named lock directory " + lock);
+      expect(readFileSync(dest, "utf8")).toBe(acquisition ? "old snapshot" : "committed effect");
+    } else {
+      expect(next.status, next.stderr).toBe(0);
+      expect(readFileSync(dest, "utf8")).toBe("wrongful contender"); // owner's release rename already freed canonical path
+      expect(existsSync(residualDir)).toBe(true);
+    }
+    // Verify the actual built CLI maps each cleanup I/O failure to 1.
+    const init = spawnSync(process.execPath, [join(ROOT, "dist/cli.js"), "init", "--no-handbook"], { encoding: "utf8", env: { ...process.env, ORCH_HOME: ctx.home } });
+    expect(init.status, init.stderr).toBe(0);
+    const binary = spawnSync(process.execPath, ["--input-type=module", "-e", faultScript(mode, errno, false, true)], { encoding: "utf8", timeout: 5000, env: { ...process.env, ORCH_HOME: ctx.home } });
+    expect(binary.status, binary.stderr).toBe(1);
+    expect(binary.stderr).toContain("lock cleanup failed");
+    expect(binary.stderr).toContain(readFileSync(join(ctx.home, "fault-path"), "utf8"));
+    expect(binary.stderr).toContain(errno);
+    expect(binary.stderr).toContain(acquisition ? "callback not entered" : "effects may already be committed");
+    expect(existsSync(join(ctx.home, "lease.json"))).toBe(!acquisition);
+  });
+
+  it("callback_and_cleanup_errors_are_both_reported", () => {
+    writeFileSync(join(ctx.home, "protected"), "old snapshot");
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", faultScript("release_unlink", "EIO", true, false)], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(1);
+    const r = JSON.parse(child.stdout);
+    expect(r.callbacks).toBe(1);
+    expect(r.error).toBe("AggregateError");
+    expect(r.errors).toHaveLength(2);
+    expect(r.errors[0]).toBe("callback boom");
+    expect(r.errors[1]).toContain("lock cleanup failed: unlink");
+    expect(r.message).toContain("callback boom");
+    expect(r.message).toContain(readFileSync(join(ctx.home, "fault-path"), "utf8"));
+    expect(r.message).toContain("EIO; callback failed; effects may already be committed");
+    expect(r.message).toContain("owner record remains");
+    expect(readFileSync(join(ctx.home, "protected"), "utf8")).toBe("committed effect");
+  });
+
+  it("cleanup_inspection_failure_reports_state_unknown", () => {
+    writeFileSync(join(ctx.home, "protected"), "old snapshot");
+    const script = base() + `
+      const unlink = fs.unlinkSync, list = fs.readdirSync;
+      fs.unlinkSync = function(path, ...args) { if (String(path).startsWith(lock + "/.owner-")) throw Object.assign(Error("unlink EIO"), { code: "EIO" }); return unlink(path, ...args); };
+      fs.readdirSync = function(path, ...args) { if (path === lock) throw Object.assign(Error("inspection EACCES"), { code: "EACCES" }); return list(path, ...args); };
+      syncBuiltinESMExports();
+      let callbacks = 0;
+      try { withLock(lock, () => { callbacks++; atomicWrite(dest, "wrongful effect"); }); }
+      catch (e) { console.log(JSON.stringify({ callbacks, operation: e.operation, path: e.path, errno: e.errno, stage: e.stage, state: e.state, message: e.message })); process.exitCode = 1; }`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(1);
+    const r = JSON.parse(child.stdout), lock = join(ctx.home, "schedule.lock.d");
+    expect(r.callbacks).toBe(0);
+    expect(r.operation).toBe("unlink");
+    expect(r.path).toMatch(new RegExp("/schedule\\.lock\\.d/\\.owner-"));
+    expect(r.errno).toBe("EIO");
+    expect(r.stage).toBe("callback not entered; owner published");
+    expect(r.state).toBe(lock + ": state unknown (EACCES)");
+    expect(r.message).toContain(r.state);
+    expect(existsSync(lock + "/owner.json")).toBe(true);
+    expect(readFileSync(join(ctx.home, "protected"), "utf8")).toBe("old snapshot");
+  });
+
+  it.each(["write", "link"])("failed_initialization_releases_only_its_own_directory_without_entering_callback: %s", (cut) => {
+    writeFileSync(join(ctx.home, "protected"), "old snapshot");
+    const script = base() + `
+      const write = fs.writeFileSync, link = fs.linkSync;
+      fs.writeFileSync = function(path, ...args) { if (${JSON.stringify(cut)} === "write" && String(path).startsWith(lock + "/.owner-")) throw Object.assign(Error("initialization ENOSPC"), { code: "ENOSPC" }); return write(path, ...args); };
+      fs.linkSync = function(from, to) { if (${JSON.stringify(cut)} === "link" && to === lock + "/owner.json") throw Object.assign(Error("initialization ENOSPC"), { code: "ENOSPC" }); return link(from, to); };
+      syncBuiltinESMExports();
+      let callbacks = 0;
+      try { withLock(lock, () => { callbacks++; atomicWrite(dest, "wrongful effect"); }); }
+      catch (e) { console.log(JSON.stringify({ callbacks, message: e.message })); process.exitCode = 1; }`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(1);
+    expect(JSON.parse(child.stdout)).toEqual({ callbacks: 0, message: "initialization ENOSPC" });
+    expect(existsSync(join(ctx.home, "schedule.lock.d"))).toBe(false);
+    expect(readFileSync(join(ctx.home, "protected"), "utf8")).toBe("old snapshot");
+    const next = spawnSync(process.execPath, ["--input-type=module", "-e", base() + `withLock(lock, () => atomicWrite(dest, "next effect"));`], { encoding: "utf8", timeout: 5000 });
+    expect(next.status, next.stderr).toBe(0);
+    expect(readFileSync(join(ctx.home, "protected"), "utf8")).toBe("next effect");
   });
 });
 
