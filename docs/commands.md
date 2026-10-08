@@ -121,12 +121,18 @@ orch mailbox read [-n N] [--section SECTION]
 
 ```text
 orch merge-gate PR [--repo OWNER/NAME] [--head SHA] [--approvals N] [--label NAME] [--fixture NAME|PATH] [--reviews github|comments] [--task ID]
-                   [--tier low|high] [--auto] [--json]
+                   [--require-check NAME] [--tier low|high] [--auto] [--json]
 ```
 
 Prints the head, CI state, approvals (with stale and self counts), changes requested and label state, then `=> PASS` (exit 0) or `=> BLOCKED` (exit 1). Live mode runs `gh pr view PR --repo REPO --json author,headRefOid,reviews,labels,statusCheckRollup`; any error prints `BLOCKED (...)` and exits 1. `--head` makes the gate block with `head moved` when the PR is at a different commit.
 
-`--reviews` picks where approvals come from (default `[review] source`, else `github`). With `github`, the output and behaviour are those of v2.0.1. With `comments`:
+CI is green only when at least one check at the exact head concluded `SUCCESS`, no check failed or is unfinished, and every required check passed. `SKIPPED` and `NEUTRAL` are not passes: a rollup containing only those blocks. Without required checks, `SUCCESS` alongside `SKIPPED` or `NEUTRAL` retains the existing green result and output.
+
+Set `[merge] required_checks = ["CI/test", "lint"]` to require specific checks in both `merge-gate` and `review watch`. Names compare exactly and case-sensitively: `name` matches the job or status-context name; `workflow/name` also matches that job in the named workflow. A literal status context called `CI/test` retains bare-name matching. Every matching row must conclude `SUCCESS`; missing checks (`ABSENT`), stale checks, `SKIPPED`, `NEUTRAL`, `CANCELLED`, pending checks and duplicate runs with conflicting conclusions block. The gate's JSON adds `required_checks` and `unmet_checks` when requirements are configured; text names unmet checks. Fixtures may include `headSha` or `head_sha`; those rows count only at the exact head. Live `statusCheckRollup` is already scoped to the PR head.
+
+Repeat `--require-check NAME` to add requirements to the configured list for this gate invocation; it never replaces configured checks. Invalid lists or blank flag values exit 2. An absent or empty configured list means no required names.
+
+`--reviews` picks where approvals come from (default `[review] source`, else `github`). Both sources apply the same CI rules. With `comments`:
 
 - live mode also fetches `comments`;
 - `--task ID` is required: the agents recorded for that task in `orch task` (every agent that has held it: task files keep an append-only `holders` list; a file written before it existed gives its holder and previous holder) are the PR's authors. No task, or a task with no holder, is `BLOCKED`. The GitHub login is never used as an identity;
@@ -199,7 +205,7 @@ vendor = "claude"
 account = "a1"
 
 [review.watch]
-require_ci = true      # false: a repository without CI; a pending or failed check still blocks
+require_ci = true      # false: allow no CI only when no required checks are configured
 stale_minutes = 30     # a reviewer with no review line by then is STALE; also its worker time limit
 poll_seconds = 60
 ```
@@ -212,7 +218,7 @@ One pass:
 2. `gh pr view PR --json headRefOid,state,comments` gives the head. A closed or merged PR is `BLOCKED`.
 3. If this head already has a reviewer (state file below), watch only follows it: `REVIEWED` once a comment whose first line is `ORCH-REVIEW <verdict> <head> by <that agent>` appears (a line for another commit does not count), `STALE` after `stale_minutes`, else `DISPATCHED`. It never starts a second reviewer for one head unless `--force`.
 4. The reviewer: every `[review.agents.NAME]` that is not an author and whose command is on `PATH`, graded against the authors: `cross-vendor`, then `cross-account`, then `single-agent (fresh context)` (same account: a new session, labelled so), then `single-agent (unmapped)` (vendor or account not declared). The strongest wins; ties go to the first in `config.toml`. An agent's account is `account`, else its `[profile.agents]` entry; its vendor is the account's vendor in `[profile.accounts]`, else `vendor` (a contradiction is a config error). This order is a selection heuristic over declared labels; nothing verifies the accounts, and a label gives the reviewer no authority. With a `[profile]`, the needed strength is `[profile] required_review`, the same value `merge-gate` uses; a best reviewer below it is `BLOCKED` with the reason, never a weaker review. So `required_review = "single-agent"` gives a labelled single-agent review when only the author's account is available, and a higher value blocks.
-5. CI is read for the head commit only: `gh api repos/OWNER/NAME/commits/SHA/check-runs` and `.../commits/SHA/status`, keeping only the rows whose sha is the head. Any failed or pending check: `WAITING`, no reviewer. No check at all: `WAITING` too (CI may not have started), unless `require_ci = false`.
+5. CI uses the same evaluator and `[merge] required_checks` as the merge gate. Watch reads `gh api --paginate repos/OWNER/NAME/commits/SHA/check-runs`, `.../commits/SHA/status` and `.../actions/runs?head_sha=SHA&per_page=100`, joining check suites to workflow names and keeping only the exact head's rows. An unmet required check or a failed, unfinished or entirely skipped/neutral rollup is `WAITING`, with no dispatch, including under `--force`. An unlisted suite, a blank/conflicting workflow name or an unreadable workflow-run list leaves the check's workflow unknown. Such a row never supplies a qualified requirement; a same-name unknown row that did not pass also blocks an otherwise passing qualified requirement (`WORKFLOW_UNKNOWN`). A known required workflow's success plus an unknown same-name success can pass. This conservative rule may wait on another app's skipped/neutral check even while the gate has enough workflow information to pass. No check at all is `WAITING` unless `require_ci = false` and no required names are configured. This option never bypasses required checks.
 6. Otherwise watch writes a prompt file and starts the reviewer as a worker named `review-PR-SHA12` (see `orch worker`: own process group, logs, time limit of `stale_minutes`, refused under a blocking load tier). The prompt is on its stdin and in `{prompt}`; the environment has `ORCH_AGENT`, `ORCH_REVIEW_PR`, `ORCH_REVIEW_HEAD`, `ORCH_REVIEW_REPO` and `ORCH_REVIEW_PROMPT`.
 
 A new head means a new pass from step 3: a new reviewer once its CI is green. A reviewer still running for the old head is left alone; its line names the old sha and does not count.
@@ -310,7 +316,7 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 | `[tasks] dir`, `default_seconds`, `min_seconds` | `~/.orch/tasks`, `7200`, `60` | Task claim files and durations |
 | `[mem] dir`, `index_max_lines` | `~/.orch/mem`, `200` | Notes directory; index line cap |
 | `[handbook] dir` | `~/.orch/handbook` | Where `init` writes the handbook |
-| `[merge] repo`, `required_approvals`, `required_label` | `""`, `1`, `""` | Live-mode repo; approvals needed at the head; optional label |
+| `[merge] repo`, `required_approvals`, `required_label`, `required_checks` | `""`, `1`, `""`, `[]` | Live-mode repo; approvals needed at the head; optional label; exact required names shared with review watch |
 | `[review] source` | `github` | Where `merge-gate` approvals come from: `github` reviews, or `comments` (ORCH-REVIEW comments; needs `--task`) |
 | `[review.agents.NAME] cmd`, `vendor`, `account` | none | A reviewer for `review watch`: argv or shell command line; declared vendor and account (the account's vendor in `[profile.accounts]` wins) |
 | `[review.watch] require_ci`, `stale_minutes`, `poll_seconds`, `dir` | `true`, `30`, `60`, `~/.orch/review-watch` | `false` = no CI expected; when a silent reviewer is stale; loop interval; state files |

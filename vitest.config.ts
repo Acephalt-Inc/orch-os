@@ -8,6 +8,8 @@ export default defineConfig({
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
     fileParallelism: false,
+    // One event-loop turn after each test; see the comment in the setup file.
+    setupFiles: ["tests/_yield.setup.ts"],
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },
