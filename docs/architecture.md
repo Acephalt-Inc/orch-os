@@ -46,12 +46,12 @@ Node.js has no `flock`, so v2 uses an **atomic `mkdir`** lock. Every locked file
 
 | Step | What happens |
 |---|---|
-| Acquire | `mkdir <file>.lock.d` succeeds for exactly one process (the kernel makes `mkdir` atomic). The winner writes `owner.json` = `{pid, host, token, created_ms}` into it. |
-| Wait | Everyone else retries with a jittered backoff (1 ms doubling to 25 ms) until it wins or the timeout passes (30 s, then `LockTimeoutError`, exit 2 from the CLI). |
-| Recovery | A lock left behind by a holder that died is removed by the next caller. |
-| Release | The holder removes the lock only if `owner.json` still carries its token; otherwise it raises `LockLostError` (exit 5 from the CLI: the result is not verified). |
+| Acquire | `mkdir <file>.lock.d` succeeds for exactly one process (the kernel makes `mkdir` atomic). The winner writes `owner.json` = `{pid, host, token, created_ms}` into it before its work starts. |
+| Wait | Everyone else retries with a jittered backoff (1 ms doubling to 25 ms) until it wins or the timeout passes (30 s). A waiter never removes or renames the lock directory, whatever its age. At the timeout, a lock whose owner record is published gives `LockTimeoutError` (exit 2 from the CLI) and a lock directory with no owner record gives `LockOwnerError` (exit 6). An unreadable or malformed `owner.json`, or a leftover `<file>.lock.d.break` directory from an older version, gives `LockOwnerError` at once. |
+| Recovery | None is automatic. A lock left behind by a process that died or was interrupted stays in place: every later caller fails with the lock directory's path and the manual reset procedure (stop every `orch` process, then remove that one directory; see [commands.md](commands.md#orch-lease)). |
+| Release | The holder removes the lock only if `owner.json` still carries its token; otherwise it raises `LockLostError` (exit 5 from the CLI: the result is not verified), or `LockOwnerError` (exit 6) when the record cannot be read. A failed rename, unlink or rmdir during release is reported as `LockCleanupError` (exit 1). |
 
-Differences from v1.1's `flock`: a crashed holder's lock is removed by the next caller instead of being dropped by the kernel (callers that arrive before that may time out with exit 2); waiting has a timeout instead of blocking forever; the lock works the same on local disks and on network filesystems where `mkdir` is atomic. The v1.1 `.lock` files are not used and can be deleted. Do not run v1.1 and v2 against the same `ORCH_HOME` at the same time: `flock` and `mkdir` locks do not exclude each other.
+Differences from v1.1's `flock`: a crashed holder's lock is not dropped by the kernel and is not removed by any later caller, so it blocks every caller until a person resets it; waiting has a timeout instead of blocking forever; the lock is for cooperating processes on one local host, and use from several hosts or on a network filesystem is not supported. The v1.1 `.lock` files are not used and can be deleted. Do not run v1.1 and v2 against the same `ORCH_HOME` at the same time: `flock` and `mkdir` locks do not exclude each other.
 
 ## Concurrency and durability
 
@@ -99,7 +99,7 @@ With a `[profile]` table, `evaluate()` still decides first. The CLI then calls t
 |---|---|---|
 | TOML config | `toml.ts`, a reader for the subset `config.toml` uses; unsupported syntax is an error, never a guess | The config is ours and small; a parser dependency would be the largest code in the install |
 | Argument parsing | `args.ts` | argparse-compatible behaviour (exit 2, error text) was needed anyway |
-| File locking | `lock.ts` | Lock libraries add their own staleness rules; ours is small and tested |
+| File locking | `lock.ts` | Lock libraries remove locks they judge stale; ours never removes another process's lock, and it is small and tested |
 
 **Development only** (not installed for users): `typescript` (compiler), `@types/node` (type definitions), `vitest` (test runner). All three are widely used, maintained projects, pinned by major version in `package.json`.
 

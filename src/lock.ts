@@ -4,6 +4,8 @@
  * Exclusive mkdir ownership lasts until this owner's release. A complete linked
  * owner record precedes the callback; callback completion precedes release rename.
  * No online lock breaking: dead or interrupted owners require a quiescent reset.
+ * At the timeout a waiter reports what it saw: a lock seen released is tried once more, and a
+ * directory without an owner record gets the reset procedure alone only if none was read all along.
  */
 import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -16,8 +18,11 @@ function recovery(path: string): string {
 }
 
 export class LockTimeoutError extends Error {
-  constructor(path: string, ms: number) {
-    super(`lock busy: ${path} (waited ${Math.round(ms / 1000)}s); no automatic recovery; ${recovery(path)}`);
+  /** `inUse`: the lock was seen released as the wait ended, so there is no directory to reset. */
+  constructor(path: string, ms: number, inUse = false) {
+    super(`lock busy: ${path} (waited ${Math.round(ms / 1000)}s); ${inUse
+      ? "it was released and taken again as the wait ended, so it is in use, not abandoned; remove nothing and run the command again"
+      : `no automatic recovery; ${recovery(path)}`}`);
     this.name = "LockTimeoutError";
   }
 }
@@ -44,8 +49,9 @@ interface Owner {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export class LockOwnerError extends Error {
-  constructor(readonly file: string, reason: string, dir = dirname(file)) {
-    super(`unknown lock owner: ${file} (${reason}); ${recovery(dir)}`);
+  /** `retryFirst`: the owner may be a live process that has not published its record yet. */
+  constructor(readonly file: string, reason: string, dir = dirname(file), retryFirst = false) {
+    super(`unknown lock owner: ${file} (${reason}); ${retryFirst ? "run the command again; if it reports this again, " : ""}${recovery(dir)}`);
     this.name = "LockOwnerError";
   }
 }
@@ -98,6 +104,15 @@ function readOwner(dir: string): Owner | null {
   return o as Owner;
 }
 
+/** What is at the lock path when a read found no owner record. One listing, so the answer describes one directory. */
+function withoutOwner(dir: string): "absent" | "ownerless" | "published" {
+  try { return readdirSync(dir).includes("owner.json") ? "published" : "ownerless"; }
+  catch (e: any) {
+    if (e.code === "ENOENT") return "absent";
+    throw new LockOwnerError(dir + "/owner.json", `cannot inspect lock directory: ${e.code ?? "I/O error"}`);
+  }
+}
+
 export class FileLock {
   private token: string | null = null;
   constructor(readonly path: string, readonly opts: LockOptions = {}) {}
@@ -106,6 +121,9 @@ export class FileLock {
     const timeout = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const start = Date.now();
     let wait = 1;
+    let sawOwner = false;                    // an owner record was read during this wait
+    let noRecordSince: number | null = null; // start of the current unbroken run of reads without one
+    let lastAttempt = false;                 // the one extra mkdir after the lock was seen released at the timeout
     for (;;) {
       // Legacy exclusion is refused, never created, used or removed online.
       const legacy = this.path + ".break";
@@ -141,8 +159,26 @@ export class FileLock {
         return;
       }
       const owner = readOwner(this.path);
-      if (Date.now() - start > timeout) {
-        if (!owner) throw new LockOwnerError(this.path + "/owner.json", "ownerless directory after initialization wait");
+      const now = Date.now();
+      if (owner) { sawOwner = true; noRecordSince = null; }
+      else noRecordSince ??= now;
+      if (now - start > timeout) {
+        const seen = owner ? "published" : withoutOwner(this.path);
+        if (seen === "absent") {
+          // Released between the failed mkdir and the read: free, not abandoned. One immediate
+          // attempt, so the wait stays bounded; a second release in that instant is still not a reset case.
+          if (lastAttempt) throw new LockTimeoutError(this.path, timeout, true);
+          lastAttempt = true;
+          continue;
+        }
+        if (seen === "ownerless") {
+          // A directory first seen without a record late in the wait may belong to a live owner
+          // between mkdir and publication; only one with no record all along gets the reset procedure alone.
+          const late = sawOwner || lastAttempt;
+          throw new LockOwnerError(this.path + "/owner.json", late
+            ? `no owner record for the last ${now - noRecordSince!}ms of a ${now - start}ms wait; a new owner may still be publishing it`
+            : `no owner record during the whole ${now - start}ms wait`, undefined, late);
+        }
         throw new LockTimeoutError(this.path, timeout);
       }
       sleepSync(wait + Math.random() * wait);

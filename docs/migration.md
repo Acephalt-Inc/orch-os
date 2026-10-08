@@ -17,8 +17,8 @@ v2 is a rewrite of the same tool in TypeScript for Node.js ≥ 20. The five v1.1
 |---|---|---|
 | Runtime | Python ≥ 3.11, standard library only | Node.js ≥ 20, no runtime dependencies |
 | Install | `pipx install`, `install.sh` | `npx orch-os init`, `npm i -g orch-os`, `install.sh` |
-| Lock | `fcntl.flock` on `<file>.lock` | atomic `mkdir` of `<file>.lock.d`, with stale-lock breaking and a 30 s timeout ([architecture.md](architecture.md#the-lock)) |
-| Lock wait | blocks until free | gives up after 30 s: exit 2 |
+| Lock | `fcntl.flock` on `<file>.lock`; the kernel drops it when the holder dies | atomic `mkdir` of `<file>.lock.d` with a 30 s timeout; a lock left by a process that died is not removed automatically and blocks until it is reset by hand ([architecture.md](architecture.md#the-lock)) |
+| Lock wait | blocks until free | gives up after 30 s: exit 2, or exit 6 when the lock directory has no readable owner record |
 | `lease release` | no epoch check | optional `--expected-epoch` |
 | `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=20`, `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |
 | `worker start` | runs in `--workdir` | also `--worktree`, `--branch`, `--base` |

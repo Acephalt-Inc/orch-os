@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -87,6 +87,26 @@ describe("LockV2", () => {
     expect(() => withLock(path, () => { ran = true; }, { timeoutMs: 50, staleMs: 1 })).toThrow(LockOwnerError);
     expect(ran).toBe(false);
     expect(existsSync(path)).toBe(true);
+  });
+
+  it("a_dangling_owner_symlink_is_unknown_not_missing", () => {
+    const path = join(ctx.home, "dangling.lock.d"), file = join(path, "owner.json");
+    mkdirSync(path);
+    symlinkSync(join(ctx.home, "missing"), file);
+    let ran = false, error: any;
+    try { withLock(path, () => { ran = true; }, { timeoutMs: 50 }); } catch (e) { error = e; }
+    expect(error).toBeInstanceOf(LockOwnerError);
+    expect(error.message).toContain(file + " (ENOENT)"); // refused at the read, not as a directory without a record
+    expect(ran).toBe(false);
+    // The same link under a holder is an unknown owner, not a lost lock.
+    const held = join(ctx.home, "held.lock.d"), dest = join(ctx.home, "protected");
+    writeFileSync(dest, "original");
+    expect(() => withLock(held, () => {
+      rmSync(join(held, "owner.json"));
+      symlinkSync(join(ctx.home, "missing"), join(held, "owner.json"));
+      atomicWrite(dest, "late effect");
+    })).toThrow(LockOwnerError);
+    expect(readFileSync(dest, "utf8")).toBe("original");
   });
 
   it("EACCES_owner_read_preserves_ownership_and_never_runs_callback", () => {
@@ -428,6 +448,112 @@ describe("LockRecovery", () => {
     expect(binary.stderr).toContain(errno);
     expect(binary.stderr).toContain(acquisition ? "callback not entered" : "effects may already be committed");
     expect(existsSync(join(ctx.home, "lease.json"))).toBe(!acquisition);
+  });
+
+  it.each(["cleanup", "callback_and_cleanup"])("built_cli_prints_a_cleanup_failure_as_one_orch_line_and_exits_1: %s", (kind) => {
+    const env = { ...process.env, ORCH_HOME: ctx.home };
+    expect(spawnSync(process.execPath, [join(ROOT, "dist/cli.js"), "init", "--no-handbook"], { encoding: "utf8", env }).status).toBe(0);
+    // A directory at the lease's temporary path makes the store inside the callback fail too.
+    if (kind === "callback_and_cleanup") mkdirSync(join(ctx.home, "lease.json.tmp"));
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", faultScript("release_unlink", "EIO", false, true)], { encoding: "utf8", timeout: 5000, env });
+    expect(r.status, r.stderr).toBe(1);
+    const lines = r.stderr.trimEnd().split("\n");
+    expect(lines, r.stderr).toHaveLength(1); // one line, no stack trace
+    const fault = readFileSync(join(ctx.home, "fault-path"), "utf8");
+    if (kind === "cleanup") expect(lines[0].startsWith(`orch: lock cleanup failed: unlink ${fault}: EIO; callback completed; effects may already be committed`)).toBe(true);
+    else {
+      expect(lines[0].startsWith("orch: EISDIR")).toBe(true);
+      expect(lines[0]).toContain(`; lock cleanup failed: unlink ${fault}: EIO; callback failed; effects may already be committed`);
+    }
+    expect(existsSync(join(ctx.home, "lease.json"))).toBe(kind === "cleanup");
+  });
+
+  // The waiter's timeout has already passed when its failed mkdir is followed by a change at the
+  // lock path. Each change is made inside a hook, so the order does not depend on timing.
+  it.each([
+    "released_then_free", "released_and_retaken_twice", "new_owner_not_yet_published", "released_then_new_owner_not_yet_published",
+    "no_record_for_the_whole_wait", "owner_published_between_read_and_listing", "listing_fails",
+  ])("the_timeout_edge_reports_only_what_the_waiter_saw: %s", (edge) => {
+    const lock = join(ctx.home, "schedule.lock.d");
+    const script = base() + `
+      import { FileLock } from ${JSON.stringify(mod)};
+      const edge = ${JSON.stringify(edge)}, timeoutMs = 40;
+      function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+      const holder = new FileLock(lock);
+      const mkdir = fs.mkdirSync, read = fs.readFileSync, list = fs.readdirSync;
+      if (["no_record_for_the_whole_wait", "listing_fails"].includes(edge)) mkdir(lock);
+      else if (edge !== "released_and_retaken_twice") holder.acquire();
+      let first = 0, attempts = 0, changed = false;
+      const expired = () => first > 0 && Date.now() - first > timeoutMs;
+      fs.mkdirSync = function(path, ...args) {
+        if (path !== lock || changed) return mkdir(path, ...args);
+        attempts++;
+        if (edge === "released_and_retaken_twice") {
+          // Another process holds the lock at each attempt and has released it by each read.
+          if (!first) { first = Date.now(); pause(timeoutMs + 20); }
+          throw Object.assign(Error("held at this attempt"), { code: "EEXIST" });
+        }
+        if (edge === "released_then_new_owner_not_yet_published" && attempts === 2) {
+          // The extra attempt loses to a successor whose owner record is not linked yet.
+          changed = true; mkdir(lock);
+          throw Object.assign(Error("held at this attempt"), { code: "EEXIST" });
+        }
+        try { return mkdir(path, ...args); }
+        catch (e) {
+          if (e.code !== "EEXIST") throw e;
+          if (!first) first = Date.now();
+          if (edge === "released_then_free" || edge === "released_then_new_owner_not_yet_published") {
+            pause(timeoutMs + 20); holder.release(); changed = edge === "released_then_free";
+          } else if (edge === "new_owner_not_yet_published" && expired()) {
+            // The owner released and a successor's mkdir succeeded; its owner record is not linked yet.
+            changed = true; holder.release(); mkdir(lock);
+          }
+          throw e;
+        }
+      };
+      fs.readFileSync = function(path, ...args) {
+        // The record is linked after this read and before the directory is listed.
+        if (edge === "owner_published_between_read_and_listing" && path === lock + "/owner.json" && expired()) throw Object.assign(Error("not linked yet"), { code: "ENOENT" });
+        return read(path, ...args);
+      };
+      fs.readdirSync = function(path, ...args) {
+        if (edge === "listing_fails" && path === lock) throw Object.assign(Error("listing denied"), { code: "EACCES" });
+        return list(path, ...args);
+      };
+      syncBuiltinESMExports();
+      let callbacks = 0, error = null, message = null;
+      try { withLock(lock, () => { callbacks++; }, { timeoutMs }); }
+      catch (e) { error = e.name; message = e.message; }
+      console.log(JSON.stringify({ callbacks, error, message, present: fs.existsSync(lock) }));`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(0);
+    const r = JSON.parse(child.stdout);
+    const reset = "stop every orch process and disable new launches, then remove the named lock directory " + lock;
+    const refused = (name: string, present: boolean) => expect([r.callbacks, r.error, r.present], r.message).toEqual([0, name, present]);
+    if (edge === "released_then_free") {
+      // One more attempt: the lock was free, so the waiter takes it and nothing is reported.
+      expect(r).toEqual({ callbacks: 1, error: null, message: null, present: false });
+    } else if (edge === "released_and_retaken_twice") {
+      refused("LockTimeoutError", false);
+      expect(r.message).toContain("lock busy: " + lock);
+      expect(r.message).toContain("in use, not abandoned; remove nothing and run the command again");
+      expect(r.message).not.toContain("remove the named lock directory");
+    } else if (edge.endsWith("new_owner_not_yet_published")) {
+      refused("LockOwnerError", true);
+      expect(r.message).toMatch(/\(no owner record for the last \d+ms of a \d+ms wait; a new owner may still be publishing it\)/);
+      expect(r.message).toContain("; run the command again; if it reports this again, " + reset);
+    } else if (edge === "no_record_for_the_whole_wait") {
+      refused("LockOwnerError", true);
+      expect(r.message).toMatch(/\(no owner record during the whole \d+ms wait\); stop every orch process/);
+      expect(r.message).toContain(reset);
+      expect(r.message).not.toContain("run the command again");
+    } else if (edge === "owner_published_between_read_and_listing") {
+      refused("LockTimeoutError", true);
+      expect(r.message).toContain("no automatic recovery; " + reset);
+    } else {
+      refused("LockOwnerError", true);
+      expect(r.message).toContain("(cannot inspect lock directory: EACCES); " + reset);
+    }
   });
 
   it("callback_and_cleanup_errors_are_both_reported", () => {

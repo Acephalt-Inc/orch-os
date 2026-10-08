@@ -231,6 +231,20 @@ describe("OwnershipSafety", () => {
     expect(readFileSync(lease().epochPath, "utf8")).toBe(recordBytes);
   });
 
+  it("a_read_back_with_the_callers_session_but_another_epoch_is_unverified", () => {
+    lease().run("acquire", "old", { now: 1000 });
+    const write = U.atomicWrite;
+    const spy = vi.spyOn(U, "atomicWrite").mockImplementation((path, data, opts) => {
+      // The lease that reaches the file names the caller but carries an epoch the caller did not issue.
+      write(path, path === lease().path ? JSON.stringify({ ...JSON.parse(data), epoch: 9 }) : data, opts);
+    });
+    let result: ReturnType<Lease["run"]>;
+    try { result = lease().run("acquire", "new", { force: true, now: 1001 }); }
+    finally { spy.mockRestore(); }
+    expect([result[0], result[1].status]).toEqual([5, "UNVERIFIED"]);
+    expect(result[1].state).toMatchObject({ session_id: "new", epoch: 9 });
+  });
+
   it("epoch_exhaustion_refuses_before_writing", () => {
     writeFileSync(lease().epochPath, JSON.stringify({ epoch: Number.MAX_SAFE_INTEGER, holders: [] }));
     expect(lease().run("acquire", "a")[0]).toBe(6);
