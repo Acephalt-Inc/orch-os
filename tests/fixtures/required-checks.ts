@@ -71,6 +71,18 @@ export const scenarios: Scenario[] = [
   })),
 ];
 
+// Job and workflow names compare exactly, for bare and qualified requirements; exact-case controls pass.
+const caseRuns = [check("SUCCESS"), check("SUCCESS", 12, "CI", "Lint")];
+export const caseScenarios: Scenario[] = [
+  ...["test", "CI/test", "Lint", "CI/Lint"].map((name): Scenario => ({
+    title: `exact case ${name}`, runs: caseRuns, workflows: known, required: [name], gateGreen: true, watchGreen: true,
+  })),
+  ...["Test", "TEST", "lint", "CI/Test", "CI/lint", "ci/test", "Ci/Lint"].map((name): Scenario => ({
+    title: `wrong case ${name}`, runs: caseRuns, workflows: known, required: [name],
+    gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: `${name}=ABSENT`,
+  })),
+];
+
 export function prData(s: Scenario) {
   return {
     headRefOid: HEAD, state: "OPEN", author: { login: "author" }, labels: [],

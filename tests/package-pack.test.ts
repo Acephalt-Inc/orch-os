@@ -1,80 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { ROOT } from "./_helpers.js";
+import { candidate as packCandidate, pack, plantRetired, snapshot } from "./_pack.js";
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporaryDirs: string[] = [];
+const candidate = () => packCandidate(temporaryDirs);
 
 afterEach(() => {
   for (const dir of temporaryDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-
-function candidate() {
-  const dir = mkdtempSync(join(tmpdir(), "orch-pack-"));
-  temporaryDirs.push(dir);
-  const repo = join(dir, "repo");
-  const home = join(dir, "home");
-  mkdirSync(repo);
-  mkdirSync(home);
-  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  // Copy current sources and packaged assets, never checkout dist/, .git, or .npmrc.
-  const assets: string[] = pkg.files.filter((p: string) => p !== "dist/");
-  for (const path of ["src", "package.json", "tsconfig.json", ...assets]) {
-    cpSync(join(ROOT, path), join(repo, path), { recursive: true });
-  }
-  // Reuse the installed compiler and types without installing or fetching anything.
-  symlinkSync(join(ROOT, "node_modules"), join(repo, "node_modules"), "dir");
-  const userconfig = join(dir, "user.npmrc");
-  const globalconfig = join(dir, "global.npmrc");
-  writeFileSync(userconfig, "");
-  writeFileSync(globalconfig, "");
-  const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_/i.test(key))),
-    HOME: home,
-    XDG_CONFIG_HOME: home,
-    NPM_CONFIG_USERCONFIG: userconfig,
-    NPM_CONFIG_GLOBALCONFIG: globalconfig,
-    NPM_CONFIG_CACHE: join(dir, "cache"),
-    NPM_CONFIG_OFFLINE: "true",
-    NPM_CONFIG_UPDATE_NOTIFIER: "false",
-    NPM_CONFIG_IGNORE_SCRIPTS: "false",
-  };
-  const run = (command: string, args: string[]) => {
-    const result = spawnSync(command, args, { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
-    expect(result.status, `${command} ${args.join(" ")}\n${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
-    return result.stdout;
-  };
-  return { repo, run };
-}
-
-function plantRetired(repo: string) {
-  mkdirSync(join(repo, "dist"), { recursive: true });
-  for (const name of ["retired", "checks"]) {
-    expect(existsSync(join(repo, "src", `${name}.ts`))).toBe(false);
-    writeFileSync(join(repo, "dist", `${name}.js`), "// retired output\n");
-  }
-}
-
-function pack(copy: ReturnType<typeof candidate>) {
-  copy.run("npm", ["pack", "--offline"]);
-  const tarballs = readdirSync(copy.repo).filter((name) => name.endsWith(".tgz"));
-  expect(tarballs).toHaveLength(1);
-  return join(copy.repo, tarballs[0]);
-}
-
-function snapshot(dir: string): [string, Buffer][] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    return entry.isDirectory()
-      ? snapshot(path).map(([name, bytes]): [string, Buffer] => [join(entry.name, name), bytes])
-      : [[entry.name, readFileSync(path)] as [string, Buffer]];
-  });
-}
 
 it("pack removes retired outputs from a dirty build", () => {
   const copy = candidate();

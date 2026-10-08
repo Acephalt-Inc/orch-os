@@ -7,7 +7,7 @@ import { ciVerdict, requiredCheckNames } from "../src/mergegate.js";
 import * as M from "../src/mergegate.js";
 import * as RW from "../src/reviewwatch.js";
 import { ROOT } from "./_helpers.js";
-import { HEAD, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
+import { HEAD, OLD_HEAD, caseScenarios, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
 let dir: string;
 beforeAll(() => { dir = mkdtempSync(join(ROOT, ".os2-policy-")); });
@@ -66,6 +66,31 @@ describe("RequiredChecksPolicy", () => {
     if (!gate.ci_ok) expect(dispatch).toEqual([]);
   };
   it.each(scenarios)("$title: gate and actual dispatch", exercise);
+
+  it("bare and qualified job names remain case sensitive", () => {
+    // Mutation witness: compare lower-cased names at src/mergegate.ts:67-68.
+    expect(caseScenarios.filter(s => s.gateGreen).length).toBe(4);
+    expect(caseScenarios.filter(s => !s.gateGreen).length).toBe(7);
+    for (const s of caseScenarios) exercise(s);
+  });
+
+  it("explicit head_sha alias rejects stale success", () => {
+    // Mutation witness: drop `?? c.head_sha` at src/mergegate.ts:265.
+    const rollup = (sha: string) => [
+      { name: "test", workflowName: "CI", conclusion: "SUCCESS", head_sha: sha },
+      { name: "lint", workflowName: "CI", conclusion: "SUCCESS", head_sha: HEAD },
+    ];
+    for (const source of [{}, { reviewSource: "comments" as const, authorAgents: ["author"] }]) {
+      const stale = M.evaluate({ ...prData(scenarios[0]), statusCheckRollup: rollup(OLD_HEAD) }, { requiredChecks: ["CI/test"], ...source });
+      expect(stale.ci_ok).toBe(false);
+      expect(stale.ok).toBe(false);
+      expect(stale.unmet_checks).toEqual({ "CI/test": "ABSENT" });
+      const current = M.evaluate({ ...prData(scenarios[0]), statusCheckRollup: rollup(HEAD) }, { requiredChecks: ["CI/test"], ...source });
+      expect(current.ci_ok).toBe(true);
+      expect(current.ok).toBe(true);
+      expect(current.unmet_checks).toEqual({});
+    }
+  });
 
   it("generated two required names block one listed workflow in both requirement orders", () => {
     // Review v1 exact replacement of src/reviewwatch.ts:516:
@@ -134,8 +159,8 @@ describe("RequiredChecksPolicy", () => {
     expect(M.evaluate({ ...prData(scenarios[0]), statusCheckRollup: [{ name: "test", conclusion: state }] }).ci_ok).toBe(false);
   });
 
-  it("SUCCESS with not-applicable checks and no requirements keeps the old output", () => {
-    const info = { ...prData(scenarios[0]), statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }, { name: "docs", conclusion: "SKIPPED" }] };
+  it.each(["SKIPPED", "NEUTRAL"])("SUCCESS with not-applicable checks and no requirements keeps the old output: %s", (state) => {
+    const info = { ...prData(scenarios[0]), statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }, { name: "docs", conclusion: state }] };
     const gate = M.evaluate(info);
     expect(gate.ci_ok).toBe(true);
     expect(gate).not.toHaveProperty("required_checks");
