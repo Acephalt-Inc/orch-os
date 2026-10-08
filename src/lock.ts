@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /**
- * Cross-process exclusive lock built on atomic mkdir (Node has no flock).
- *
- * acquire: mkdir(<path>) succeeds for exactly one process; the winner writes owner.json
- *          ({pid, host, token, created_ms}) inside it. Everyone else polls with a short,
- *          jittered backoff until it can mkdir, or until the timeout (LockTimeoutError).
- * recovery: a lock left behind by a holder that died is removed by the next caller.
- * release: removes the lock only if it still carries our token; otherwise LockLostError
- *          (someone judged us stale), which callers surface instead of ignoring.
+ * One local host, cooperating processes, synchronous callbacks.
+ * Exclusive mkdir ownership lasts until this owner's release. A complete linked
+ * owner record precedes the callback; callback completion precedes release rename.
+ * No online lock breaking: dead or interrupted owners require a quiescent reset.
+ * At the timeout a waiter reports what it saw: a lock seen released is tried once more, and a
+ * directory without an owner record gets the reset procedure alone only if none was read all along.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { pidAlive, sleepSync } from "./util.js";
+import { sleepSync, withWriteGuard } from "./util.js";
+
+function recovery(path: string): string {
+  return `stop every orch process and disable new launches, then remove the named lock directory ${path}; preserve lease, epoch, author and journal files (docs/commands.md)`;
+}
 
 export class LockTimeoutError extends Error {
-  constructor(path: string, ms: number) {
-    super(`lock busy: ${path} (waited ${Math.round(ms / 1000)}s)`);
+  /** `inUse`: the lock was seen released as the wait ended, so there is no directory to reset. */
+  constructor(path: string, ms: number, inUse = false) {
+    super(`lock busy: ${path} (waited ${Math.round(ms / 1000)}s); ${inUse
+      ? "it was released and taken again as the wait ended, so it is in use, not abandoned; remove nothing and run the command again"
+      : `no automatic recovery; ${recovery(path)}`}`);
     this.name = "LockTimeoutError";
   }
 }
@@ -31,6 +36,7 @@ export class LockLostError extends Error {
 
 export interface LockOptions {
   timeoutMs?: number;
+  /** Retained for callers; age never permits lock removal. */
   staleMs?: number;
 }
 
@@ -42,79 +48,68 @@ interface Owner {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_STALE_MS = 60_000;
-const BREAK_STALE_MS = 10_000;
+export class LockOwnerError extends Error {
+  /** `retryFirst`: the owner may be a live process that has not published its record yet. */
+  constructor(readonly file: string, reason: string, dir = dirname(file), retryFirst = false) {
+    super(`unknown lock owner: ${file} (${reason}); ${retryFirst ? "run the command again; if it reports this again, " : ""}${recovery(dir)}`);
+    this.name = "LockOwnerError";
+  }
+}
+
+function residual(dir: string): string {
+  try {
+    const entries = readdirSync(dir).sort();
+    return `${dir} remains; ${entries.includes("owner.json") ? "owner record remains" : "ownerless directory"}; entries=${JSON.stringify(entries)}`;
+  } catch (e: any) {
+    return e.code === "ENOENT" ? `${dir} absent` : `${dir}: state unknown (${e.code ?? "inspection failed"})`;
+  }
+}
+
+export class LockCleanupError extends Error {
+  constructor(readonly operation: string, readonly path: string, readonly errno: string,
+              readonly stage: string, readonly state: string, cause: unknown, resetDir: string) {
+    super(`lock cleanup failed: ${operation} ${path}: ${errno}; ${stage}; ${state}; ${recovery(resetDir)}`, { cause });
+    this.name = "LockCleanupError";
+  }
+}
+
+function cleanup(operation: string, path: string, dir: string, stage: string, action: () => void): void {
+  try { action(); }
+  catch (e: any) { throw new LockCleanupError(operation, path, e.code ?? "unknown errno", stage, residual(dir), e, dir); }
+}
+
+function both(first: unknown, second: unknown): AggregateError {
+  return new AggregateError([first, second], `${first instanceof Error ? first.message : String(first)}; ${second instanceof Error ? second.message : String(second)}`);
+}
 
 function readOwner(dir: string): Owner | null {
-  try {
-    const o = JSON.parse(readFileSync(dir + "/owner.json", "utf8"));
-    if (o && typeof o.token === "string") return o as Owner;
-  } catch { /* missing or half-written */ }
-  return null;
-}
-
-function ageMs(p: string, now: number): number | null {
-  try {
-    return now - statSync(p).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-/** What we saw when we judged the lock stale: its token, or its mtime when owner.json was missing. */
-function staleMark(dir: string, staleMs: number): string | null {
-  const now = Date.now();
-  const o = readOwner(dir);
-  if (o) {
-    const dead = o.host === hostname() && !pidAlive(o.pid, false);
-    const old = now - o.created_ms > staleMs;
-    return dead || old ? "token:" + o.token : null;
-  }
-  let mtime: number;
-  try {
-    mtime = statSync(dir).mtimeMs;
-  } catch {
-    return null; // vanished: just retry
-  }
-  return now - mtime > staleMs ? "mtime:" + mtime : null;
-}
-
-function currentMark(dir: string): string | null {
-  const o = readOwner(dir);
-  if (o) return "token:" + o.token;
-  try {
-    return "mtime:" + statSync(dir).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-function tryBreak(dir: string, mark: string): void {
-  const brk = dir + ".break";
-  try {
-    mkdirSync(brk);
-  } catch (e: any) {
-    if (e.code !== "EEXIST") throw e;
-    const age = ageMs(brk, Date.now());
-    if (age !== null && age > BREAK_STALE_MS) {
-      try {
-        rmdirSync(brk);
-      } catch { /* someone else did */ }
+  const file = dir + "/owner.json";
+  let text: string;
+  try { text = readFileSync(file, "utf8"); }
+  catch (e: any) {
+    if (e.code === "ENOENT") {
+      // Publication or the owner's release can race this read. A dangling link is unknown.
+      try { if (!lstatSync(file).isSymbolicLink()) return null; }
+      catch (missing: any) { if (missing.code === "ENOENT") return null; }
     }
-    return;
+    throw new LockOwnerError(file, e.code ?? "cannot read");
   }
-  try {
-    if (currentMark(dir) === mark) {
-      const aside = `${dir}.stale.${process.pid}.${randomUUID()}`;
-      try {
-        renameSync(dir, aside);
-        rmSync(aside, { recursive: true, force: true });
-      } catch { /* gone already */ }
-    }
-  } finally {
-    try {
-      rmdirSync(brk);
-    } catch { /* ignore */ }
+  let o: any;
+  try { o = JSON.parse(text); }
+  catch { throw new LockOwnerError(file, "invalid JSON"); }
+  if (!o || typeof o.token !== "string" || !o.token || typeof o.host !== "string" || !o.host ||
+      !Number.isSafeInteger(o.pid) || o.pid <= 0 || !Number.isFinite(o.created_ms)) {
+    throw new LockOwnerError(file, "invalid owner record");
+  }
+  return o as Owner;
+}
+
+/** What is at the lock path when a read found no owner record. One listing, so the answer describes one directory. */
+function withoutOwner(dir: string): "absent" | "ownerless" | "published" {
+  try { return readdirSync(dir).includes("owner.json") ? "published" : "ownerless"; }
+  catch (e: any) {
+    if (e.code === "ENOENT") return "absent";
+    throw new LockOwnerError(dir + "/owner.json", `cannot inspect lock directory: ${e.code ?? "I/O error"}`);
   }
 }
 
@@ -124,62 +119,111 @@ export class FileLock {
 
   acquire(): void {
     const timeout = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const staleMs = this.opts.staleMs ?? DEFAULT_STALE_MS;
     const start = Date.now();
     let wait = 1;
+    let sawOwner = false;                    // an owner record was read during this wait
+    let noRecordSince: number | null = null; // start of the current unbroken run of reads without one
+    let lastAttempt = false;                 // the one extra mkdir after the lock was seen released at the timeout
     for (;;) {
+      // Legacy exclusion is refused, never created, used or removed online.
+      const legacy = this.path + ".break";
       try {
-        mkdirSync(this.path, { mode: 0o700 });
-        const token = randomUUID();
-        const owner: Owner = { pid: process.pid, host: hostname(), token, created_ms: Date.now() };
-        writeFileSync(this.path + "/owner.json", JSON.stringify(owner));
-        this.token = token;
-        return;
-      } catch (e: any) {
-        if (e.code === "ENOENT") {
-          mkdirSync(dirname(this.path), { recursive: true });
-          continue;
-        }
+        lstatSync(legacy);
+        throw new LockOwnerError(legacy, "legacy breaker artifact", legacy);
+      } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+      let acquired = false;
+      try { mkdirSync(this.path, { mode: 0o700 }); acquired = true; }
+      catch (e: any) {
+        if (e.code === "ENOENT") { mkdirSync(dirname(this.path), { recursive: true }); continue; }
         if (e.code !== "EEXIST") throw e;
       }
-      const mark = staleMark(this.path, staleMs);
-      if (mark) {
-        tryBreak(this.path, mark);
-        continue;
+      if (acquired) {
+        const token = randomUUID();
+        const owner: Owner = { pid: process.pid, host: hostname(), token, created_ms: Date.now() };
+        const tmp = `${this.path}/.owner-${token}`;
+        try {
+          writeFileSync(tmp, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+          linkSync(tmp, this.path + "/owner.json");
+        } catch (initializationError) {
+          try {
+            // Only this mkdir winner cleans its unpublished initialization.
+            cleanup("unlink", tmp, this.path, "callback not entered; initialization failed", () => {
+              try { unlinkSync(tmp); } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+            });
+            cleanup("rmdir", this.path, this.path, "callback not entered; initialization failed", () => rmdirSync(this.path));
+          } catch (cleanupError) { throw both(initializationError, cleanupError); }
+          throw initializationError;
+        }
+        cleanup("unlink", tmp, this.path, "callback not entered; owner published", () => unlinkSync(tmp));
+        this.token = token;
+        return;
       }
-      if (Date.now() - start > timeout) throw new LockTimeoutError(this.path, timeout);
+      const owner = readOwner(this.path);
+      const now = Date.now();
+      if (owner) { sawOwner = true; noRecordSince = null; }
+      else noRecordSince ??= now;
+      if (now - start > timeout) {
+        const seen = owner ? "published" : withoutOwner(this.path);
+        if (seen === "absent") {
+          // Released between the failed mkdir and the read: free, not abandoned. One immediate
+          // attempt, so the wait stays bounded; a second release in that instant is still not a reset case.
+          if (lastAttempt) throw new LockTimeoutError(this.path, timeout, true);
+          lastAttempt = true;
+          continue;
+        }
+        if (seen === "ownerless") {
+          // A directory first seen without a record late in the wait may belong to a live owner
+          // between mkdir and publication; only one with no record all along gets the reset procedure alone.
+          const late = sawOwner || lastAttempt;
+          throw new LockOwnerError(this.path + "/owner.json", late
+            ? `no owner record for the last ${now - noRecordSince!}ms of a ${now - start}ms wait; a new owner may still be publishing it`
+            : `no owner record during the whole ${now - start}ms wait`, undefined, late);
+        }
+        throw new LockTimeoutError(this.path, timeout);
+      }
       sleepSync(wait + Math.random() * wait);
       wait = Math.min(wait * 2, 25);
     }
   }
 
-  release(): void {
+  /** Fence before an effect, rather than discovering lost ownership only at release. */
+  assertHeld(): void {
+    const o = readOwner(this.path);
+    if (!this.token || !o || o.token !== this.token) throw new LockLostError(this.path);
+  }
+
+  release(stage = "callback/effects ended; effects may already be committed"): void {
     const token = this.token;
     this.token = null;
     if (!token) return;
     const o = readOwner(this.path);
     if (!o || o.token !== token) throw new LockLostError(this.path);
-    // rename aside before deleting, so a waiter never sees a half-removed lock directory
+    // Only the owner renames, after all callback effects have ended.
     const aside = `${this.path}.rel.${process.pid}.${token}`;
-    renameSync(this.path, aside);
-    rmSync(aside, { recursive: true, force: true });
+    cleanup("rename", this.path, this.path, stage, () => renameSync(this.path, aside));
+    cleanup("unlink", aside + "/owner.json", aside, stage, () => unlinkSync(aside + "/owner.json"));
+    cleanup("rmdir", aside, aside, stage, () => rmdirSync(aside));
   }
 }
 
-/** Run fn while holding the lock at `path`; the lock is released even if fn throws. */
+/** Run a synchronous callback and report both callback and release failures. */
 export function withLock<T>(path: string, fn: () => T, opts: LockOptions = {}): T {
   const l = new FileLock(path, opts);
   l.acquire();
-  let ok = false;
-  try {
-    const r = fn();
-    ok = true;
-    return r;
-  } finally {
-    try {
-      l.release();
-    } catch (e) {
-      if (ok) throw e; // a lost lock after a successful critical section must be reported
+  let result: T;
+  let failed = false, callbackError: unknown;
+  try { result = withWriteGuard(() => l.assertHeld(), fn); }
+  catch (e) { failed = true; callbackError = e; }
+  try { l.release(`callback ${failed ? "failed" : "completed"}; effects may already be committed`); }
+  catch (e) {
+    if (failed) {
+      // The same ownership refusal can be observed by the guard and release.
+      if (((callbackError instanceof LockLostError && e instanceof LockLostError) ||
+           (callbackError instanceof LockOwnerError && e instanceof LockOwnerError)) && callbackError.message === e.message) throw callbackError;
+      throw both(callbackError, e);
     }
+    throw e;
   }
+  if (failed) throw callbackError;
+  return result!;
 }

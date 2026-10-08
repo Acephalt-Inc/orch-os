@@ -9,7 +9,7 @@ import * as C from "./config.js";
 import * as D from "./detect.js";
 import { Lease } from "./lease.js";
 import * as LD from "./load.js";
-import { LockLostError, LockTimeoutError } from "./lock.js";
+import { LockCleanupError, LockLostError, LockOwnerError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
 import * as M from "./mergegate.js";
@@ -406,15 +406,20 @@ const cmdConfig: Run = (_a, io) => {
 };
 
 const cmdLease: Run = (a, io) => {
+  if (a.recover && a.action !== "acquire") {
+    eprintln(io, "lease: --recover is only valid for acquire");
+    return 2;
+  }
   const cfg = C.loadOrDefault();
   const sess = a.action === "status" ? null : session(a);
-  const [code, r] = lease(cfg).run(a.action, sess, { leaseSeconds: a.seconds, force: a.force, expectedEpoch: a.expected_epoch });
+  const [code, r] = lease(cfg).run(a.action, sess, { recover: a.recover, leaseSeconds: a.seconds, force: a.force, expectedEpoch: a.expected_epoch });
   if (a.json) println(io, dumps(r));
   else {
     const st = r.state ?? {};
     const left = st.lease_expires_at ? st.lease_expires_at - r.now : 0;
     println(io, `lease ${r.status} holder=${st.session_id ?? r.holder ?? "None"} epoch=${st.epoch ?? "None"} expires_in=${Math.max(0, Math.trunc(left))}s`);
   }
+  if (code === 6) eprintln(io, `lease: ${r.file} is ${r.status} (${r.error}); use acquire --recover only with a known epoch record`);
   return code;
 };
 
@@ -737,14 +742,14 @@ const cmdTask: Run = (a, io) => {
       if (a.json) println(io, dumps(rows));
       else if (!rows.length) println(io, "no tasks");
       else for (const r of rows) println(io, `${padEnd(r.id, 24)} ${padEnd(r.status, 8)} holder=${r.holder ?? "None"} epoch=${r.epoch ?? "None"} expires_in=${r.expires_in}s`);
-      return 0;
+      return rows.some((r) => ["CORRUPT", "UNKNOWN"].includes(r.status)) ? 6 : 0;
     }
     let code: number;
     let r: Record<string, any>;
     if (action === "status") [code, r] = t.status(a.id);
     else {
       const me = identity(a);
-      if (action === "claim") [code, r] = t.claim(a.id, me, { seconds: a.seconds });
+      if (action === "claim") [code, r] = t.claim(a.id, me, { seconds: a.seconds, recover: a.recover });
       else if (action === "renew") [code, r] = t.renew(a.id, me, { seconds: a.seconds, expectedEpoch: a.expected_epoch });
       else [code, r] = t.release(a.id, me, { expectedEpoch: a.expected_epoch });
     }
@@ -754,6 +759,7 @@ const cmdTask: Run = (a, io) => {
       const left = st.lease_expires_at ? st.lease_expires_at - r.now : 0;
       println(io, `task ${r.task ?? a.id} ${r.status} holder=${st.session_id ?? r.holder ?? "None"} epoch=${st.epoch ?? "None"} expires_in=${Math.max(0, Math.trunc(left))}s`);
     }
+    if (code === 6) eprintln(io, `task: ${r.file} is ${r.status} (${r.error}); use task claim ${a.id} --recover only with a known epoch record`);
     return code;
   } catch (e: any) {
     if (e instanceof TaskError) {
@@ -971,6 +977,7 @@ export function buildTree(): CmdSpec<Run> {
           opt("session", ["--session"], "str", "session id (default $ORCH_SESSION_ID or user@host)"),
           opt("seconds", ["--seconds"], "int", "lease duration (default [lease] default_seconds)"),
           opt("expected_epoch", ["--expected-epoch"], "int", "renew/release only if the epoch still matches"),
+          opt("recover", ["--recover"], "bool", "explicitly recover damaged ownership (acquire only; journaled)"),
           opt("force", ["--force"], "bool", "take over an unexpired lease held by someone else"),
           JSON_OPT,
         ],
@@ -1025,7 +1032,7 @@ export function buildTree(): CmdSpec<Run> {
         name: "task", help: "exclusive task claims with epoch fencing",
         sub: [
           { name: "claim", help: "claim a task (or extend your own claim)", run: cmdTask, pos: [{ dest: "id" }],
-            opts: [AS_OPT, opt("seconds", ["--seconds"], "int", "claim duration (default [tasks] default_seconds)"), JSON_OPT] },
+            opts: [AS_OPT, opt("seconds", ["--seconds"], "int", "claim duration (default [tasks] default_seconds)"), opt("recover", ["--recover"], "bool", "explicitly recover a damaged claim; journaled"), JSON_OPT] },
           { name: "renew", help: "extend your claim; with --expected-epoch, only if the epoch still matches", run: cmdTask, pos: [{ dest: "id" }],
             opts: [AS_OPT, opt("seconds", ["--seconds"], "int", "claim duration"), opt("expected_epoch", ["--expected-epoch"], "int", "fencing token from your claim"), JSON_OPT] },
           { name: "release", help: "release your claim", run: cmdTask, pos: [{ dest: "id" }],
@@ -1204,6 +1211,14 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     if (e instanceof ConfigError) {
       eprintln(io, `orch: ${C.configPath()}: ${e.message}`);
       return 2;
+    }
+    if (e instanceof LockCleanupError || (e instanceof AggregateError && e.errors.some((error) => error instanceof LockCleanupError))) {
+      eprintln(io, `orch: ${e.message}`);
+      return 1;
+    }
+    if (e instanceof LockOwnerError) {
+      eprintln(io, `orch: ${e.message}`);
+      return 6;
     }
     if (e instanceof LockTimeoutError) {
       eprintln(io, `orch: ${e.message}`);
