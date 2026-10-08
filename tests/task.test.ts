@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TaskError, Tasks } from "../src/tasks.js";
 import { DIST_CLI, run, useTmpHome } from "./_helpers.js";
@@ -95,5 +95,71 @@ describe("TaskCliV2", () => {
     [code, out] = await run("task", "status", "t1", "--json");
     expect(JSON.parse(out)).toMatchObject({ task: "t1", status: "HELD" });
     expect((await run("task", "release", "t1", "--as", "w1", "--expected-epoch", "1"))[0]).toBe(0);
+  });
+});
+
+
+describe("TaskOwnershipSafety", () => {
+  const ctx = useTmpHome();
+  const reg = () => new Tasks(`${ctx.home}/tasks`);
+  const path = () => `${ctx.home}/tasks/t1.json`;
+
+  it.each(["{bad", "null", "[]", "{}"])("corrupt_claim_blocks_claim_renew_release_status_and_history: %s", (text) => {
+    reg().claim("t1", "w1", { now: 1000 });
+    writeFileSync(path(), text);
+    const bytes = readFileSync(path(), "utf8");
+    for (const [code, r] of [reg().claim("t1", "w2"), reg().renew("t1", "w1"), reg().release("t1", "w1"), reg().status("t1")]) {
+      expect([code, r.status, r.file]).toEqual([6, "CORRUPT", path()]);
+    }
+    expect(reg().list()[0].status).toBe("CORRUPT");
+    expect(reg().holders("t1")).toEqual([]); // unknown authors cannot authorize comments-mode merge
+    expect(readFileSync(path(), "utf8")).toBe(bytes);
+    expect(existsSync(path() + ".recovery.jsonl")).toBe(false);
+  });
+
+  it("task_recovery_is_explicit_monotonic_journaled_and_preserves_authors", () => {
+    reg().claim("t1", "w1", { now: 1000 });
+    reg().release("t1", "w1", { now: 1001 });
+    reg().claim("t1", "w2", { now: 1002 });
+    writeFileSync(path(), "{broken");
+    expect(reg().claim("t1", "w3")[0]).toBe(6);
+    const [code, r] = reg().claim("t1", "w3", { recover: true, now: 1003 });
+    expect([code, r.status, r.state.epoch, r.state.holders]).toEqual([0, "CLAIMED", 3, ["w1", "w2", "w3"]]);
+    const lines = readFileSync(path() + ".recovery.jsonl", "utf8").trim().split("\n").map((x) => JSON.parse(x));
+    expect(lines[1]).toMatchObject({ stage: "COMMITTED", file: path(), found: { status: "CORRUPT" }, written: { epoch: 3, session_id: "w3" } });
+    expect(readFileSync(lines[1].evidence, "utf8")).toBe("{broken");
+    expect(reg().renew("t1", "w3", { expectedEpoch: 2, now: 1004 })[1].status).toBe("STALE_EPOCH");
+  });
+
+  it("unreadable_task_blocks_every_operation_and_requires_explicit_recovery", () => {
+    reg().claim("t1", "w1");
+    rmSync(path()); mkdirSync(path());
+    for (const [code, r] of [reg().claim("t1", "w2"), reg().renew("t1", "w1"), reg().release("t1", "w1"), reg().status("t1")]) {
+      expect([code, r.status]).toEqual([6, "UNKNOWN"]);
+    }
+    expect(reg().list()[0].status).toBe("UNKNOWN");
+    expect(reg().claim("t1", "w2", { recover: true })[1].state.epoch).toBe(2);
+  });
+
+  it("task_recovery_without_a_surviving_floor_never_restarts_at_one", () => {
+    mkdirSync(`${ctx.home}/tasks`);
+    writeFileSync(path(), "{legacy broken");
+    expect(reg().claim("t1", "w2", { recover: true })[0]).toBe(6);
+    expect(readdirSync(`${ctx.home}/tasks`)).toEqual(["t1.json"]);
+  });
+
+  it("concurrent_cli_recoverers_have_one_winner_and_one_journal", async () => {
+    await run("init", "--no-handbook");
+    reg().claim("t1", "w1");
+    writeFileSync(path(), "{bad");
+    const codes = await Promise.all(Array.from({ length: 6 }, (_, i) => new Promise<number>((resolve) => {
+      spawn(process.execPath, [DIST_CLI, "task", "claim", "t1", "--as", `r${i}`, "--recover"], {
+        env: { ...process.env, ORCH_HOME: ctx.home }, stdio: "ignore",
+      }).on("exit", (code) => resolve(code ?? -1));
+    })));
+    expect(codes.filter((c) => c === 0)).toHaveLength(1);
+    expect(codes.filter((c) => c === 3)).toHaveLength(5);
+    expect(reg().status("t1")[1].state.epoch).toBe(2);
+    expect(readFileSync(path() + ".recovery.jsonl", "utf8").trim().split("\n")).toHaveLength(2);
   });
 });

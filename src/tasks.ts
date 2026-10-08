@@ -7,7 +7,7 @@
  * task's epoch (its fencing token). There is no --force: a claimed task cannot be taken from
  * its holder until the holder releases it or the claim expires. Re-claiming a task you hold
  * extends it and keeps the epoch. Exit codes match the lease: 0 / 3 BUSY / 4 NOT_HOLDER,
- * EXPIRED or STALE_EPOCH / 5 UNVERIFIED. Task ids are case-insensitive, so two ids that differ
+ * EXPIRED or STALE_EPOCH / 5 UNVERIFIED / 6 CORRUPT or UNKNOWN. Task ids are case-insensitive, so two ids that differ
  * only in case can never be two tasks on a case-insensitive file system.
  */
 import { existsSync, readdirSync } from "node:fs";
@@ -44,15 +44,15 @@ export class Tasks {
     return new Lease(`${this.dir}/${Tasks.key(id)}.json`, this.defaultSeconds, this.minSeconds);
   }
 
-  private run(action: string, id: string, holder: string | null, opts: { seconds?: number | null; expectedEpoch?: number | null; now?: number | null } = {}): [number, Record<string, any>] {
+  private run(action: string, id: string, holder: string | null, opts: { recover?: boolean; seconds?: number | null; expectedEpoch?: number | null; now?: number | null } = {}): [number, Record<string, any>] {
     if (action !== "status" && !validName(holder)) throw new TaskError(`bad holder '${holder}': use letters, digits, . @ _ -`);
-    const [code, r] = this.lease(id).run(action, holder, { leaseSeconds: opts.seconds, expectedEpoch: opts.expectedEpoch, now: opts.now, trackHolders: true });
+    const [code, r] = this.lease(id).run(action, holder, { recover: opts.recover, leaseSeconds: opts.seconds, expectedEpoch: opts.expectedEpoch, now: opts.now, trackHolders: true });
     r.task = Tasks.key(id);
     r.status = STATUS_NAMES[r.status] ?? r.status;
     return [code, r];
   }
 
-  claim(id: string, holder: string, opts: { seconds?: number | null; now?: number | null } = {}) {
+  claim(id: string, holder: string, opts: { recover?: boolean; seconds?: number | null; now?: number | null } = {}) {
     return this.run("acquire", id, holder, opts);
   }
 
@@ -82,7 +82,7 @@ export class Tasks {
       const [, r] = this.status(id, now);
       const st = r.state ?? {};
       const exp = typeof st.lease_expires_at === "number" ? st.lease_expires_at : 0;
-      const status = r.status === "HELD" ? "CLAIMED" : st.state === "RELEASED" ? "RELEASED" : st.session_id ? "EXPIRED" : "FREE";
+      const status = ["CORRUPT", "UNKNOWN"].includes(r.status) ? r.status : r.status === "HELD" ? "CLAIMED" : st.state === "RELEASED" ? "RELEASED" : st.session_id ? "EXPIRED" : "FREE";
       return { id, status, holder: st.session_id ?? null, epoch: st.epoch ?? null, expires_in: Math.max(0, Math.trunc(exp - r.now)) };
     });
   }

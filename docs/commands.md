@@ -9,7 +9,7 @@ All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read
 | `ORCH_SESSION_ID` | Default `--session` for `lease`; second fallback for `--as` (then `user@host`) |
 | `ORCH_AGENT_DIRS` | Colon-separated dirs searched for agent CLIs after PATH; empty string = PATH only |
 
-Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
+Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost) · `6` `CORRUPT` / `UNKNOWN` ownership (the named file cannot establish a safe owner or epoch).
 
 ## orch init
 
@@ -65,7 +65,7 @@ Prints the resolved configuration as JSON, with the file it came from.
 ## orch lease
 
 ```text
-orch lease {status|acquire|renew|release} [--session ID] [--seconds N] [--expected-epoch N] [--force] [--json]
+orch lease {status|acquire|renew|release} [--session ID] [--seconds N] [--expected-epoch N] [--force] [--recover] [--json]
 ```
 
 | Action | Result status |
@@ -76,6 +76,15 @@ orch lease {status|acquire|renew|release} [--session ID] [--seconds N] [--expect
 | `release` | `RELEASED`; with `--expected-epoch`, refused if the epoch moved |
 
 Output: `lease STATUS holder=... epoch=N expires_in=Ns`. `--force` takes over an unexpired lease and records `forced_takeover`. `--seconds` below `[lease] min_seconds` is raised to it.
+
+An existing file with invalid JSON, a non-object value, or an invalid lease object is `CORRUPT`; an unreadable file (including a directory or dangling symlink) is `UNKNOWN`. Every lease action refuses with exit 6 and names the file on stderr. `--force` cannot bypass this refusal. `acquire --recover` is the only recovery command; using `--recover` with another action gives exit 2. Recovery of a healthy lease follows normal holder/expiry rules.
+
+Every successful store first persists `<lease path>.epoch.max`, a JSON record of the highest reserved epoch and known holders, then publishes the lease under the same lock. Recovery uses the maximum of that record and any valid epoch readable in the damaged object, plus one: epoch 7 becomes 8 even if the lease JSON is unparseable. Recovery refuses when neither source supplies an epoch, or when the record is damaged/unreadable; it never guesses 1. An exhausted safe-integer epoch also refuses. Healthy legacy leases gain a record on their next successful write. A crash between reservation and lease publication skips the reserved epoch; deleting only the lease retains the floor. Preserve the sidecar with the lease; deleting both discards the evidence needed for fencing.
+
+Explicit recovery keeps the damaged file/directory at a unique `<path>.corrupt-<time>-<uuid>` path and fsyncs journal lines to `<path>.recovery.jsonl`. `PREPARED` records what was found, the evidence path, and the intended lease; `COMMITTED` records the published lease. A lone `PREPARED` means publication may not have completed. Journal/epoch/evidence failures abort the operation; retries may skip another epoch.
+
+Locks and fencing cover a single local host. A living same-host PID, including one paused by SIGSTOP, never becomes stale by age. A dead local PID can be reclaimed immediately; a foreign host's record can be aged out, but this is no multi-host or NFS safety promise. Missing `owner.json` retains the initialization grace period; unreadable or malformed owner records block all lock-protected callbacks with exit 6. Lock tokens are checked before protected writes, again before atomic publication, and before direct message appends or reviewer dispatch; loss gives exit 5 before that effect. A leftover breaker directory is never removed by age while its holder could be paused; contention times out instead. These checks do not fence arbitrary external programs writing the files without these locks.
+
 
 ## orch msg
 
@@ -98,14 +107,16 @@ Your inbox is every message whose `to` is your name (compared case-insensitively
 ## orch task
 
 ```text
-orch task claim   ID [--as NAME] [--seconds N] [--json]
+orch task claim   ID [--as NAME] [--seconds N] [--recover] [--json]
 orch task renew   ID [--as NAME] [--seconds N] [--expected-epoch N] [--json]
 orch task release ID [--as NAME] [--expected-epoch N] [--json]
 orch task status  ID [--json]
 orch task list       [--json]
 ```
 
-Output: `task ID STATUS holder=... epoch=N expires_in=Ns`. Status and exit codes follow the lease: `CLAIMED` (0), `RENEWED` (0), `RELEASED` (0), `HELD`/`FREE` for `status`, `BUSY` (3), `NOT_HOLDER`/`EXPIRED`/`STALE_EPOCH` (4), `UNVERIFIED` (5). There is no `--force`. A task id is letters, digits, `_ . @ -`, not starting with a dot, and is case-insensitive (stored in lower case). `list` prints every task file as `CLAIMED`, `EXPIRED`, `RELEASED` or `FREE`.
+Output: `task ID STATUS holder=... epoch=N expires_in=Ns`. Status and exit codes follow the lease: `CLAIMED` (0), `RENEWED` (0), `RELEASED` (0), `HELD`/`FREE` for `status`, `BUSY` (3), `NOT_HOLDER`/`EXPIRED`/`STALE_EPOCH` (4), `UNVERIFIED` (5), `CORRUPT`/`UNKNOWN` (6). There is no `--force`. A task id is letters, digits, `_ . @ -`, not starting with a dot, and is case-insensitive (stored in lower case). `list` prints every task file as `CLAIMED`, `EXPIRED`, `RELEASED`, `FREE`, `CORRUPT` or `UNKNOWN`, and exits 6 if any claim is damaged.
+
+Task files use the same epoch/history sidecar, refusal and journal rules as the lead lease. Only `task claim ID --recover` can recover damaged ownership, and only with a known epoch floor. Recovery preserves the known author history from the sidecar and any readable history in the damaged object; an unknown claim supplies no authors to the comments-mode merge gate. Moving a damaged claim aside by hand is unnecessary. Preserve its sidecar: it prevents epoch reset and loss of past task authors.
 
 ## orch mailbox
 

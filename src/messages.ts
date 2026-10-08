@@ -22,7 +22,7 @@ import { dirname } from "node:path";
 import { withLock } from "./lock.js";
 import { stamp } from "./mailbox.js";
 import { dumps } from "./pyjson.js";
-import { atomicWrite, isPlainObject, validName } from "./util.js";
+import { assertWriteOwnership, atomicWrite, isPlainObject, validName } from "./util.js";
 
 export const KINDS = ["QUESTION", "ANSWER", "DONE", "BLOCKED"] as const;
 export type Kind = (typeof KINDS)[number];
@@ -98,6 +98,7 @@ export class Messages {
       // one write() of one line: readers never see half a message from a live writer
       // if an earlier writer died mid-line, start on a fresh line so this message stays readable
       const sep = endsWithNewline(this.path) ? "" : "\n";
+      assertWriteOwnership();
       appendFileSync(this.path, sep + dumps(msg) + "\n");
       return msg;
     });

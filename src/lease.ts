@@ -6,13 +6,16 @@
  *   * a requested duration below minSeconds is raised to minSeconds;
  *   * every change of holder increments the epoch, so a former holder can be fenced off;
  *   * a different holder with an unexpired lease blocks acquire unless force is set.
- * Exit codes: 0 ok / 3 busy (another holder) / 4 not the holder, expired, or stale epoch / 5 write not verified.
+ * Corrupt/unknown files block every action. Explicit acquire recovery requires an epoch floor.
+ * The separate epoch/history record is written before each lease publication, under the same lock.
+ * Exit codes: 0 ok / 3 busy (another holder) / 4 not the holder, expired, or stale epoch / 5 write not verified / 6 CORRUPT or UNKNOWN.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { withLock } from "./lock.js";
 import { dumps } from "./pyjson.js";
-import { atomicWrite, isPlainObject } from "./util.js";
+import { assertWriteOwnership, atomicWrite, isPlainObject } from "./util.js";
 
 export type LeaseAction = "status" | "acquire" | "renew" | "release";
 export const LEASE_ACTIONS: LeaseAction[] = ["status", "acquire", "renew", "release"];
@@ -20,6 +23,7 @@ export const LEASE_ACTIONS: LeaseAction[] = ["status", "acquire", "renew", "rele
 export interface LeaseRunOptions {
   leaseSeconds?: number | null;
   force?: boolean;
+  recover?: boolean;
   expectedEpoch?: number | null;
   now?: number | null;
   /** Keep an append-only `holders` list (every session that ever held it). Task claims use it. */
@@ -40,6 +44,33 @@ export function holderHistory(state: Record<string, any>): string[] {
 
 export type LeaseResult = Record<string, any>;
 
+export const LEASE_FILE_ERROR_EXIT = 6;
+export class LeaseFileError extends Error {
+  constructor(readonly status: "CORRUPT" | "UNKNOWN", readonly path: string,
+              readonly reason: string, readonly epoch: number | null = null,
+              readonly holders: string[] = []) {
+    super(`${path} is ${status} (${reason})`);
+    this.name = "LeaseFileError";
+  }
+}
+function validEpoch(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** Only a genuinely absent path is free; a dangling symlink is unknown. */
+function readOptional(path: string): string | null {
+  try { return readFileSync(path, "utf8"); }
+  catch (e: any) {
+    if (e.code === "ENOENT") {
+      try { lstatSync(path); }
+      catch (missing: any) { if (missing.code === "ENOENT") return null; }
+    }
+    throw new LeaseFileError("UNKNOWN", path, `cannot read: ${e.code ?? "I/O error"}`);
+  }
+}
+interface EpochRecord { epoch: number; holders: string[] }
+interface Recovery { found: LeaseFileError; evidence: string }
+
 function round(n: number, d: number): number {
   const f = 10 ** d;
   return Math.round(n * f) / f;
@@ -51,24 +82,61 @@ export class Lease {
     this.lock = path + ".lock.d";
   }
 
+  get epochPath(): string { return this.path + ".epoch.max"; }
+  get journalPath(): string { return this.path + ".recovery.jsonl"; }
+
+  /** Missing is free; damaged or unreadable ownership is distinct and never free. */
   load(): Record<string, any> {
-    let text: string;
-    try {
-      text = readFileSync(this.path, "utf8");
-    } catch (e: any) {
-      if (e && e.code === "ENOENT") return {};
-      throw e; // unreadable (permissions, a directory, I/O): fail closed, never read as FREE
+    const text = readOptional(this.path);
+    if (text === null) return {};
+    let v: any;
+    try { v = JSON.parse(text); }
+    catch { throw new LeaseFileError("CORRUPT", this.path, `invalid JSON (${text.length} characters)`); }
+    const obj = isPlainObject(v);
+    const epoch = obj && validEpoch(v.epoch) ? v.epoch : null;
+    if (!obj || typeof v.session_id !== "string" || !v.session_id || epoch === null ||
+        !Number.isFinite(v.lease_expires_at) || !["ACTIVE", "RELEASED"].includes(v.state)) {
+      throw new LeaseFileError("CORRUPT", this.path, "invalid lease object", epoch, obj ? holderHistory(v) : []);
     }
-    try {
-      const v = JSON.parse(text);
-      return isPlainObject(v) ? v : {};
-    } catch {
-      return {}; // corrupt JSON reads as free, like v1.1
-    }
+    return v;
   }
 
-  private store(state: Record<string, any>): void {
+  private readRecord(): EpochRecord | null {
+    const text = readOptional(this.epochPath);
+    if (text === null) return null;
+    let v: any;
+    try { v = JSON.parse(text); } catch { /* handled below */ }
+    if (!isPlainObject(v) || !validEpoch(v.epoch) || !Array.isArray(v.holders) ||
+        !v.holders.every((h: unknown) => typeof h === "string" && h !== "")) {
+      throw new LeaseFileError("CORRUPT", this.epochPath, "invalid epoch/history record");
+    }
+    return v as EpochRecord;
+  }
+
+  private journal(stage: "PREPARED" | "COMMITTED", recovery: Recovery, state: Record<string, any>, now: number): void {
+    assertWriteOwnership();
+    const fd = openSync(this.journalPath, "a", 0o600);
+    try {
+      assertWriteOwnership();
+      appendFileSync(fd, JSON.stringify({ stage, at: now, file: this.path,
+        found: { status: recovery.found.status, reason: recovery.found.reason, epoch: recovery.found.epoch },
+        evidence: recovery.evidence, written: state }) + "\n");
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
+  }
+
+  private store(state: Record<string, any>, record: EpochRecord | null, recovery: Recovery | null, now: number): void {
+    // Reserve even a skipped epoch before publishing the lease. A crash here cannot reissue it.
+    const holders = [...new Set([...(record?.holders ?? []), ...holderHistory(state)])];
+    atomicWrite(this.epochPath, JSON.stringify({ epoch: Math.max(record?.epoch ?? 0, state.epoch), holders }) + "\n",
+      { fsync: true, mode: 0o600, tmpSuffix: ".tmp" });
+    if (recovery) {
+      this.journal("PREPARED", recovery, state, now);
+      assertWriteOwnership();
+      renameSync(this.path, recovery.evidence);
+    }
     atomicWrite(this.path, dumps(state), { fsync: true, mode: 0o600, tmpSuffix: ".tmp" });
+    if (recovery) this.journal("COMMITTED", recovery, state, now);
   }
 
   private fresh(state: Record<string, any>, now: number): boolean {
@@ -85,11 +153,34 @@ export class Lease {
   run(action: string, session?: string | null, opts: LeaseRunOptions = {}): [number, LeaseResult] {
     if (!(LEASE_ACTIONS as string[]).includes(action)) throw new RangeError(action);
     if (action !== "status" && !session) throw new RangeError("session id required");
+    if (opts.recover && action !== "acquire") throw new RangeError("recover is only valid for acquire");
     mkdirSync(dirname(this.path), { recursive: true });
     const req = opts.leaseSeconds === undefined || opts.leaseSeconds === null ? this.defaultSeconds : opts.leaseSeconds;
     return withLock(this.lock, () => {
       const now = opts.now === undefined || opts.now === null ? Date.now() / 1000 : opts.now;
-      let state = this.load();
+      const refuse = (e: LeaseFileError): [number, LeaseResult] => [LEASE_FILE_ERROR_EXIT, {
+        action, now: round(now, 3), holder: null, unexpired: false, epoch: null, expires_at: null,
+        state: {}, status: e.status, file: e.path, error: e.reason,
+      }];
+      let state: Record<string, any>;
+      let recovery: Recovery | null = null;
+      let damaged: LeaseFileError | null = null;
+      try { state = this.load(); }
+      catch (e) {
+        if (!(e instanceof LeaseFileError)) throw e;
+        if (action !== "acquire" || !opts.recover) return refuse(e);
+        damaged = e;
+        state = {};
+      }
+      let record: EpochRecord | null;
+      try { record = this.readRecord(); }
+      catch (e) { if (e instanceof LeaseFileError) return refuse(e); throw e; }
+      const floor = Math.max(record?.epoch ?? 0, state.epoch ?? 0, damaged?.epoch ?? 0);
+      if (damaged) {
+        if (!record && damaged.epoch === null) return refuse(new LeaseFileError(damaged.status, this.path,
+          `${damaged.reason}; last epoch unknown: ${this.epochPath} missing; recovery refused`));
+        recovery = { found: damaged, evidence: `${this.path}.corrupt-${Math.trunc(now)}-${randomUUID()}` };
+      }
       const owner = state.session_id;
       const fresh = this.fresh(state, now);
       const r: LeaseResult = {
@@ -111,7 +202,7 @@ export class Lease {
           return [4, r];
         }
         Object.assign(state, { lease_expires_at: 0, state: "RELEASED", released_at: now });
-        this.store(state);
+        this.store(state, record, recovery, now);
         r.status = "RELEASED";
         r.state = this.load();
         return [0, r];
@@ -136,9 +227,10 @@ export class Lease {
           return [3, r];
         }
         if (owner !== session || state.state !== "ACTIVE" || !fresh) {
-          const prevEpoch = Number(state.epoch || 0);
-          const history = holderHistory(state);
-          state = { acquired_at: now, previous_owner: owner ?? null, epoch: Math.trunc(prevEpoch) + 1, state: "ACTIVE" };
+          if (floor >= Number.MAX_SAFE_INTEGER) return refuse(new LeaseFileError("CORRUPT", this.epochPath, "epoch exhausted"));
+          const history = [...new Set([...(record?.holders ?? []), ...(damaged?.holders ?? []), ...holderHistory(state)])];
+          state = { acquired_at: now, previous_owner: owner ?? null, epoch: floor + 1, state: "ACTIVE" };
+          if (recovery) state.recovered_from = recovery.evidence;
           if (opts.force && owner && owner !== session) state.forced_takeover = true;
           if (opts.trackHolders) state.holders = history.includes(session!) ? history : [...history, session];
         } else if (opts.trackHolders && !Array.isArray(state.holders)) {
@@ -149,11 +241,12 @@ export class Lease {
       Object.assign(state, {
         session_id: session, heartbeat: now, lease_seconds: effective, lease_expires_at: now + effective, state: "ACTIVE",
       });
-      this.store(state);
+      if (opts.trackHolders) state.holders = [...new Set([...(record?.holders ?? []), ...holderHistory(state)])];
+      this.store(state, record, recovery, now);
       const back = this.load(); // same lock still held
       r.lease_seconds_raised = effective !== Math.trunc(req);
       r.state = back;
-      if (back.session_id !== session) {
+      if (back.session_id !== session || back.epoch !== state.epoch) {
         r.status = "UNVERIFIED";
         return [5, r];
       }

@@ -9,11 +9,11 @@
  * release: removes the lock only if it still carries our token; otherwise LockLostError
  *          (someone judged us stale), which callers surface instead of ignoring.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { pidAlive, sleepSync } from "./util.js";
+import { pidAlive, sleepSync, withWriteGuard } from "./util.js";
 
 export class LockTimeoutError extends Error {
   constructor(path: string, ms: number) {
@@ -43,22 +43,33 @@ interface Owner {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STALE_MS = 60_000;
-const BREAK_STALE_MS = 10_000;
-
-function readOwner(dir: string): Owner | null {
-  try {
-    const o = JSON.parse(readFileSync(dir + "/owner.json", "utf8"));
-    if (o && typeof o.token === "string") return o as Owner;
-  } catch { /* missing or half-written */ }
-  return null;
+export class LockOwnerError extends Error {
+  constructor(readonly file: string, reason: string) {
+    super(`unknown lock owner: ${file} (${reason})`);
+    this.name = "LockOwnerError";
+  }
 }
 
-function ageMs(p: string, now: number): number | null {
-  try {
-    return now - statSync(p).mtimeMs;
-  } catch {
-    return null;
+function readOwner(dir: string): Owner | null {
+  const file = dir + "/owner.json";
+  let text: string;
+  try { text = readFileSync(file, "utf8"); }
+  catch (e: any) {
+    if (e.code === "ENOENT") {
+      // A new complete owner can appear between read and lstat; that is a normal acquisition race.
+      try { if (!lstatSync(file).isSymbolicLink()) return null; }
+      catch (missing: any) { if (missing.code === "ENOENT") return null; }
+    }
+    throw new LockOwnerError(file, e.code ?? "cannot read");
   }
+  let o: any;
+  try { o = JSON.parse(text); }
+  catch { throw new LockOwnerError(file, "invalid JSON"); }
+  if (!o || typeof o.token !== "string" || !o.token || typeof o.host !== "string" || !o.host ||
+      !Number.isSafeInteger(o.pid) || o.pid <= 0 || !Number.isFinite(o.created_ms)) {
+    throw new LockOwnerError(file, "invalid owner record");
+  }
+  return o as Owner;
 }
 
 /** What we saw when we judged the lock stale: its token, or its mtime when owner.json was missing. */
@@ -68,7 +79,7 @@ function staleMark(dir: string, staleMs: number): string | null {
   if (o) {
     const dead = o.host === hostname() && !pidAlive(o.pid, false);
     const old = now - o.created_ms > staleMs;
-    return dead || old ? "token:" + o.token : null;
+    return dead || (o.host !== hostname() && old) ? "token:" + o.token : null;
   }
   let mtime: number;
   try {
@@ -89,22 +100,17 @@ function currentMark(dir: string): string | null {
   }
 }
 
-function tryBreak(dir: string, mark: string): void {
+function tryBreak(dir: string, mark: string, staleMs: number): void {
   const brk = dir + ".break";
   try {
     mkdirSync(brk);
   } catch (e: any) {
     if (e.code !== "EEXIST") throw e;
-    const age = ageMs(brk, Date.now());
-    if (age !== null && age > BREAK_STALE_MS) {
-      try {
-        rmdirSync(brk);
-      } catch { /* someone else did */ }
-    }
+    // Never age-break the breaker: it too may be paused while holding its exclusion.
     return;
   }
   try {
-    if (currentMark(dir) === mark) {
+    if (currentMark(dir) === mark && staleMark(dir, staleMs) === mark) {
       const aside = `${dir}.stale.${process.pid}.${randomUUID()}`;
       try {
         renameSync(dir, aside);
@@ -132,7 +138,14 @@ export class FileLock {
         mkdirSync(this.path, { mode: 0o700 });
         const token = randomUUID();
         const owner: Owner = { pid: process.pid, host: hostname(), token, created_ms: Date.now() };
-        writeFileSync(this.path + "/owner.json", JSON.stringify(owner));
+        // Publish a complete record exclusively: a paused initializer cannot overwrite a new owner.
+        const identity = statSync(this.path);
+        const tmp = `${this.path}/.owner-${token}`;
+        writeFileSync(tmp, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+        const current = statSync(this.path);
+        if (current.dev !== identity.dev || current.ino !== identity.ino) throw new LockLostError(this.path);
+        linkSync(tmp, this.path + "/owner.json");
+        unlinkSync(tmp);
         this.token = token;
         return;
       } catch (e: any) {
@@ -144,13 +157,18 @@ export class FileLock {
       }
       const mark = staleMark(this.path, staleMs);
       if (mark) {
-        tryBreak(this.path, mark);
-        continue;
+        tryBreak(this.path, mark, staleMs);
       }
       if (Date.now() - start > timeout) throw new LockTimeoutError(this.path, timeout);
       sleepSync(wait + Math.random() * wait);
       wait = Math.min(wait * 2, 25);
     }
+  }
+
+  /** Fence before an effect, rather than discovering lost ownership only at release. */
+  assertHeld(): void {
+    const o = readOwner(this.path);
+    if (!this.token || !o || o.token !== this.token) throw new LockLostError(this.path);
   }
 
   release(): void {
@@ -172,7 +190,7 @@ export function withLock<T>(path: string, fn: () => T, opts: LockOptions = {}): 
   l.acquire();
   let ok = false;
   try {
-    const r = fn();
+    const r = withWriteGuard(() => l.assertHeld(), fn);
     ok = true;
     return r;
   } finally {

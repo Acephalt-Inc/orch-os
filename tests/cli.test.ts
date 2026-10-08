@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DIST_CLI, run, useTmpHome, waitFor } from "./_helpers.js";
+import { DIST_CLI, ROOT, run, useTmpHome, waitFor } from "./_helpers.js";
 
 describe("CliTest", () => {
   const ctx = useTmpHome();
@@ -141,5 +143,161 @@ describe("CliV2", () => {
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "a"], { env }).status).toBe(0);
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "b"], { env }).status).toBe(3);
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "renew", "--session", "b"], { env }).status).toBe(4);
+  });
+});
+
+
+describe("OwnershipCli", () => {
+  const ctx = useTmpHome();
+  const binary = (...args: string[]) => spawnSync(process.execPath, [DIST_CLI, ...args], {
+    encoding: "utf8", env: { ...process.env, ORCH_HOME: ctx.home },
+  });
+
+  it("built_cli_refuses_damage_names_the_file_and_recovers_epoch_7_to_8", async () => {
+    await run("init", "--no-handbook");
+    for (let i = 0; i < 7; i++) expect(binary("lease", "acquire", "--session", `s${i}`, "--force").status).toBe(0);
+    const path = `${ctx.home}/lease.json`;
+    writeFileSync(path, "{broken");
+    for (const action of ["status", "acquire", "renew", "release"]) {
+      const r = binary("lease", action, "--session", "s6", "--force");
+      expect(r.status).toBe(6);
+      expect(r.stderr).toContain(path);
+      expect(r.stdout).toContain("CORRUPT");
+      expect(readFileSync(path, "utf8")).toBe("{broken");
+    }
+    const recovered = binary("lease", "acquire", "--session", "new", "--recover", "--json");
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(JSON.parse(recovered.stdout).state.epoch).toBe(8);
+    expect(readFileSync(path + ".recovery.jsonl", "utf8")).toContain('"epoch":8');
+    expect(binary("lease", "renew", "--session", "new", "--recover").status).toBe(2);
+    // Returning to the same session cannot make an old epoch fence valid again.
+    expect(binary("lease", "acquire", "--session", "s6", "--force").status).toBe(0);
+    expect(binary("lease", "renew", "--session", "s6", "--expected-epoch", "7").status).toBe(4);
+  });
+
+  it("built_task_cli_requires_explicit_journaled_recovery_and_lists_damage", async () => {
+    await run("init", "--no-handbook");
+    expect(binary("task", "claim", "t1", "--as", "w1").status).toBe(0);
+    const path = `${ctx.home}/tasks/t1.json`;
+    writeFileSync(path, "null");
+    for (const action of ["claim", "renew", "release", "status"]) {
+      const args = ["task", action, "t1", ...(action === "status" ? [] : ["--as", "w1"])];
+      const r = binary(...args);
+      expect(r.status).toBe(6);
+      expect(r.stderr).toContain(path);
+      expect(readFileSync(path, "utf8")).toBe("null");
+    }
+    const rows = binary("task", "list", "--json");
+    expect(rows.status).toBe(6);
+    expect(JSON.parse(rows.stdout)[0].status).toBe("CORRUPT");
+    const r = binary("task", "claim", "t1", "--as", "w2", "--recover", "--json");
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).state).toMatchObject({ epoch: 2, holders: ["w1", "w2"] });
+    expect(readFileSync(path + ".recovery.jsonl", "utf8")).toContain('"stage":"COMMITTED"');
+    expect(binary("task", "renew", "t1", "--as", "w2", "--recover").status).toBe(2);
+  });
+
+  it("unreadable_lock_owner_blocks_cli_even_with_recover", async () => {
+    await run("init", "--no-handbook");
+    expect(binary("lease", "acquire", "--session", "old").status).toBe(0);
+    const path = `${ctx.home}/lease.json`;
+    const before = readFileSync(path, "utf8");
+    const owner = path + ".lock.d/owner.json";
+    mkdirSync(owner, { recursive: true });
+    for (const action of ["status", "acquire", "renew", "release"]) {
+      const r = binary("lease", action, "--session", "old", ...(action === "acquire" ? ["--recover"] : []));
+      expect(r.status).toBe(6);
+      expect(r.stderr).toContain(owner);
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
+  });
+
+  it.each([
+    ["mailbox.md.lock.d", ["mailbox", "post", "LEAD", "-m", "blocked"]],
+    ["messages.jsonl.lock.d", ["msg", "send", "DONE", "--to", "w1", "-m", "blocked"]],
+    ["cursors/w1.json.lock.d", ["msg", "ack", "--as", "w1", "--all"]],
+    ["tasks/t1.json.lock.d", ["task", "claim", "t1", "--as", "w1", "--recover"]],
+    ["mem/.lock.d", ["mem", "add", "n1", "--description", "blocked", "-m", "blocked"]],
+  ])("unknown_owner_blocks_other_protected_cli_operations: %s", async (lock, args) => {
+    await run("init", "--no-handbook");
+    const owner = `${ctx.home}/${lock}/owner.json`;
+    mkdirSync(owner, { recursive: true });
+    const r = binary(...args);
+    expect(r.status, r.stdout + r.stderr).toBe(6);
+    expect(r.stderr).toContain(owner);
+    expect(existsSync(`${ctx.home}/messages.jsonl`)).toBe(false);
+    expect(existsSync(`${ctx.home}/tasks/t1.json`)).toBe(false);
+    expect(existsSync(`${ctx.home}/cursors/w1.json`)).toBe(false);
+    expect(existsSync(`${ctx.home}/mem/n1.md`)).toBe(false);
+    expect(readFileSync(`${ctx.home}/mailbox.md`, "utf8")).not.toContain("blocked");
+  });
+
+  it("cli_publication_failure_reserves_the_epoch_before_effect", async () => {
+    await run("init", "--no-handbook");
+    const path = `${ctx.home}/lease.json`;
+    mkdirSync(path + ".tmp");
+    expect(binary("lease", "acquire", "--session", "failed").status).toBe(1);
+    expect(JSON.parse(readFileSync(path + ".epoch.max", "utf8")).epoch).toBe(1);
+    expect(existsSync(path)).toBe(false);
+    rmSync(path + ".tmp", { recursive: true });
+    const r = binary("lease", "acquire", "--session", "next", "--json");
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).state.epoch).toBe(2);
+  });
+
+  it.each([false, true])("a_real_paused_holder_is_safe_and_a_late_write_is_fenced: displaced=%s", async (displaced) => {
+    await run("init", "--no-handbook");
+    expect(binary("lease", "acquire", "--session", "old").status).toBe(0);
+    const path = `${ctx.home}/lease.json`;
+    const lock = path + ".lock.d";
+    const ready = `${ctx.home}/ready`;
+    const lockMod = pathToFileURL(join(ROOT, "dist/lock.js")).href;
+    const utilMod = pathToFileURL(join(ROOT, "dist/util.js")).href;
+    const script = `import fs from "node:fs";
+      import { withLock } from ${JSON.stringify(lockMod)};
+      import { atomicWrite } from ${JSON.stringify(utilMod)};
+      try { withLock(${JSON.stringify(lock)}, () => {
+        const state = fs.readFileSync(${JSON.stringify(path)}, "utf8");
+        const ownerFile = ${JSON.stringify(lock + "/owner.json")};
+        const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+        fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, created_ms: 0 }));
+        fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+        process.kill(process.pid, "SIGSTOP");
+        atomicWrite(${JSON.stringify(path)}, state);
+      }); } catch (e) { console.error(e.message); process.exitCode = 5; }`;
+    const holder = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let err = "";
+    holder.stderr.on("data", (chunk) => { err += chunk; });
+    const done = new Promise<number | null>((resolve) => holder.on("exit", resolve));
+    let contender: ReturnType<typeof spawn> | null = null;
+    try {
+      expect(await waitFor(() => existsSync(ready))).toBe(true);
+      expect(holder.kill("SIGSTOP")).toBe(true); // parent also stops it; no ps dependency
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      if (!displaced) {
+        contender = spawn(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "new", "--force"], {
+          env: { ...process.env, ORCH_HOME: ctx.home }, stdio: "ignore",
+        });
+        const stopped = new Promise((resolve) => contender!.on("exit", resolve));
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(contender.exitCode).toBe(null); // old alive PID is never broken by the CLI
+        expect(JSON.parse(readFileSync(path, "utf8")).epoch).toBe(1);
+        contender.kill("SIGTERM"); await stopped;
+      } else {
+        // Simulate the historical wrongful takeover while the original process is paused.
+        rmSync(lock, { recursive: true });
+        const acquired = binary("lease", "acquire", "--session", "new", "--force", "--json");
+        expect(acquired.status, acquired.stderr).toBe(0);
+        expect(JSON.parse(acquired.stdout).state.epoch).toBe(2);
+      }
+      const before = readFileSync(path, "utf8");
+      holder.kill("SIGCONT");
+      expect(await done, err).toBe(displaced ? 5 : 0);
+      expect(readFileSync(path, "utf8")).toBe(before); // old snapshot never overwrites epoch 2
+      if (displaced) expect(err).toContain("lock lost while held");
+    } finally {
+      contender?.kill("SIGTERM");
+      if (holder.exitCode === null) { holder.kill("SIGCONT"); holder.kill("SIGKILL"); await done; }
+    }
   });
 });

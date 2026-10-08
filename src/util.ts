@@ -52,8 +52,19 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Synchronous critical sections can nest. Every active lock must still be ours at each effect.
+const writeGuards: Array<() => void> = [];
+export function assertWriteOwnership(): void {
+  for (const guard of writeGuards) guard();
+}
+export function withWriteGuard<T>(guard: () => void, fn: () => T): T {
+  writeGuards.push(guard);
+  try { return fn(); } finally { writeGuards.pop(); }
+}
+
 /** Write `data` to a temp file beside `path`, optionally fsync it, then rename it into place. */
 export function atomicWrite(path: string, data: string, opts: { fsync?: boolean; mode?: number; tmpSuffix?: string } = {}): void {
+  assertWriteOwnership();
   const tmp = path + (opts.tmpSuffix ?? `.tmp${process.pid}`);
   const fd = openSync(tmp, "w", opts.mode ?? 0o644);
   try {
@@ -62,6 +73,7 @@ export function atomicWrite(path: string, data: string, opts: { fsync?: boolean;
   } finally {
     closeSync(fd);
   }
+  assertWriteOwnership(); // recheck after preparing the temporary file, before publication
   renameSync(tmp, path);
   if (opts.mode !== undefined) chmodSync(path, opts.mode);
 }
