@@ -15,7 +15,8 @@ Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `
 
 ```text
 orch init [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
-          [--compute one|same-vendor|multi-vendor --people solo|team | --no-profile]
+          [--compute one|same-vendor|multi-vendor --people solo|team
+           [--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N] | --no-profile]
 ```
 
 Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not given), creates `workers/` and the mailbox file, and writes the handbook. The message, task and notes directories are created on first use. Prints one `agent NAME PATH` line per detected agent and marks the default.
@@ -28,10 +29,10 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 | `--layout` | `flat` (default): `DIR/NAME.md`. `skills`: `DIR/NAME/SKILL.md` |
 | `--force-handbook` | Overwrite handbook files that already exist (they are kept by default) |
 | `--no-handbook` | Do not write the handbook |
-| `--compute V --people V` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. The two go together: either alone is exit 2. The detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) |
+| `--compute V --people V --policy human-merge --required-review S --max-workers N` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. `--compute` and `--people` go together (either alone is exit 2), and the other three need them (exit 2 without). The policy, the review requirement and the worker limit have no default: when any of the three is missing, `init` writes no `[profile]` table and prints `no profile written from the flags: …` with the command that creates one. The detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) as labels to edit |
 | `--no-profile` | On a terminal, skip the two profile questions and write no `[profile]` |
 
-**Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`), then writes a `[profile]`. Three unusable answers, or end of input, write no profile. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless `--compute`/`--people` replace it). When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
+**Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`). These two answers are declared context: they select no rule. It then asks three questions that have no default: whether to select the `human-merge` policy (`yes`/`no`), the weakest agent review that passes (`1`/`2`/`3` for `single-agent`/`cross-account`/`cross-vendor`), and the most workers running at once (a whole number, 1 or more). Three unusable answers to any question, `no` to the policy, or end of input write no profile, and `init` prints `no profile written: …` with the command that creates one. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless a complete set of the five profile flags replaces it). If the kept profile cannot be used, for example because it was written for the removed built-in table, `init --force` still keeps it byte for byte, prints the refusal with what to set on stderr, does not print `next: orch doctor`, and exits 2. When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
 
 ## orch agents
 
@@ -54,9 +55,9 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 | Node.js ≥ 20, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
 | handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
 | load state | informational |
-| profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid; every other profile row is `PASS` or `SKIP` |
+| profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid or was written for the removed built-in table (no `policy` key); every other profile row is `PASS` or `SKIP` |
 
-With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; reviews count as single-agent and nothing merges automatically until a second account is added`. The rows are `profile` (the effective cell and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (agents on at least two accounts) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.
+With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; no review can grade above single-agent until a second account is added`. A missing capability never lowers the rule. The rows are `profile` (the selected policy, the declared compute and people, and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (only when `required_review` is above `single-agent`: agents on at least two accounts, or two vendors) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.
 
 ## orch config
 
@@ -158,19 +159,20 @@ This is a process gate between cooperating agents that share one account, not a 
 | `teammate-stale` | `bob` approved the head; `carol` approved an older commit |
 | `high-path` | `approved`, plus a changed-file list with `migrations/0042_add_index.sql` (try `high_paths = ["migrations/**"]`) |
 
-**With a profile.** When `config.toml` has a `[profile]` table, the gate first applies every rule above, then grades the approvals it counted and applies the profile's policy for the PR's tier. One line goes between the summary and the verdict:
+**With a profile.** When `config.toml` has a `[profile]` table, the gate first applies every rule above, then labels the approvals it counted and applies the policy the profile selects (`human-merge`, see [orch profile](#orch-profile)). One line goes between the summary and the verdict:
 
 ```text
 #101 head=4f2c9a1e7 ci=green approvals=1/1 (stale=0 self=0) changes_requested=0 label=off
-profile=C tier=high(path: migrations/0042_add_index.sql) review=cross-account needed=cross-vendor teammate=n/a authority=owner
+profile=human-merge tier=high(path: migrations/0042_add_index.sql) review=cross-account needed=cross-vendor teammate=n/a authority=owner
 => BLOCKED (review strength cross-account is below cross-vendor)
 ```
 
 - **Tier**: `--tier` if given; else `high` when any changed file matches a `[profile] high_paths` glob (`*` and `?` stay inside one path segment, `**` crosses `/`); else `[profile] default_tier` (default `high`). A leading `/` in a glob is dropped (globs are relative to the repository root). Live mode adds `files,changedFiles,number` to the field list only when `high_paths` is not empty, then reads the full list with `gh api --paginate repos/OWNER/NAME/pulls/N/files` (`gh pr view` stops at 100 files). The list counts as read only when its length equals the PR's `changedFiles`; a fetch error, a missing count or a mismatch makes the tier `high`. A fixture needs `files` and a matching `changedFiles`. The line says where the tier came from: `flag`, `path: FILE`, `default` or `files unreadable`.
-- **Review strength** of each counted agent approval: `single-agent` (reviewer and author on one account), `cross-account` (different accounts, same vendor) or `cross-vendor`; `single-agent (unmapped)` when the reviewer or an author is not in `[profile.agents]`. With several authors (a hand-off), the weakest holds; across approvals, the strongest holds (`none` without one). The author is the PR author login (`github`) or every task holder (`comments`). A teammate's GitHub approval is not an agent approval.
+- **Review strength** is a label from the declared tables, not a measured quality. For each counted agent approval: `single-agent` (reviewer and author on one account), `cross-account` (different accounts, same vendor) or `cross-vendor`; `single-agent (unmapped)` when the reviewer or an author is not in `[profile.agents]`. With several authors (a hand-off), the weakest holds; across approvals, the strongest holds (`none` without one). The author is the PR author login (`github`) or every task holder (`comments`). A teammate's GitHub approval is not an agent approval.
 - **Teammate**: `approved` when a login listed in `[profile] teammates` has an `APPROVED` GitHub review at the head (never the PR author), `missing`, or `n/a` in a solo profile. It is read from the `reviews` field in both review sources.
-- **Passes** when the plain rule passes, the strength reaches `needed`, a required teammate approval is there, and, with `--auto`, the merge authority is `auto`. The verdict names each failed condition, and `missing: ...` when a degrade rule applied (the line then ends `degraded=CODES`). A pass under `owner` authority says `the owner decides the merge`.
-- `--auto` means the caller merges automatically on `PASS`: it passes only under `auto` authority. `--json` adds one `profile` object: `cell, declared_cell, tier, tier_source, achieved, needed, teammate, need_teammate, authority, worker_cap, degraded, reasons`; existing keys keep their meaning, and `ok` is the combined verdict.
+- **Passes** when the plain rule passes, the strength reaches `needed` (`[profile] required_review`), and a required teammate approval is there. The verdict names each failed condition. A pass says who performs the merge: `the owner decides the merge`, or `the teammate who approved, or the owner, performs the merge`.
+- `--auto` means the caller would merge automatically on `PASS`. No policy gives that authority: with `--auto` the verdict is always `BLOCKED (--auto: policy human-merge gives no automatic merge authority; a person performs the merge)`, exit 1. `--json` adds one `profile` object: `policy, tier, tier_source, achieved, needed, teammate, need_teammate, authority, worker_cap, reasons`; existing keys keep their meaning, and `ok` is the combined verdict.
+- A `[profile]` without a `policy` key was written for the built-in table an earlier source version carried: exit 2 with a message naming what to set, and no verdict ([profiles.md](profiles.md#6-migrating-a-profile-written-for-the-removed-built-in-table)).
 - Without a `[profile]`, `--tier` and `--auto` are exit 2, and the output is byte for byte what it was before profiles.
 
 ## orch review
@@ -215,7 +217,7 @@ One pass:
 1. `--task ID` names the PR's task: every agent that has held it is an author and is never chosen (the same rule as `merge-gate --reviews comments`). No `--task`, or a task with no holder: `BLOCKED`.
 2. `gh pr view PR --json headRefOid,state,comments` gives the head. A closed or merged PR is `BLOCKED`.
 3. If this head already has a reviewer (state file below), watch only follows it: `REVIEWED` once a comment whose first line is `ORCH-REVIEW <verdict> <head> by <that agent>` appears (a line for another commit does not count), `STALE` after `stale_minutes`, else `DISPATCHED`. It never starts a second reviewer for one head unless `--force`.
-4. The reviewer: every `[review.agents.NAME]` that is not an author and whose command is on `PATH`, graded against the authors: `cross-vendor`, then `cross-account`, then `single-agent (fresh context)` (same account: a new session, labelled so), then `single-agent (unmapped)` (vendor or account not declared). The strongest wins; ties go to the first in `config.toml`. An agent's account is `account`, else its `[profile.agents]` entry; its vendor is the account's vendor in `[profile.accounts]`, else `vendor` (a contradiction is a config error). With a `[profile]`, the needed strength is the policy's for the PR's tier (`--tier`, `high_paths`, `default_tier`, as in `merge-gate`); a best reviewer below it is `BLOCKED` with the reason, never a weaker review. So cells A and D give a labelled single-agent review when only the author's account is available, and cells B, C, E and F block.
+4. The reviewer: every `[review.agents.NAME]` that is not an author and whose command is on `PATH`, graded against the authors: `cross-vendor`, then `cross-account`, then `single-agent (fresh context)` (same account: a new session, labelled so), then `single-agent (unmapped)` (vendor or account not declared). The strongest wins; ties go to the first in `config.toml`. An agent's account is `account`, else its `[profile.agents]` entry; its vendor is the account's vendor in `[profile.accounts]`, else `vendor` (a contradiction is a config error). This order is a selection heuristic over declared labels; nothing verifies the accounts, and a label gives the reviewer no authority. With a `[profile]`, the needed strength is `[profile] required_review`, the same value `merge-gate` uses; a best reviewer below it is `BLOCKED` with the reason, never a weaker review. So `required_review = "single-agent"` gives a labelled single-agent review when only the author's account is available, and a higher value blocks.
 5. CI uses the same evaluator and `[merge] required_checks` as the merge gate. Watch reads `gh api --paginate repos/OWNER/NAME/commits/SHA/check-runs`, `.../commits/SHA/status` and `.../actions/runs?head_sha=SHA&per_page=100`, joining check suites to workflow names and keeping only the exact head's rows. An unmet required check or a failed, unfinished or entirely skipped/neutral rollup is `WAITING`, with no dispatch, including under `--force`. An unlisted suite, a blank/conflicting workflow name or an unreadable workflow-run list leaves the check's workflow unknown. Such a row never supplies a qualified requirement; a same-name unknown row that did not pass also blocks an otherwise passing qualified requirement (`WORKFLOW_UNKNOWN`). A known required workflow's success plus an unknown same-name success can pass. This conservative rule may wait on another app's skipped/neutral check even while the gate has enough workflow information to pass. No check at all is `WAITING` unless `require_ci = false` and no required names are configured. This option never bypasses required checks.
 6. Otherwise watch writes a prompt file and starts the reviewer as a worker named `review-PR-SHA12` (see `orch worker`: own process group, logs, time limit of `stale_minutes`, refused under a blocking load tier). The prompt is on its stdin and in `{prompt}`; the environment has `ORCH_AGENT`, `ORCH_REVIEW_PR`, `ORCH_REVIEW_HEAD`, `ORCH_REVIEW_REPO` and `ORCH_REVIEW_PROMPT`.
 
@@ -227,7 +229,7 @@ A new head means a new pass from step 3: a new reviewer once its CI is green. A 
 #7 head=4f2c9a1e7 => REVIEWED (ORCH-REVIEW APPROVE 4f2c9a1e7b3d... by rx (cross-vendor))
 ```
 
-Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` makes one pass, prints the chosen reviewer and its command, and starts nothing and writes nothing. `--json` prints each result as JSON. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
+Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` makes one pass, prints the chosen reviewer and its command, and starts nothing and writes nothing. `--json` prints each result as JSON; its `choice.policy` key was `choice.cell` under the removed built-in table (see [orch profile](#orch-profile)). With a `[profile]`, a dispatch is refused while `[profile] max_workers` workers are already running: the result is `BLOCKED` and nothing is started. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
 
 State: one file per PR, `$ORCH_HOME/review-watch/OWNER__NAME__PR.json` (head, agent, label, worker, pid, time, status `dispatched|reviewed|stale`, earlier heads), written under the lock. `orch doctor` shows a `SKIP` row per reviewer command and per stale reviewer; with no `[review.agents]` and no state it shows nothing new.
 
@@ -242,7 +244,7 @@ orch worker list
 orch worker stop NAME [--keep-worktree]
 ```
 
-With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach the profile's worker cap (see [orch profile](#orch-profile)); `--force` starts one anyway. Without a profile there is no cap.
+With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach `[profile] max_workers`, the limit you wrote (see [orch profile](#orch-profile)). `--force` starts one anyway and prints `worker: warning: --force starts NAME above [profile] max_workers (…)` on stderr. The same limit applies when `review watch` starts a reviewer, and there it has no override. The count and the start are two steps, so two starts at the same instant can both pass. Without a profile there is no such limit.
 
 `start` runs the worker detached and prints its pid, load tier and directory, plus a `worktree PATH branch=B (created|attached)` line with `--worktree`. It refuses (exit 2) when NAME is already running, the load tier blocks it (unless `--force`), the command is not on PATH, `--agent` is unknown, both `--agent` and `-- CMD` are given, or the worktree cannot be created (not a git repository, the branch is checked out elsewhere, the path exists but is not a worktree). `--minutes 0` disables the time limit.
 
@@ -276,29 +278,32 @@ orch mem retire NAME (--superseded-by NEW | --reason TEXT)
 
 ```text
 orch profile show [--json]
-orch profile update [--compute V] [--people V] [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... [--remove-agent NAME]...
+orch profile update [--policy human-merge] [--required-review single-agent|cross-account|cross-vendor] [--compute V] [--people V]
+                    [--account ID=VENDOR]... [--remove-account ID]... [--agent NAME=ID]... [--remove-agent NAME]...
                     [--teammate LOGIN]... [--remove-teammate LOGIN]... [--high-path GLOB]... [--remove-high-path GLOB]...
                     [--default-tier low|high] [--lead-account ID] [--max-workers N] [--dry-run]
 ```
 
-A profile records the setup: **compute** (`one` account, several accounts on the `same-vendor` agent CLI, or `multi-vendor`) and **people** (`solo`, or a `team` whose teammates approve on GitHub). The six combinations are cells A to F. The design is in [profiles.md](profiles.md). Per tier, the policy is:
+A profile holds declared review context and one selected policy. The context is **compute** (`one` account, several accounts on the `same-vendor` agent CLI, or `multi-vendor`), **people** (`solo`, or a `team` whose teammates approve on GitHub), and the `[profile.accounts]` and `[profile.agents]` labels. All of it is declared, not verified. The details and the limits are in [profiles.md](profiles.md).
 
-| Cell | Compute · people | Low tier: review, teammate, authority | High tier: review, teammate, authority |
-|---|---|---|---|
-| A | one · solo | single-agent, no, owner | single-agent, no, owner |
-| B | same-vendor · solo | cross-account, no, auto | cross-account, no, owner |
-| C | multi-vendor · solo | cross-account, no, auto | cross-vendor, no, owner |
-| D | one · team | single-agent, yes, teammate | single-agent, yes, teammate |
-| E | same-vendor · team | cross-account, no, auto | cross-account, yes, teammate |
-| F | multi-vendor · team | cross-vendor, no, auto | cross-vendor, yes, teammate |
+The public example policy is `human-merge`, selected with `policy = "human-merge"`:
 
-`auto`: automation may merge on `PASS`. `owner`: `PASS` means the review rule is met; a person decides and merges. `teammate`: the gate requires a teammate's approval. Worker cap: 1 in cells A and D; otherwise `workers_per_account` × (accounts − 1), at least 1; `max_workers` above 0 replaces it.
+| Rule | Value |
+|---|---|
+| A non-author agent review at the PR's head, labelled at or above | `[profile] required_review` (both tiers) |
+| A listed teammate's GitHub approval at the head | needed for a `high`-tier PR in a `team` profile |
+| Who performs the merge | a person, always; `merge-gate --auto` is always `BLOCKED` |
+| Limit on running workers | `[profile] max_workers` (an integer ≥ 1), checked at `worker start` and at a `review watch` dispatch; `worker start --force` overrides it with a warning |
 
-**Degrade rules.** The effective cell follows what `[profile.accounts]` backs: fewer than two accounts drops to the `one` column (A or D); `multi-vendor` with one vendor drops to `same-vendor` (B or E). When a degrade applies, or the agents in `[profile.agents]` sit on fewer than two accounts, `auto` authority becomes `owner` (solo) or `teammate` (team, with a teammate approval required). `auto` is never reached through a degrade. A `team` with no teammates listed blocks every rule that needs a teammate.
+Nothing is derived from the number of accounts or vendors. A review strength the setup cannot give is `BLOCKED` and reported as a missing capability; the rule is not lowered. A `team` with no teammates listed blocks every high-tier PR.
 
-`show` prints the effective cell (and the declared one when a degrade applied), the accounts, agents, teammates, tier settings, the policy for `low` and `high`, and each missing capability. Without a `[profile]` it prints `profile: not set (merge gate uses the plain rule)` and exits 0; `--json` prints `{"profile": null}`.
+**A profile written for the removed built-in table.** A `[profile]` with no `policy` key may come from the removed built-in table or may have been written by hand. `merge-gate`, `review watch`, `worker start` and `profile show` exit 2 with a message naming what to set, and `profile update` writes nothing until the policy is selected: `orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`. Choose each value yourself. `--max-workers` also removes a `workers_per_account` key, which is no longer supported.
 
-`update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs both `--compute` and `--people`. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
+`show` prints the selected policy with the declared compute and people, the accounts, agents, teammates, tier settings, the rule for `low` and `high`, and each missing capability. `--json` prints `policy, compute, people, lead_account, required_review, default_tier, high_paths, teammates, accounts, agents, max_workers, rules, missing`. Without a `[profile]` it prints `profile: not set (merge gate uses the plain rule)` and exits 0; `--json` prints `{"profile": null}`.
+
+**`--json` keys changed with the removal of the built-in table (a wire compatibility change).** `merge-gate --json`: the `profile` object loses `cell`, `declared_cell` and `degraded` and gains `policy` (the policy name); `authority` is never `auto`. `profile show --json`: `cell`, `declared_cell`, `effective_compute`, `workers_per_account` and `degraded` are gone; `policy` was an object with a rule per tier and is now the policy name, the per-tier rules are under the new key `rules`, and `required_review` is added. `review watch --json`: `choice.cell` is now `choice.policy` (the policy name, or `null` without a `[profile]`). The table and a before/after example are in [docs/profiles.md](profiles.md), section 6.
+
+`update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
 
 ## Config keys
 
@@ -315,14 +320,15 @@ A profile records the setup: **compute** (`one` account, several accounts on the
 | `[review] source` | `github` | Where `merge-gate` approvals come from: `github` reviews, or `comments` (ORCH-REVIEW comments; needs `--task`) |
 | `[review.agents.NAME] cmd`, `vendor`, `account` | none | A reviewer for `review watch`: argv or shell command line; declared vendor and account (the account's vendor in `[profile.accounts]` wins) |
 | `[review.watch] require_ci`, `stale_minutes`, `poll_seconds`, `dir` | `true`, `30`, `60`, `~/.orch/review-watch` | `false` = no CI expected; when a silent reviewer is stale; loop interval; state files |
-| `[workers] root`, `command`, `timeout_minutes`, `nice`, `block_tiers` | `~/.orch/workers`, first detected agent, `60`, `5`, `HIGH CRITICAL` | Worker defaults |
+| `[workers] root`, `command`, `timeout_minutes`, `nice`, `block_tiers` | `~/.orch/workers`, first detected agent, `60`, `5`, `HIGH CRITICAL` | Worker defaults. The numbers are example values to tune for your machine |
 | `[workers] worktree_root`, `worktree_branch_prefix` | `~/.orch/worktrees`, `orch/` | Where `--worktree` puts worktrees; default branch prefix |
 | `[agents.NAME] command` | written by `init` | Command for `worker start --agent NAME` |
-| `[load] state`, `busy`, `high`, `critical` | `~/.orch/load.json`; `load_ratio` 0.75 / 1.0 (+ `swap_pct` 90) / 1.5 | Tier thresholds (`load_ratio`, `swap_pct`, `temp_c`) |
+| `[load] state`, `busy`, `high`, `critical` | `~/.orch/load.json`; `load_ratio` 0.75 / 1.0 (+ `swap_pct` 90) / 1.5 | Tier thresholds (`load_ratio`, `swap_pct`, `temp_c`). Example values to tune for your machine, not limits that suit every machine |
 | `[load] temp_command`, `renice_pattern`, `act` | `""`, `""`, `false` | Optional temperature probe; optional renice under HIGH/CRITICAL |
-| `[profile] compute`, `people` | none (required in a `[profile]`) | `one` / `same-vendor` / `multi-vendor`; `solo` / `team`. No `[profile]` table = no profile |
+| `[profile] policy`, `required_review` | none (required in a `[profile]`) | `human-merge`; `single-agent` / `cross-account` / `cross-vendor`. A `[profile]` without `policy` is refused |
+| `[profile] compute`, `people` | none (required in a `[profile]`) | Declared context: `one` / `same-vendor` / `multi-vendor`; `solo` / `team`. No `[profile]` table = no profile |
 | `[profile] lead_account`, `default_tier`, `high_paths`, `teammates` | the only account, `high`, `[]`, `[]` | Account the lead runs on; tier when nothing else decides; globs that make a PR high tier; GitHub logins whose approval is a teammate review |
-| `[profile] max_workers`, `workers_per_account` | `0` (derived), `2` | Worker cap |
+| `[profile] max_workers` | none (required in a `[profile]`) | Most workers running at once: an integer ≥ 1 that you choose. It is not derived from the accounts |
 | `[profile.accounts] ID = VENDOR` | none | Each account and its agent CLI name (`claude`, `codex`, `gemini`, `qwen` or a custom `[agents.NAME]`), trimmed and compared case-insensitively. Declared, not verified |
 | `[profile.agents] NAME = ID` | none | The account each agent (or GitHub login, in `github` mode) runs on. Names compare case-insensitively |
 

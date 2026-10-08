@@ -13,8 +13,11 @@ Every command here is an `orch` command; see `orch <command> --help`.
 - Every session sets a name once: `export ORCH_AGENT=<name>` (for example `lead`, `w1`,
   `r1`). Messages, claims and reports use it.
 - Roles are jobs, not vendors or models. Any agent CLI can fill any role.
-- One lead at a time, enforced by `orch lease`. The lease epoch fences off a former lead:
-  a lead that gets `NOT_HOLDER` or `STALE_EPOCH` stops acting as lead at once.
+- One lead at a time, checked by `orch lease`. The lease epoch fences off a former lead:
+  a lead that gets `NOT_HOLDER` or `STALE_EPOCH` stops acting as lead at once. The lease
+  is a rule between cooperating sessions. It does not stop a session that ignores it.
+- Names, accounts and vendors are declared by the sessions themselves; nothing verifies
+  them. A worktree is a working directory, not a sandbox.
 
 ## Messages
 
@@ -52,6 +55,9 @@ assignments, status, hand-overs. It is append-only; nobody edits an entry.
 - Release when done: `orch task release <id> --expected-epoch <epoch>`.
 - Silence and old heartbeats never transfer a task. A claim changes hands only by release,
   by expiry, or by an explicit decision from the lead.
+- An expired claim does not stop the earlier holder's process and does not prevent its Git
+  writes. If your claim is gone, stop writing. If you take over a task, check its branch
+  for commits you did not make before you build on it.
 
 ## DONE reports
 
@@ -92,8 +98,9 @@ orch merge-gate <pr> --head <sha-you-reviewed>
   `orch merge-gate <pr> --reviews comments --task <id>` checks them. The same rules hold,
   with agent names in place of accounts. Review comments are a process rule between cooperating
   agents; the account's token can post any name, so never post one for another agent.
-- Who performs the merge is the human's decision. Agents merge only when the human has
-  said so for this change or this class of change, and only on a `PASS`.
+- Who performs the merge is the human's decision, and unless the human has said otherwise
+  the human performs it. Agents merge only when the human has said so for this change or
+  this class of change, and only on a `PASS`. No `orch` command merges.
 
 ## Notes that outlive a session
 
