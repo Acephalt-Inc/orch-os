@@ -130,13 +130,14 @@ A missing capability never lowers the rule. The gate keeps the values written in
 An earlier source version of orch-os (the `main` branch after the `v2.0.1` tag; the `v2.0.1` tag itself has no profiles) chose the review rule, the merge authority and the worker limit from a built-in table keyed on `compute` and `people`. That table is removed. A `[profile]` written for it has no `policy` key, and every command that reads the profile (`merge-gate`, `review watch`, `worker start`, `profile show`) now exits 2 with:
 
 ```text
-[profile] has no policy key: it was written for the built-in compute x people table that an earlier orch-os source version carried, which is removed. No rule is chosen for you and none is applied; set policy = "human-merge", required_review = "single-agent" | "cross-account" | "cross-vendor" and max_workers = N (N >= 1) in [profile], for example `orch profile update --policy human-merge --required-review cross-account --max-workers 2`; a person performs every merge under this policy (docs/profiles.md)
+[profile] has no policy key: it may have been written for the built-in compute x people table that an earlier orch-os source version carried, or written by hand. That table is removed. No rule is chosen for you and none is applied; set policy = "human-merge", required_review = "single-agent" | "cross-account" | "cross-vendor" and max_workers = N (N >= 1) in [profile], using `orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`; a person performs every merge under this policy (docs/profiles.md)
 ```
 
 The old profile is not converted for you, because the public policy could require less than the rule you had. Choose the values yourself:
 
 | Old behaviour | Now |
 |---|---|
+| A `team` profile with one account needed a teammate approval on the low tier as well. | A teammate approval is needed on the high tier only. |
 | The review strength needed came from the table and could differ by tier. | `required_review`, one value you write. It is the same on both tiers. |
 | Some setups let `merge-gate --auto` pass. | `--auto` is always `BLOCKED`. A person merges. |
 | `max_workers = 0` (or no key) derived a limit from the number of accounts and `workers_per_account`. | `max_workers` is required and ≥ 1. `workers_per_account` is refused; `orch profile update --max-workers N` removes it. |

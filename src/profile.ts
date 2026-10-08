@@ -85,7 +85,7 @@ const KEYS = ["policy", "compute", "people", "lead_account", "required_review", 
 
 /** What to write instead of a profile that relied on the removed built-in table. */
 export const MIGRATION_HELP = 'set policy = "human-merge", required_review = "single-agent" | "cross-account" | "cross-vendor" and max_workers = N (N >= 1) in [profile], ' +
-  "for example `orch profile update --policy human-merge --required-review cross-account --max-workers 2`; a person performs every merge under this policy (docs/profiles.md)";
+  "using `orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`; a person performs every merge under this policy (docs/profiles.md)";
 
 function bad(msg: string): never {
   throw new ConfigError(msg);
@@ -112,7 +112,7 @@ function workerLimit(v: unknown): number {
  */
 function refuseLegacy(raw: Record<string, any>): void {
   if (raw.policy === undefined) {
-    bad("[profile] has no policy key: it was written for the built-in compute x people table that an earlier orch-os source version carried, which is removed. " +
+    bad("[profile] has no policy key: it may have been written for the built-in compute x people table that an earlier orch-os source version carried, or written by hand. That table is removed. " +
       `No rule is chosen for you and none is applied; ${MIGRATION_HELP}`);
   }
   if (raw.workers_per_account !== undefined) {

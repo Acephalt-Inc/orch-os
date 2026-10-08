@@ -84,11 +84,32 @@ describe("ProfileLegacy", () => {
         expect(msg).toContain("[profile] has no policy key");
         expect(msg).toContain("No rule is chosen for you and none is applied");
         for (const want of ['policy = "human-merge"', 'required_review = "single-agent" | "cross-account" | "cross-vendor"', "max_workers = N (N >= 1)",
-          "orch profile update --policy human-merge --required-review cross-account --max-workers 2", "a person performs every merge", "docs/profiles.md"]) {
+          "orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N", "a person performs every merge", "docs/profiles.md"]) {
           expect(msg, want).toContain(want);
         }
+        expect(msg).not.toContain("--required-review cross-account --max-workers 2");
+        // placeholders only: outside the two lists of all three strengths and the bound "N >= 1", the message names no strength and gives no number
+        const outside = msg.replace('"single-agent" | "cross-account" | "cross-vendor"', "").replace("single-agent|cross-account|cross-vendor", "").replace("(N >= 1)", "");
+        expect(outside).not.toMatch(/single-agent|cross-account|cross-vendor|\d/);
         expect(msg).not.toContain("\n"); // one line, like every other config error
       }
+    }
+  });
+
+  it("the_documented_migration_command_shows_placeholders_and_no_value_to_copy", () => {
+    let msg = "";
+    try {
+      P.readProfile(parseToml('[profile]\ncompute = "one"\npeople = "solo"\n'));
+    } catch (e: any) {
+      msg = e.message;
+    }
+    expect(msg).toContain("[profile] has no policy key");
+    // docs/profiles.md quotes the refusal as it is printed; docs/commands.md repeats its command
+    expect(readFileSync(join(ROOT, "docs/profiles.md"), "utf8")).toContain("```text\n" + msg + "\n```");
+    expect(readFileSync(join(ROOT, "docs/commands.md"), "utf8")).toContain("`orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`");
+    // neither page gives one strength or a number after the two flags
+    for (const file of ["docs/profiles.md", "docs/commands.md"]) {
+      expect(readFileSync(join(ROOT, file), "utf8"), file).not.toMatch(/--required-review (single-agent|cross-account|cross-vendor)(?![|\w-])|--max-workers \d/);
     }
   });
 

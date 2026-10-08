@@ -203,8 +203,10 @@ describe("ProfileInit", () => {
     fakeBin(d.bins, "claude");
     const NOT = "no profile written: the profile questions were not all answered, and no value is chosen for you. " +
       "Create one with `orch profile update --compute V --people V --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`\n";
-    // Enter at each of the three, "no" to the policy, a limit of 0, and end of input after each question: never a profile
-    for (const answers of [["", "", "", "", ""], ["", "", "no"], ["", "", "yes", "", "", ""], ["", "", "yes", "1", "", "", ""], ["", "", "yes", "1", "0", "0", "0"],
+    // Enter at one of the three questions with valid answers ready for the questions after it (a default on that question alone would write a profile);
+    // then Enter three times at each of the three, "no" to the policy, a limit of 0, and end of input after each question: never a profile
+    for (const answers of [["", "", "", "1", "2"], ["", "", "yes", "", "5"], ["", "", "yes", "1", ""],
+      ["", "", "", "", ""], ["", "", "no"], ["", "", "yes", "", "", ""], ["", "", "yes", "1", "", "", ""], ["", "", "yes", "1", "0", "0", "0"],
       ["", "", null], ["", "", "yes", null], ["", "", "yes", "2", null]] as (string | null)[][]) {
       const [code, out] = await runTTY([...answers], "init", "--no-handbook");
       const what = JSON.stringify(answers);
@@ -642,7 +644,7 @@ describe("ProfileLegacy", () => {
   // what the source accepted before this change: two accounts on one CLI, one person. Its built-in table let a low-tier PR pass `--auto`.
   const LEGACY = '\n[profile]\ncompute = "same-vendor"\npeople = "solo"\ndefault_tier = "low"\nworkers_per_account = 2\n\n' +
     '[profile.accounts]\nacct1 = "codex"\nacct2 = "codex"\n\n[profile.agents]\nw1 = "acct2"\nr1 = "acct1"\n';
-  const NO_POLICY = "[profile] has no policy key: it was written for the built-in compute x people table that an earlier orch-os source version carried, which is removed. " +
+  const NO_POLICY = "[profile] has no policy key: it may have been written for the built-in compute x people table that an earlier orch-os source version carried, or written by hand. That table is removed. " +
     "No rule is chosen for you and none is applied; set policy = \"human-merge\"";
 
   it("a_profile_written_for_the_removed_table_is_refused_by_every_command_that_reads_it", async () => {
@@ -657,7 +659,8 @@ describe("ProfileLegacy", () => {
       const [code, out, err] = await run(...argv);
       expect([code, out], argv.join(" ")).toEqual([2, ""]);
       expect(err, argv.join(" ")).toContain(NO_POLICY);
-      expect(err).toContain("orch profile update --policy human-merge --required-review cross-account --max-workers 2");
+      expect(err).toContain("orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N");
+      expect(err).not.toContain("--required-review cross-account --max-workers 2");
     }
     expect((await run("worker", "list"))[1]).not.toContain("w9"); // nothing was started
     const [dc, dout] = await run("doctor");
@@ -683,13 +686,23 @@ describe("ProfileLegacy", () => {
     expect(out).toContain("kept the existing [profile] tables");
     expect(out).not.toContain("next: orch doctor"); // setup is not reported as finished
     expect(err).toContain(`init: the kept [profile] cannot be used as it is: ${NO_POLICY}`);
-    expect(err).toContain("orch profile update --policy human-merge --required-review cross-account --max-workers 2");
+    expect(err).toContain("orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N");
+    expect(err).not.toContain("--required-review cross-account --max-workers 2");
     expect(err).toContain("the [profile] tables were kept byte for byte");
     expect(P.profileBlock(readCfg(d.home))).toBe(LEGACY.slice(1));
     // a kept profile that is usable still ends with the next step and exit 0
     expect((await run("profile", "update", "--policy", "human-merge", "--required-review", "cross-account", "--max-workers", "2"))[0]).toBe(0);
     const [c2, out2, err2] = await run("init", "--no-handbook", "--force");
     expect([c2, out2.endsWith("next: orch doctor\n"), err2]).toEqual([0, true, ""]);
+  });
+
+  it("init_without_force_reports_a_legacy_profile_refusal", async () => {
+    await run("init", "--no-handbook");
+    writeFileSync(cfgPath(d.home), readCfg(d.home) + LEGACY);
+    const [code, out, err] = await run("init", "--no-handbook");
+    expect(code).toBe(0);
+    expect(out).not.toContain("wrote ");
+    expect(err).toContain(`init: the existing [profile] cannot be used as it is: ${NO_POLICY}`);
   });
 
   it("the_named_migration_command_selects_the_policy_explicitly", async () => {

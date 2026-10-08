@@ -225,6 +225,12 @@ const cmdInit: Run = (a, io) => {
     }
     println(io, `config exists: ${p} (unchanged; --force rewrites it)`);
     printAgents(io, agents);
+    try {
+      P.readProfile(parseToml(readFileSync(p, "utf8")));
+    } catch (e: any) {
+      if (!(e instanceof C.ConfigError)) throw e;
+      eprintln(io, `init: the existing [profile] cannot be used as it is: ${e.message}`);
+    }
   } else {
     // --force keeps an existing [profile] as it was, unless a complete set of profile flags replaces it
     let kept = "";
