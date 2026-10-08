@@ -13,6 +13,7 @@ import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
 import * as M from "./mergegate.js";
+import { requiredCheckNames } from "./checks.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
@@ -468,9 +469,19 @@ function taskAuthors(cfg: Record<string, any>, id: string): string[] {
   return tasks(cfg).holders(id);
 }
 
+/** Both commands read the same required list; flags can only add requirements. */
+function requiredChecks(cfg: Record<string, any>, extra: string[] = []): string[] {
+  try {
+    return requiredCheckNames([...requiredCheckNames((cfg.merge ?? {}).required_checks), ...requiredCheckNames(extra)]);
+  } catch (e: any) {
+    throw new ConfigError(`[merge] required_checks / --require-check: ${e.message}`);
+  }
+}
+
 const cmdMergeGate: Run = (a, io) => {
   const cfg = C.loadOrDefault();
   const mc = cfg.merge ?? {};
+  const checks = requiredChecks(cfg, a.require_check);
   const source = reviewSource(cfg, a);
   const prof = P.readProfile(cfg);
   if (!prof && (a.tier || a.auto)) {
@@ -506,8 +517,8 @@ const cmdMergeGate: Run = (a, io) => {
   let r: Record<string, any>;
   try {
     r = source === "comments"
-      ? M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head, reviewSource: source, authorAgents: authors })
-      : M.evaluate(info, { requiredApprovals: need, requiredLabel: label, head: a.head });
+      ? M.evaluate(info, { requiredApprovals: need, requiredLabel: label, requiredChecks: checks, head: a.head, reviewSource: source, authorAgents: authors })
+      : M.evaluate(info, { requiredApprovals: need, requiredLabel: label, requiredChecks: checks, head: a.head });
   } catch (e: any) {
     // malformed PR data fails closed
     println(io, `#${a.pr} => BLOCKED (unreadable PR data: ${e.message ?? e})`);
@@ -580,6 +591,7 @@ const cmdReviewWatch: Run = async (a, io) => {
   }
   const agents = RW.readAgents(cfg);
   const settings = RW.readSettings(cfg);
+  const checks = requiredChecks(cfg);
   if (!a.task) {
     println(io, `#${a.pr} => BLOCKED (review watch needs --task ID: the task whose holder authored this PR, so the author is never its reviewer)`);
     return 1;
@@ -596,7 +608,7 @@ const cmdReviewWatch: Run = async (a, io) => {
     return { pid: typeof m.pid === "number" ? m.pid : null };
   });
   const inp: RW.WatchInput = {
-    pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings,
+    pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings, requiredChecks: checks,
     tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
   };
   const emit = (r: RW.WatchResult) => println(io, a.json ? dumps(r) : RW.renderResult(r));
@@ -1040,6 +1052,7 @@ export function buildTree(): CmdSpec<Run> {
         opts: [
           opt("repo", ["--repo"], "str", "owner/name"),
           opt("head", ["--head"], "str", "expected head commit: BLOCKED (head moved) if the PR is elsewhere"),
+          opt("require_check", ["--require-check"], "list", "required name or workflow/name; repeat to add to [merge] required_checks"),
           opt("approvals", ["--approvals"], "int", "required approvals (default [merge] required_approvals)"),
           opt("label", ["--label"], "str", "required label (default [merge] required_label; '' = none)"),
           opt("fixture", ["--fixture"], "str", "offline: a bundled fixture (" + M.fixtureNames().join(", ") + ") or a path to `gh pr view --json` output"),

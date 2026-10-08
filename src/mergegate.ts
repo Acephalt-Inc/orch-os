@@ -3,7 +3,7 @@
  * Merge gate on GitHub-native reviews, bound to the pull request's live head commit.
  *
  * A PR passes only when ALL of these hold:
- *   1. CI: at least one check, and every check concluded SUCCESS, NEUTRAL or SKIPPED;
+ *   1. CI: at least one SUCCESS, no failing or unfinished check, and every required check passed;
  *   2. approvals: at least `requiredApprovals` reviewers (not the PR author) whose latest
  *      decisive review is APPROVED *for the current head commit*;
  *   3. no reviewer's latest decisive review is CHANGES_REQUESTED;
@@ -25,13 +25,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { ciVerdict, requiredCheckNames } from "./checks.js";
 import { dumps } from "./pyjson.js";
 import { isPlainObject, validName, which } from "./util.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 /** gh output limit. Node's 1 MiB default is too small for long comment threads (ENOBUFS = BLOCKED forever). */
 export const GH_MAX_BUFFER = 64 * 1024 * 1024;
-const CI_OK = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 export const FIXTURE_DIR = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
 /** Malformed PR data (wrong JSON shapes): the CLI reports it as BLOCKED. */
@@ -100,6 +100,8 @@ function agentKey(name: string): string {
 }
 
 export interface GateOptions {
+  /** Each bare name or workflow/name must conclude SUCCESS at the exact head. */
+  requiredChecks?: string[] | null;
   requiredApprovals?: number;
   requiredLabel?: string;
   head?: string | null;
@@ -110,6 +112,7 @@ export interface GateOptions {
 }
 
 export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, any> {
+  const requiredChecks = requiredCheckNames(opts.requiredChecks);
   const pr = obj(info, "PR data");
   const need = Math.max(1, Math.trunc(Number(opts.requiredApprovals ?? 1)));
   if (Number.isNaN(need)) throw new PrDataError("required approvals is not a number");
@@ -126,7 +129,7 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
     return res;
   }
   const head = live;
-  if ((opts.reviewSource ?? "github") === "comments") return evaluateComments(pr, res, head, need, requiredLabel, opts.authorAgents ?? []);
+  if ((opts.reviewSource ?? "github") === "comments") return evaluateComments(pr, res, head, need, requiredLabel, opts.authorAgents ?? [], requiredChecks);
   const { latest, self: selfReviews } = latestReviews(pr);
   let approvals = 0;
   let stale = 0;
@@ -140,12 +143,12 @@ export function evaluate(info: unknown, opts: GateOptions = {}): Record<string, 
       else stale += 1;
     }
   }
-  const { ciOk, checks, labelOk } = ciAndLabel(pr, requiredLabel);
+  const { ciOk, checks, labelOk, ciExtra } = ciAndLabel(pr, head, requiredLabel, requiredChecks);
   const ok = ciOk && labelOk && approvals >= need && blocking === 0;
   Object.assign(res, {
     ok, ci_ok: ciOk, checks, label: requiredLabel, label_ok: labelOk,
     approvals, stale, self: selfReviews, changes_requested: blocking,
-  });
+  }, ciExtra);
   return res;
 }
 
@@ -195,26 +198,32 @@ export function changedFiles(info: unknown): string[] | null {
   return paths.some((x) => x === null) ? null : (paths as string[]);
 }
 
-function ciAndLabel(pr: Record<string, any>, requiredLabel: string) {
-  const rollup: [string, string][] = list(pr.statusCheckRollup, "statusCheckRollup").map((cRaw) => {
+/** Adapt the PR head's rollup to the shared CI policy; explicit stale shas never count. */
+function ciAndLabel(pr: Record<string, any>, head: string, requiredLabel: string, requiredChecks: string[]) {
+  const rollup = list(pr.statusCheckRollup, "statusCheckRollup").map((cRaw) => {
     const c = obj(cRaw, "check");
-    const wf = str(c.workflowName, "workflowName");
+    const workflow = str(c.workflowName, "workflowName");
     const name = str(c.name, "check name") || str(c.context, "check context") || "?";
-    const concl = (str(c.conclusion, "conclusion") || str(c.state, "check state")).toUpperCase();
-    return [(wf ? wf + "/" : "") + name, concl];
+    const state = (str(c.conclusion, "conclusion") || str(c.state, "check state") || str(c.status, "check status")).toUpperCase();
+    // gh pr view's statusCheckRollup is scoped to the PR head. Fixtures may supply a sha.
+    const sha = str(c.headSha ?? c.head_sha ?? head, "check head sha");
+    return { sha, name, workflow, state };
   });
-  const ciOk = rollup.length > 0 && rollup.every(([, v]) => CI_OK.has(v)); // every entry, duplicates included
-  const bad = rollup.filter(([, v]) => !CI_OK.has(v));
+  const { ok: ciOk, at, bad, passed, unmet } = ciVerdict(head, rollup, requiredChecks);
   const checks: Record<string, string> = {};
-  for (const [k, v] of bad.length ? bad : rollup) checks[k] = v;
+  for (const c of bad.length ? bad : at) checks[(c.workflow ? c.workflow + "/" : "") + c.name] = c.state;
+  const ciExtra: Record<string, any> = {};
+  if (requiredChecks.length) Object.assign(ciExtra, { required_checks: requiredChecks, unmet_checks: Object.fromEntries(unmet) });
+  if (unmet.length) ciExtra.ci_reason = "required check not passed " + dumps(Object.fromEntries(unmet));
+  else if (at.length && !bad.length && !passed) ciExtra.ci_reason = "no check passed: SKIPPED and NEUTRAL mean not applicable";
   const labels = list(pr.labels, "labels").map((l) => obj(l, "label").name);
   const labelOk = !requiredLabel || labels.includes(requiredLabel);
-  return { ciOk, checks, labelOk };
+  return { ciOk, checks, labelOk, ciExtra };
 }
 
 /** Review source "comments": approvals and blocks come from ORCH-REVIEW comments. */
 function evaluateComments(pr: Record<string, any>, res: Record<string, any>, head: string, need: number,
-  requiredLabel: string, authorAgents: string[]): Record<string, any> {
+  requiredLabel: string, authorAgents: string[], requiredChecks: string[]): Record<string, any> {
   const authors = [...new Set(authorAgents.filter((a) => typeof a === "string" && a).map(agentKey))];
   res.reviews = "comments";
   if (!authors.length) {
@@ -248,13 +257,13 @@ function evaluateComments(pr: Record<string, any>, res: Record<string, any>, hea
   const approvedBy = [...latest.entries()].filter(([, r]) => r.verdict === "APPROVE").map(([k]) => k).sort();
   const blockedBy = [...latest.entries()].filter(([, r]) => r.verdict !== "APPROVE").map(([k]) => k).sort();
   const blocking = blockedBy.length + ghBlocking;
-  const { ciOk, checks, labelOk } = ciAndLabel(pr, requiredLabel);
+  const { ciOk, checks, labelOk, ciExtra } = ciAndLabel(pr, head, requiredLabel, requiredChecks);
   const ok = ciOk && labelOk && approvedBy.length >= need && blocking === 0;
   Object.assign(res, {
     ok, authors, ci_ok: ciOk, checks, label: requiredLabel, label_ok: labelOk,
     approvals: approvedBy.length, approved_by: approvedBy, stale, self, malformed,
     changes_requested: blocking, blocked_by: blockedBy, github_changes_requested: ghBlocking,
-  });
+  }, ciExtra);
   return res;
 }
 
@@ -338,7 +347,7 @@ export function fixtureNames(): string[] {
 export function render(pr: string, r: Record<string, any>, profileLines?: [string, string]): string {
   if (!("checks" in r)) return `#${pr} => BLOCKED (${r.reason})`;
   if (profileLines) return render(pr, r).replace(/\n=> (PASS|BLOCKED)$/, "\n" + profileLines.join("\n"));
-  const ci = r.ci_ok ? "green" : "NOT green " + dumps(r.checks);
+  const ci = r.ci_ok ? "green" : (r.ci_reason ? `NOT green (${r.ci_reason})` : "NOT green " + dumps(r.checks));
   const label = !r.label ? "off" : r.label_ok ? r.label : `MISSING '${r.label}'`;
   if (r.reviews === "comments") {
     return `#${pr} head=${r.head} ci=${ci} reviews=comments author=${r.authors.join(",")} approvals=${r.approvals}/${r.need}` +
