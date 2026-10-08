@@ -214,6 +214,63 @@ describe("PackedReadiness", () => {
     expect(doctor.stdout).not.toMatch(/PASS\s+review agent r1/);
     expect(doctor.stdout).toMatch(/SKIP\s+review agent r1\s+(?:UNVERIFIED:|expected a non-empty argv)/);
   });
+  /** A profile whose worker limit is 1, the green PR 7 at `head`, and one worker already running. */
+  function atTheWorkerLimit(head: string): void {
+    fake("claude", 'if [ "$1" = "auth" ]; then exit 0; fi; exec /bin/sleep 30');
+    fake("gh", `case "$1 $2" in "pr view") printf '%s\\n' '{"headRefOid":"${head}","state":"OPEN","comments":[]}';; "api --paginate") case "$3" in */check-runs) printf '%s\\n' '["${head}","ci","success"]';; esac;; esac`);
+    configure();
+    writeFileSync(join(home, "config.toml"), readFileSync(join(home, "config.toml"), "utf8") +
+      '\n[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\nmax_workers = 1\ncompute = "one"\npeople = "solo"\n\n[profile.accounts]\na1 = "codex"\n\n[profile.agents]\nauthor = "a1"\nr1 = "a1"\n');
+    expect(raw(["task", "claim", "T1", "--as", "author"]).status).toBe(0);
+    const busy = raw(["worker", "start", "busy"]);
+    expect(busy.status, busy.stdout + busy.stderr).toBe(0);
+    expect(raw(["worker", "list"]).stdout).toMatch(/busy\s+RUNNING/);
+  }
+  it("review dry run and real pass are both blocked at the worker limit, and both dispatch below it", () => {
+    const head = "c".repeat(40);
+    const reviewWorker = join(home, "workers", `review-7-${head.slice(0, 12)}`);
+    const refusal = "BLOCKED (starting r1 failed: 1 worker(s) running and [profile] max_workers is 1; stop one or raise max_workers)";
+    const watch = (...flags: string[]) => raw(["review", "watch", "7", "--task", "T1", ...flags]);
+    try {
+      atTheWorkerLimit(head);
+      const json = watch("--dry-run", "--json");
+      expect([json.status, JSON.parse(json.stdout).outcome, JSON.parse(json.stdout).command], json.stdout + json.stderr).toEqual([1, "BLOCKED", null]);
+      expect(JSON.parse(json.stdout).detail).toBe(refusal.slice("BLOCKED (".length, -1));
+      const text = watch("--dry-run");
+      expect(text.status, text.stdout + text.stderr).toBe(1);
+      expect(text.stdout).toContain(refusal);
+      expect(text.stdout).not.toContain("command:");
+      const once = watch("--once");
+      expect(once.status, once.stdout + once.stderr).toBe(1);
+      expect(once.stdout).toContain(refusal);
+      expect(existsSync(reviewWorker)).toBe(false);
+      // below the limit the same two commands dispatch
+      expect(raw(["worker", "stop", "busy"]).status).toBe(0);
+      const free = watch("--dry-run", "--json");
+      expect([free.status, JSON.parse(free.stdout).outcome, JSON.parse(free.stdout).command], free.stdout + free.stderr).toEqual([0, "DISPATCHED", ["codex", "exec", "-"]]);
+      expect(existsSync(reviewWorker)).toBe(false);
+      const started = watch("--once");
+      expect(started.status, started.stdout + started.stderr).toBe(0);
+      expect(started.stdout).toContain("=> DISPATCHED");
+      expect(existsSync(join(reviewWorker, "worker.json"))).toBe(true);
+    } finally {
+      raw(["worker", "stop", "busy"]);
+      raw(["worker", "stop", `review-7-${head.slice(0, 12)}`]);
+    }
+  });
+  it("force without a terminal at the worker limit prints the attended-use refusal alone", () => {
+    try {
+      atTheWorkerLimit("d".repeat(40));
+      // control: the limit is reached, so a start without --force names it
+      const plain = raw(["worker", "start", "extra"]);
+      expect([plain.status, plain.stderr]).toEqual([2, "worker: 1 worker(s) running and [profile] max_workers is 1; stop one, raise max_workers, or pass --force\n"]);
+      const forced = raw(["worker", "start", "extra", "--force"]); // stdin is a pipe here, not a terminal
+      expect([forced.status, forced.stdout, forced.stderr]).toEqual([2, "", "worker: --force is for attended use only; requires a terminal on stdin\n"]);
+      expect(existsSync(join(home, "workers", "extra"))).toBe(false);
+    } finally {
+      raw(["worker", "stop", "busy"]);
+    }
+  });
   it("plain doctor retains its concise report", () => { const r = run("doctor"); expect(r.stdout).not.toContain("ready-for-live"); expect(r.stdout).toMatch(/PASS\s+worker command/); expect(r.stdout).toMatch(/PASS\s+review agent r1/); expect(readFileSync(log, "utf8")).toContain("codex\nlogin\nstatus\n"); });
 });
 

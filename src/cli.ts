@@ -22,7 +22,7 @@ import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
-import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
+import { WorkerError, WorkerLimitError, Workers, type StartOptions } from "./workers.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -675,7 +675,7 @@ const cmdReviewWatch: Run = async (a, io) => {
     return 1;
   }
   const host = RW.override.host ?? RW.realHost(reviewStart(cfg, prof));
-  if (!RW.override.host) host.admit = (d) => workers(cfg).admit(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
+  if (!RW.override.host) host.admit = reviewAdmit(cfg, prof);
   const inp: RW.WatchInput = {
     pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings, requiredChecks: checks,
     tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
@@ -697,9 +697,19 @@ const cmdReviewWatch: Run = async (a, io) => {
  */
 export function reviewStart(cfg: Record<string, any>, prof: P.Profile | null): (d: RW.DispatchSpec) => { pid: number | null } {
   return (d) => {
-    const m = workers(cfg).start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env, limit: prof ? prof.max_workers : null });
+    const m = workers(cfg).start(d.worker, reviewLaunch(d, prof));
     return { pid: typeof m.pid === "number" ? m.pid : null };
   };
+}
+
+/** What a `review watch` dry run checks: the admission `reviewStart` runs, for the same launch, starting nothing. */
+function reviewAdmit(cfg: Record<string, any>, prof: P.Profile | null): (d: RW.DispatchSpec) => void {
+  return (d) => workers(cfg).admit(d.worker, reviewLaunch(d, prof));
+}
+
+/** The worker launch of a review dispatch, built once for the real pass and the dry run. */
+function reviewLaunch(d: RW.DispatchSpec, prof: P.Profile | null): StartOptions {
+  return { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env, limit: prof ? prof.max_workers : null };
 }
 
 const cmdWorker: Run = async (a, io) => {
@@ -709,13 +719,9 @@ const cmdWorker: Run = async (a, io) => {
     const action = a._path[2];
     if (action === "start") {
       const prof = P.readProfile(cfg);
-      // the limit itself is checked in Workers.start(); --force is the one override, and it says so
-      if (prof && a.force) {
-        const running = w.list().filter((x) => x.state === "RUNNING").length;
-        if (running >= prof.max_workers) {
-          eprintln(io, `worker: warning: --force starts ${a.name} above [profile] max_workers (${running} running, limit ${prof.max_workers})`);
-        }
-      }
+      // the limit itself is checked in Workers.admit(); --force is the one override. Counted before
+      // the start, so the forced worker is not counted against itself.
+      const before = prof && a.force ? w.list().filter((x) => x.state === "RUNNING").length : 0;
       let m: Record<string, any>;
       try {
         m = w.start(a.name, {
@@ -727,6 +733,10 @@ const cmdWorker: Run = async (a, io) => {
         if (!(e instanceof WorkerLimitError)) throw e;
         eprintln(io, `worker: ${e.running} worker(s) running and [profile] max_workers is ${e.limit}; stop one, raise max_workers, or pass --force`);
         return 2;
+      }
+      // said only once the forced start has happened: a refused --force prints its refusal alone
+      if (prof && a.force && before >= prof.max_workers) {
+        eprintln(io, `worker: warning: --force starts ${a.name} above [profile] max_workers (${before} running, limit ${prof.max_workers})`);
       }
       println(io, `worker ${m.name} started pid=${m.pid} load=${m.load_tier} dir=${w.dir(m.name)}`);
       if (m.worktree) println(io, `worktree ${m.worktree.path} branch=${m.worktree.branch} (${m.worktree.created ? "created" : "attached"})`);
@@ -1223,7 +1233,7 @@ export function buildTree(): CmdSpec<Run> {
             opt("repo", ["--repo"], "str", "owner/name (default [merge] repo)"),
             opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
             opt("once", ["--once"], "bool", "one pass, then exit (for cron)"),
-            opt("dry_run", ["--dry-run"], "bool", "one pass; run the readiness checks of a real start (login-status probes, gh auth status); print the reviewer command only if it would start; start no reviewer, write nothing"),
+            opt("dry_run", ["--dry-run"], "bool", "one pass; where a real pass would dispatch, run its admission (readiness checks with login-status probes and gh auth status, then the [profile] max_workers count) and print no reviewer command when it refuses; start no reviewer, write nothing"),
             opt("force", ["--force"], "bool", "start a reviewer even though this head already had one"),
             opt("interval", ["--interval"], "float", "seconds between passes (default [review.watch] poll_seconds)"),
             opt("timeout", ["--timeout"], "float", "stop after this many seconds (default: until reviewed, stale or blocked)"),

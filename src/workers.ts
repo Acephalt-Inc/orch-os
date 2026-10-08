@@ -118,7 +118,10 @@ export class Workers {
     return { tmpl, wd, commandDir, probe };
   }
 
-  /** Run the exact command selection and readiness path used immediately before launch. */
+  /**
+   * The one admission decision: the command selection and readiness path used immediately before
+   * launch, then the written worker limit. A start without --force and a dry run both call it.
+   */
   admit(name: string, opts: StartOptions): void {
     const { tmpl, wd, commandDir, probe } = this.selection(name, opts);
     const checks = RD.readiness(this.fullConfig, this.loadState, {
@@ -127,6 +130,12 @@ export class Workers {
     });
     const failing = checks.filter((c) => !c.ok);
     if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.unverified ? "UNVERIFIED: " : ""}${c.detail})`).join("; ")}`);
+    // the written worker limit, checked here so that every caller of admit() gets it. The count
+    // and the spawn are not one atomic step: two starts at the same instant can both pass.
+    if (opts.limit !== null && opts.limit !== undefined) {
+      const running = this.list().filter((x) => x.state === "RUNNING").length;
+      if (running >= opts.limit) throw new WorkerLimitError(running, opts.limit);
+    }
   }
 
   pid(name: string): number | null {
@@ -212,12 +221,6 @@ export class Workers {
     catch (e: any) { throw new ConfigError(`time limit: ${e.message}`); }
     const nice = Math.trunc(configNumber(this.cfg.nice, 5, "[workers] nice", -20));
     const tier = loadmod.readState(this.loadState).tier ?? "NORMAL";
-    // the written worker limit, checked here so that every caller of start() gets it. The count
-    // and the spawn are not one atomic step: two starts at the same instant can both pass.
-    if (opts.limit !== null && opts.limit !== undefined && !opts.force) {
-      const running = this.list().filter((x) => x.state === "RUNNING").length;
-      if (running >= opts.limit) throw new WorkerLimitError(running, opts.limit);
-    }
     if (opts.agent && opts.command && opts.command.length) throw new WorkerError("pass --agent or a command after --, not both");
     const { tmpl, wd: selectedWd, probe } = this.selection(name, opts);
     let wd = selectedWd;
