@@ -100,15 +100,21 @@ function currentMark(dir: string): string | null {
   }
 }
 
-function tryBreak(dir: string, mark: string, staleMs: number): void {
-  const brk = dir + ".break";
-  try {
-    mkdirSync(brk);
-  } catch (e: any) {
+// Publication and stale removal share this exclusion. Never age-break it: its holder may be paused.
+function takeExclusion(dir: string): boolean {
+  try { mkdirSync(dir + ".break"); return true; }
+  catch (e: any) {
     if (e.code !== "EEXIST") throw e;
-    // Never age-break the breaker: it too may be paused while holding its exclusion.
-    return;
+    return false;
   }
+}
+
+function dropExclusion(dir: string): void {
+  try { rmdirSync(dir + ".break"); } catch { /* ignore */ }
+}
+
+function tryBreak(dir: string, mark: string, staleMs: number): void {
+  if (!takeExclusion(dir)) return;
   try {
     if (currentMark(dir) === mark && staleMark(dir, staleMs) === mark) {
       const aside = `${dir}.stale.${process.pid}.${randomUUID()}`;
@@ -118,9 +124,7 @@ function tryBreak(dir: string, mark: string, staleMs: number): void {
       } catch { /* gone already */ }
     }
   } finally {
-    try {
-      rmdirSync(brk);
-    } catch { /* ignore */ }
+    dropExclusion(dir);
   }
 }
 
@@ -140,14 +144,22 @@ export class FileLock {
         const owner: Owner = { pid: process.pid, host: hostname(), token, created_ms: Date.now() };
         // Publish a complete record exclusively: a paused initializer cannot overwrite a new owner.
         const identity = statSync(this.path);
-        const tmp = `${this.path}/.owner-${token}`;
-        writeFileSync(tmp, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
-        const current = statSync(this.path);
-        if (current.dev !== identity.dev || current.ino !== identity.ino) throw new LockLostError(this.path);
-        linkSync(tmp, this.path + "/owner.json");
-        unlinkSync(tmp);
-        this.token = token;
-        return;
+        while (!takeExclusion(this.path)) {
+          if (Date.now() - start > timeout) throw new LockTimeoutError(this.path, timeout);
+          sleepSync(wait + Math.random() * wait);
+          wait = Math.min(wait * 2, 25);
+        }
+        try {
+          // A breaker may have displaced this initializer while publication waited for exclusion.
+          const current = statSync(this.path);
+          if (current.dev !== identity.dev || current.ino !== identity.ino) throw new LockLostError(this.path);
+          const tmp = `${this.path}/.owner-${token}`;
+          writeFileSync(tmp, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+          linkSync(tmp, this.path + "/owner.json");
+          unlinkSync(tmp);
+          this.token = token;
+          return;
+        } finally { dropExclusion(this.path); }
       } catch (e: any) {
         if (e.code === "ENOENT") {
           mkdirSync(dirname(this.path), { recursive: true });

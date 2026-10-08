@@ -251,6 +251,8 @@ describe("OwnershipCli", () => {
     const path = `${ctx.home}/lease.json`;
     const lock = path + ".lock.d";
     const ready = `${ctx.home}/ready`;
+    const resumeWrite = `${ctx.home}/resume-write`;
+    const contenderReady = `${ctx.home}/contender-polling`;
     const lockMod = pathToFileURL(join(ROOT, "dist/lock.js")).href;
     const utilMod = pathToFileURL(join(ROOT, "dist/util.js")).href;
     const script = `import fs from "node:fs";
@@ -262,7 +264,11 @@ describe("OwnershipCli", () => {
         const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
         fs.writeFileSync(ownerFile, JSON.stringify({ ...owner, created_ms: 0 }));
         fs.writeFileSync(${JSON.stringify(ready)}, "ready");
-        process.kill(process.pid, "SIGSTOP");
+        const cell = new Int32Array(new SharedArrayBuffer(4)), end = Date.now() + 15000;
+        while (!fs.existsSync(${JSON.stringify(resumeWrite)})) {
+          if (Date.now() > end) throw Error("resume-write timeout");
+          Atomics.wait(cell, 0, 0, 5);
+        }
         atomicWrite(${JSON.stringify(path)}, state);
       }); } catch (e) { console.error(e.message); process.exitCode = 5; }`;
     const holder = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
@@ -272,14 +278,23 @@ describe("OwnershipCli", () => {
     let contender: ReturnType<typeof spawn> | null = null;
     try {
       expect(await waitFor(() => existsSync(ready))).toBe(true);
-      expect(holder.kill("SIGSTOP")).toBe(true); // parent also stops it; no ps dependency
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(holder.kill("SIGSTOP")).toBe(true); // holder acknowledged readiness and waits for resume-write
       if (!displaced) {
-        contender = spawn(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "new", "--force"], {
+        // A polling acknowledgment proves the contender completed the lock's stale decision.
+        const contenderScript = `import fs from "node:fs";
+          const wait = Atomics.wait;
+          Atomics.wait = function(...args) {
+            fs.writeFileSync(${JSON.stringify(contenderReady)}, "polling");
+            return wait(...args);
+          };
+          process.argv = [process.execPath, ${JSON.stringify(DIST_CLI)}, "lease", "acquire", "--session", "new", "--force"];
+          await import(${JSON.stringify(pathToFileURL(DIST_CLI).href)});`;
+        contender = spawn(process.execPath, ["--input-type=module", "-e", contenderScript], {
           env: { ...process.env, ORCH_HOME: ctx.home }, stdio: "ignore",
         });
         const stopped = new Promise((resolve) => contender!.on("exit", resolve));
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(await waitFor(() => existsSync(contenderReady) || contender!.exitCode !== null)).toBe(true);
+        expect(existsSync(contenderReady)).toBe(true);
         expect(contender.exitCode).toBe(null); // old alive PID is never broken by the CLI
         expect(JSON.parse(readFileSync(path, "utf8")).epoch).toBe(1);
         contender.kill("SIGTERM"); await stopped;
@@ -291,6 +306,7 @@ describe("OwnershipCli", () => {
         expect(JSON.parse(acquired.stdout).state.epoch).toBe(2);
       }
       const before = readFileSync(path, "utf8");
+      writeFileSync(resumeWrite, "resume");
       holder.kill("SIGCONT");
       expect(await done, err).toBe(displaced ? 5 : 0);
       expect(readFileSync(path, "utf8")).toBe(before); // old snapshot never overwrites epoch 2

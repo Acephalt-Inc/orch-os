@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { dumps } from "../src/pyjson.js";
 import { parseToml, TomlError } from "../src/toml.js";
 import { Messages } from "../src/messages.js";
 import { atomicWrite } from "../src/util.js";
-import { ROOT, useTmpHome } from "./_helpers.js";
+import { ROOT, useTmpHome, waitFor } from "./_helpers.js";
 
 describe("LockV2", () => {
   const ctx = useTmpHome();
@@ -93,6 +93,128 @@ describe("LockV2", () => {
     expect(() => withLock(path, () => { ran = true; }, { timeoutMs: 50, staleMs: 1 })).toThrow(LockOwnerError);
     expect(ran).toBe(false);
     expect(existsSync(path)).toBe(true);
+  });
+
+  it("EACCES_owner_read_preserves_ownership_and_never_runs_callback", () => {
+    const path = join(ctx.home, "denied.lock.d");
+    const holder = new FileLock(path);
+    holder.acquire();
+    const file = join(path, "owner.json");
+    const owner = readFileSync(file, "utf8");
+    const past = Date.now() / 1000 - 1000;
+    utimesSync(path, past, past);
+    const script = `import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { withLock } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist/lock.js")).href)};
+      const read = fs.readFileSync;
+      fs.readFileSync = function(path, ...args) {
+        if (path === ${JSON.stringify(file)}) throw Object.assign(new Error("denied"), { code: "EACCES" });
+        return read(path, ...args);
+      };
+      syncBuiltinESMExports();
+      let callback = false, error = null;
+      try { withLock(${JSON.stringify(path)}, () => { callback = true; }, { timeoutMs: 100, staleMs: 1 }); }
+      catch (e) { error = e.name; }
+      console.log(JSON.stringify({ callback, error }));`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 5000 });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ callback: false, error: "LockOwnerError" });
+    expect(readFileSync(file, "utf8")).toBe(owner);
+    holder.assertHeld();
+    holder.release();
+  });
+
+  it("publication_and_stale_removal_never_let_a_displaced_holder_overwrite_its_successor", async () => {
+    const lock = join(ctx.home, "schedule.lock.d");
+    const dest = join(ctx.home, "protected");
+    writeFileSync(dest, "old snapshot");
+    const common = `import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { withLock } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist/lock.js")).href)};
+      import { atomicWrite } from ${JSON.stringify(pathToFileURL(join(ROOT, "dist/util.js")).href)};
+      const dir = ${JSON.stringify(ctx.home)}, lock = ${JSON.stringify(lock)}, dest = ${JSON.stringify(dest)};
+      function signal(name) { fs.writeFileSync(dir + "/" + name, ""); }
+      function wait(name) {
+        const cell = new Int32Array(new SharedArrayBuffer(4)), end = Date.now() + 15000;
+        while (!fs.existsSync(dir + "/" + name)) {
+          if (Date.now() > end) throw Error("signal timeout: " + name);
+          Atomics.wait(cell, 0, 0, 5);
+        }
+      }`;
+    const aScript = common + `
+      const mkdir = fs.mkdirSync, rename = fs.renameSync;
+      let first = true;
+      fs.mkdirSync = function(path, ...args) {
+        let result;
+        try { result = mkdir(path, ...args); }
+        catch (e) {
+          if (path === lock + ".break" && e.code === "EEXIST") {
+            signal("publicationExcluded"); wait("goPublication");
+          }
+          throw e;
+        }
+        if (path === lock && first) { first = false; signal("initDir"); wait("goInit"); }
+        return result;
+      };
+      fs.renameSync = function(from, to) {
+        if (to === dest) { signal("writeChecked"); wait("goWrite"); }
+        return rename(from, to);
+      };
+      syncBuiltinESMExports();
+      try { withLock(lock, () => atomicWrite(dest, "old snapshot"), { timeoutMs: 15000 }); }
+      catch (e) { console.error(e.name); process.exitCode = 5; }`;
+    const bScript = common + `
+      const rename = fs.renameSync;
+      fs.renameSync = function(from, to) {
+        if (from === lock && to.includes(".stale.")) { signal("breakChecked"); wait("goBreak"); }
+        return rename(from, to);
+      };
+      syncBuiltinESMExports();
+      withLock(lock, () => {
+        atomicWrite(dest, "newer writer"); signal("successorWritten"); wait("goSuccessorFinish");
+      }, { staleMs: 1, timeoutMs: 15000 });`;
+    const children: Array<{ child: ReturnType<typeof spawn>; done: Promise<number | null>; error: () => string }> = [];
+    const start = (script: string) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr!.on("data", (chunk) => { stderr += chunk; });
+      const entry = { child, done: new Promise<number | null>((resolve) => child.on("exit", resolve)), error: () => stderr };
+      children.push(entry);
+      return entry;
+    };
+    const signal = (name: string) => writeFileSync(join(ctx.home, name), "");
+    const ready = (name: string) => existsSync(join(ctx.home, name));
+    const until = async (pred: () => boolean) => expect(await waitFor(pred, 1500, 5)).toBe(true);
+    try {
+      const a = start(aScript);
+      await until(() => ready("initDir"));
+      const past = (Date.now() - 120000) / 1000;
+      utimesSync(lock, past, past);
+      const b = start(bScript);
+      await until(() => ready("breakChecked"));
+      signal("goInit");
+      await until(() => ready("writeChecked") || ready("publicationExcluded"));
+      // Unfixed code publishes and passes the final write check while the breaker is paused.
+      if (ready("writeChecked")) {
+        const owner = JSON.parse(readFileSync(join(lock, "owner.json"), "utf8"));
+        expect(owner.pid).toBe(a.child.pid);
+        expect(() => process.kill(owner.pid, 0)).not.toThrow();
+      }
+      signal("goBreak");
+      await until(() => ready("successorWritten"));
+      expect(readFileSync(dest, "utf8")).toBe("newer writer");
+      signal("goPublication");
+      signal("goWrite");
+      expect(await a.done, a.error()).toBe(5);
+      expect(a.error()).toContain("LockLostError");
+      // The successor remains live until the displaced initializer has finished.
+      expect(readFileSync(dest, "utf8")).toBe("newer writer");
+      signal("goSuccessorFinish");
+      expect(await b.done, b.error()).toBe(0);
+    } finally {
+      for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
+      await Promise.all(children.map(({ done }) => done));
+    }
   });
 
   it.each(["changed", "unreadable", "missing"])("lost_or_unknown_owner_rejects_atomic_write_before_effect: %s", (kind) => {

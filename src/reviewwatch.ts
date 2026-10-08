@@ -28,7 +28,7 @@ import { withLock } from "./lock.js";
 import * as M from "./mergegate.js";
 import * as P from "./profile.js";
 import { dumps } from "./pyjson.js";
-import { assertWriteOwnership, atomicWrite, isPlainObject, sleep, validName, which } from "./util.js";
+import { atomicWrite, isPlainObject, sleep, validName, which } from "./util.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -508,14 +508,11 @@ export function watchOnce(inp: WatchInput, host: Host): WatchResult {
     // re-read under the lock: another `review watch` may have dispatched this head meanwhile
     const again = readRec(path);
     if (again && again.head === head && !inp.force) return done("DISPATCHED", `${again.agent} (${again.label}) was started for this head by another watcher`);
-    assertWriteOwnership();
     mkdirSync(inp.settings.dir, { recursive: true });
-    assertWriteOwnership();
     writeFileSync(prompt, promptText(inp.pr, inp.repo, head, pick, inp.authors));
     const env = { ORCH_AGENT: pick.name, ORCH_REVIEW_PR: String(inp.pr), ORCH_REVIEW_HEAD: head, ORCH_REVIEW_REPO: inp.repo, ORCH_REVIEW_PROMPT: prompt };
     let pid: number | null;
     try {
-      assertWriteOwnership();
       pid = host.dispatch({ worker, argv, env, prompt, minutes: inp.settings.staleMinutes }).pid;
     } catch (e: any) {
       return done("BLOCKED", `starting ${pick.name} failed: ${e.message ?? e}`);
