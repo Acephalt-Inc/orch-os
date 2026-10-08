@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as U from "../src/util.js";
-import { LockLostError } from "../src/lock.js";
+import { FileLock, LockLostError } from "../src/lock.js";
 import { Lease, LeaseFileError } from "../src/lease.js";
-import { useTmpHome } from "./_helpers.js";
+import { Tasks } from "../src/tasks.js";
+import { ROOT, useTmpHome } from "./_helpers.js";
 
 describe("LeaseTest", () => {
   const ctx = useTmpHome();
@@ -109,6 +113,59 @@ describe("OwnershipSafety", () => {
   const ctx = useTmpHome();
   const lease = () => new Lease(`${ctx.home}/lease.json`);
   const record = () => JSON.parse(readFileSync(lease().epochPath, "utf8"));
+
+  function recoveryIo(): Record<string, any> {
+    lease().run("acquire", "old", { now: 1000 });
+    writeFileSync(lease().path, "{broken");
+    const script = `import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const paths = new Map(), events = [];
+      const open = fs.openSync, close = fs.closeSync, fsync = fs.fsyncSync, append = fs.appendFileSync, rename = fs.renameSync;
+      fs.openSync = function(path, ...args) { const fd = open(path, ...args); paths.set(fd, String(path)); events.push(["open", String(path), fd]); return fd; };
+      fs.appendFileSync = function(fd, ...args) { events.push(["append", paths.get(fd), fd]); return append(fd, ...args); };
+      fs.fsyncSync = function(fd) { events.push(["fsync", paths.get(fd), fd]); return fsync(fd); };
+      fs.closeSync = function(fd) { events.push(["close", paths.get(fd), fd]); paths.delete(fd); return close(fd); };
+      fs.renameSync = function(from, to) { events.push(["rename", String(from), String(to)]); return rename(from, to); };
+      syncBuiltinESMExports();
+      const { Lease } = await import(${JSON.stringify(pathToFileURL(join(ROOT, "dist/lease.js")).href)});
+      const target = new Lease(${JSON.stringify(lease().path)});
+      const [code] = target.run("acquire", "new", { recover: true, now: 1001 });
+      console.log(JSON.stringify({ code, events }));`;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+    expect(child.status, child.stderr).toBe(0);
+    return JSON.parse(child.stdout);
+  }
+
+  it("recovery_fsyncs_each_journal_record_before_closing_it", () => {
+    const { code, events } = recoveryIo();
+    expect(code).toBe(0);
+    const journal = events.filter((e: any[]) => e[1] === lease().journalPath).map((e: any[]) => e[0]);
+    expect(journal).toEqual(["open", "append", "fsync", "close", "open", "append", "fsync", "close"]);
+  });
+
+  it("lease_and_epoch_temporary_files_are_fsynced_before_publication", () => {
+    const { events } = recoveryIo();
+    for (const path of [lease().epochPath + ".tmp", lease().path + ".tmp"]) {
+      const io = events.filter((e: any[]) => e[1] === path || e[2] === path).map((e: any[]) => e[0]);
+      expect(io).toEqual(["open", "fsync", "close", "rename"]);
+    }
+  });
+
+  it("lease_epoch_and_task_files_are_mode_0600", () => {
+    lease().run("acquire", "old", { now: 1000 });
+    const tasks = new Tasks(`${ctx.home}/tasks`);
+    tasks.claim("secret", "old", { now: 1000 });
+    for (const path of [lease().path, lease().epochPath, `${ctx.home}/tasks/secret.json`]) {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
+    for (const path of [lease().path + ".tmp", lease().epochPath + ".tmp"]) {
+      writeFileSync(path, "old");
+      chmodSync(path, 0o666);
+    }
+    lease().run("renew", "old", { now: 1001 });
+    expect(statSync(lease().path).mode & 0o777).toBe(0o600);
+    expect(statSync(lease().epochPath).mode & 0o777).toBe(0o600);
+  });
 
   it.each(["{not json", "null", "[]", "7", "{}", '{"epoch":7}'])("damaged_lease_blocks_every_action: %s", (text) => {
     writeFileSync(lease().path, text);
@@ -243,6 +300,39 @@ describe("OwnershipSafety", () => {
     finally { spy.mockRestore(); }
     expect([result[0], result[1].status]).toEqual([5, "UNVERIFIED"]);
     expect(result[1].state).toMatchObject({ session_id: "new", epoch: 9 });
+  });
+
+  it("a_read_back_with_another_session_but_the_issued_epoch_is_unverified", () => {
+    lease().run("acquire", "old", { now: 1000 });
+    const write = U.atomicWrite;
+    const spy = vi.spyOn(U, "atomicWrite").mockImplementation((path, data, opts) => {
+      write(path, path === lease().path ? JSON.stringify({ ...JSON.parse(data), session_id: "other" }) : data, opts);
+    });
+    let result: ReturnType<Lease["run"]>;
+    try { result = lease().run("acquire", "new", { force: true, now: 1001 }); }
+    finally { spy.mockRestore(); }
+    expect([result[0], result[1].status]).toEqual([5, "UNVERIFIED"]);
+    expect(result[1].state).toMatchObject({ session_id: "other", epoch: 2 });
+  });
+
+  it.each([
+    [3, "before opening the recovery journal"],
+    [4, "before appending the recovery journal"],
+    [5, "before renaming damaged evidence"],
+  ])("every_recovery_effect_checks_lock_ownership: %i %s", (failAt) => {
+    lease().run("acquire", "old", { now: 1000 });
+    writeFileSync(lease().path, "{broken");
+    const held = FileLock.prototype.assertHeld;
+    let calls = 0;
+    const spy = vi.spyOn(FileLock.prototype, "assertHeld").mockImplementation(function () {
+      if (++calls === failAt) throw new LockLostError(this.path);
+      return held.call(this);
+    });
+    try { expect(() => lease().run("acquire", "new", { recover: true, now: 1001 })).toThrow(LockLostError); }
+    finally { spy.mockRestore(); }
+    if (failAt === 3) expect(existsSync(lease().journalPath)).toBe(false);
+    if (failAt === 4) expect(readFileSync(lease().journalPath, "utf8")).toBe("");
+    if (failAt === 5) expect(readFileSync(lease().path, "utf8")).toBe("{broken");
   });
 
   it("epoch_exhaustion_refuses_before_writing", () => {

@@ -201,6 +201,14 @@ describe("LockV2", () => {
     expect(existsSync(lock)).toBe(true);
   });
 
+  it("owner_record_is_published_before_acquire_returns", () => {
+    const lock = join(ctx.home, "published.lock.d");
+    const holder = new FileLock(lock);
+    holder.acquire();
+    expect(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).token).toBe(holder.token);
+    holder.release();
+  });
+
   it("an_exception_in_the_critical_section_still_releases", () => {
     const lock = join(ctx.home, "ex.lock.d");
     expect(() => withLock(lock, () => { throw new Error("boom"); })).toThrow("boom");
