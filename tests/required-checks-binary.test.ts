@@ -19,7 +19,7 @@ const packEnvironment = (): NodeJS.ProcessEnv => copy.env;
 
 const invoke = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], {
   cwd: ROOT, encoding: "utf8", timeout: 15_000,
-  env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}:${process.env.PATH}`, OS2_FIXTURE: data, OS2_GH_LOG: log },
+  env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}:${process.env.PATH}`, FAKE_GH_FIXTURE: data, FAKE_GH_LOG: log },
 });
 function config(required: unknown = ["CI/test"], requireCi = true) {
   const value = JSON.stringify(required);
@@ -37,7 +37,7 @@ function fixture(s: Scenario) {
 }
 
 beforeAll(async () => {
-  base = mkdtempSync(join(ROOT, ".os2-packed-"));
+  base = mkdtempSync(join(ROOT, ".packed-cli-"));
   registryLog = join(base, "registry.log");
   writeFileSync(registryLog, "");
   // A separate observer process keeps serving while synchronous npm packing runs.
@@ -95,8 +95,8 @@ beforeAll(async () => {
   // This gh double returns the requested jq projection of raw REST shapes, not injected hosts.
   writeFileSync(join(base, "bin", "gh"), `#!${process.execPath}\n` + String.raw`
 import * as fs from "node:fs";
-const a = process.argv.slice(2), f = JSON.parse(fs.readFileSync(process.env.OS2_FIXTURE, "utf8"));
-fs.appendFileSync(process.env.OS2_GH_LOG, JSON.stringify(a) + "\n");
+const a = process.argv.slice(2), f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
+fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(a) + "\n");
 const lines = rows => process.stdout.write(rows.map(JSON.stringify).join("\n") + (rows.length ? "\n" : ""));
 const jq = a.includes("--jq") ? a[a.indexOf("--jq") + 1] : "";
 if (a[0] === "pr" && a[1] === "view") console.log(JSON.stringify(f.pr));
@@ -122,13 +122,13 @@ afterAll(() => {
 beforeEach(() => {
   home = mkdtempSync(join(base, "home-")); data = join(home, "api.json"); log = join(home, "gh.log");
   config();
-  const claimed = invoke("task", "claim", "os2", "--as", "author");
+  const claimed = invoke("task", "claim", "gating", "--as", "author");
   expect(claimed.status, claimed.stderr).toBe(0);
 });
 
 describe("RequiredChecksPackedBinary", () => {
   it("npm pack is offline, disables the notifier, and isolates developer credentials", () => {
-    // Review v1 exact mutation: replace the guarded pack call with the original:
+    // Mutation witness: replace the guarded pack call with an unguarded one:
     // spawnSync("npm", ["pack", "--json", "--pack-destination", base, "--cache", join(base, "cache")], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
     // (now `tarball = pack(copy, guard)`; run that mutation only in a disposable checkout: it builds in ROOT).
     // The observer changes only registry/config, never forces the update notifier on.
@@ -156,7 +156,7 @@ describe("RequiredChecksPackedBinary", () => {
   });
 
   it("packed policy stays in mergegate without an out-of-scope checks module", () => {
-    // Review v1 scope mutation: restore src/checks.ts's shared evaluator and imports.
+    // Mutation witness: move the shared evaluator into a src/checks.ts module.
     // The copy was seeded with dist/checks.js and dist/retired.js before packing.
     expect(existsSync(join(base, "package", "dist", "checks.js"))).toBe(false);
     expect(existsSync(join(base, "package", "dist", "retired.js"))).toBe(false);
@@ -168,13 +168,13 @@ describe("RequiredChecksPackedBinary", () => {
     config(s.required ?? ["CI/test"], false);
     fixture(s);
     for (const source of ["github", "comments"]) {
-      const gate = invoke("merge-gate", "7", "--fixture", join(home, "pr.json"), "--reviews", source, "--task", "os2");
+      const gate = invoke("merge-gate", "7", "--fixture", join(home, "pr.json"), "--reviews", source, "--task", "gating");
       expect(gate.status, gate.stderr).toBe(s.gateGreen ? 0 : 1);
       expect(gate.stdout).toContain(s.gateGreen ? "ci=green" : "ci=NOT green");
       expect(gate.stdout).toContain(s.gateGreen ? "=> PASS" : "=> BLOCKED");
       if (s.gateReason) expect(gate.stdout).toContain(s.gateReason);
     }
-    const args = ["review", "watch", "7", "--task", "os2", "--force"];
+    const args = ["review", "watch", "7", "--task", "gating", "--force"];
     // Blocked cases exercise the real dispatch path; controls preview without launching a worker.
     const watch = invoke(...args, ...(s.watchGreen ? ["--dry-run"] : ["--once"]));
     expect(watch.status, watch.stdout + watch.stderr).toBe(0); // WAITING under --once is explicitly exit 0.
@@ -198,7 +198,7 @@ describe("RequiredChecksPackedBinary", () => {
     const gate = invoke("merge-gate", "7", "--json");
     expect(gate.status, gate.stderr).toBe(1);
     expect(JSON.parse(gate.stdout).unmet_checks).toEqual({ "CI/test": "SKIPPED" });
-    const watch = invoke("review", "watch", "7", "--task", "os2", "--once", "--json");
+    const watch = invoke("review", "watch", "7", "--task", "gating", "--once", "--json");
     expect(watch.status, watch.stdout + watch.stderr).toBe(0);
     expect(JSON.parse(watch.stdout)).toMatchObject({ outcome: "WAITING", ci: "not-passed" });
     expect(JSON.parse(watch.stdout).detail).toContain("WORKFLOW_UNKNOWN");
@@ -208,7 +208,7 @@ describe("RequiredChecksPackedBinary", () => {
   it("250 workflow runs join through the paginated API contract", () => {
     const s = { ...scenarios[4], workflows: Array.from({ length: 250 }, (_, i): [number, string] => [i, i === 11 || i === 12 ? "CI" : `other-${i}`]) };
     fixture(s);
-    const result = invoke("review", "watch", "7", "--task", "os2", "--dry-run");
+    const result = invoke("review", "watch", "7", "--task", "gating", "--dry-run");
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("ci=green => DISPATCHED");
   });
@@ -218,7 +218,7 @@ describe("RequiredChecksPackedBinary", () => {
     // supply CI/test are rows 211 and 241 of the workflow-run list.
     const all = Array.from({ length: 250 }, (_, i): [number, string] => i === 210 ? [11, "CI"] : i === 240 ? [12, "CI"] : [1000 + i, `other-${i}`]);
     fixture({ ...scenarios[4], workflows: all });
-    const joined = invoke("review", "watch", "7", "--task", "os2", "--dry-run");
+    const joined = invoke("review", "watch", "7", "--task", "gating", "--dry-run");
     expect(joined.status, joined.stdout + joined.stderr).toBe(0);
     expect(joined.stdout).toContain("ci=green => DISPATCHED");
     const calls = readFileSync(log, "utf8").trim().split("\n").map(l => JSON.parse(l));
@@ -228,7 +228,7 @@ describe("RequiredChecksPackedBinary", () => {
       "--jq", ".sha as $s | .statuses[] | [$s, .context, .state] | @json"]);
     // Control: the same list cut after row 200 leaves both suites unknown, so nothing is dispatched.
     fixture({ ...scenarios[4], workflows: all.slice(0, 200) });
-    const cut = invoke("review", "watch", "7", "--task", "os2", "--once");
+    const cut = invoke("review", "watch", "7", "--task", "gating", "--once");
     expect(cut.status, cut.stdout + cut.stderr).toBe(0);
     expect(cut.stdout).toContain("=> WAITING");
     expect(cut.stdout).toContain("CI/test=WORKFLOW_UNKNOWN");
@@ -237,10 +237,10 @@ describe("RequiredChecksPackedBinary", () => {
   });
 
   const job = (name: string, suite: number, workflow: string, state = "SUCCESS") => ({ sha: HEAD, name, workflow, state, suite });
-  const sources = [["--reviews", "github"], ["--reviews", "comments", "--task", "os2"]];
+  const sources = [["--reviews", "github"], ["--reviews", "comments", "--task", "gating"]];
 
   it("distinct repeated flags all add to config", () => {
-    // Mutation witnesses: pass only a.require_check.slice(0, 1), or only .slice(-1), at src/cli.ts:474.
+    // Mutation witnesses: pass only a.require_check.slice(0, 1), or only .slice(-1), where src/cli.ts reads the flag.
     config(["CI/test"]);
     fixture({ title: "two passing jobs", runs: [job("test", 11, "CI"), job("lint", 12, "CI")], workflows: [[11, "CI"], [12, "CI"]], gateGreen: true, watchGreen: true });
     for (const source of sources) {
@@ -280,12 +280,12 @@ describe("RequiredChecksPackedBinary", () => {
     }
     const names = "Lint/lint=WORKFLOW_UNKNOWN, Docs/build=ABSENT";
     const sentence = "WORKFLOW_UNKNOWN means a same-name check could not be joined to a workflow";
-    const text = invoke("review", "watch", "7", "--task", "os2", "--once");
+    const text = invoke("review", "watch", "7", "--task", "gating", "--once");
     expect(text.status, text.stdout + text.stderr).toBe(0);
     expect(text.stdout).toContain("ci=not-passed => WAITING");
     expect(text.stdout).toContain(names);
     expect(text.stdout).toContain(sentence);
-    const json = invoke("review", "watch", "7", "--task", "os2", "--once", "--json");
+    const json = invoke("review", "watch", "7", "--task", "gating", "--once", "--json");
     expect(json.status, json.stdout + json.stderr).toBe(0);
     expect(JSON.parse(json.stdout)).toMatchObject({ outcome: "WAITING", ci: "not-passed" });
     expect(JSON.parse(json.stdout).detail).toContain(names);
@@ -304,7 +304,7 @@ describe("RequiredChecksPackedBinary", () => {
   it.each(["\"lint\"", "false", "[1]", "{}", "[\"\"]", "[\"  \"]"])("malformed config %s exits 2 in both commands", (value) => {
     fixture(scenarios[4]);
     writeFileSync(join(home, "config.toml"), `[merge]\nrequired_checks = ${value}\n`);
-    for (const args of [["merge-gate", "7", "--fixture", join(home, "pr.json")], ["review", "watch", "7", "--task", "os2", "--once"]]) {
+    for (const args of [["merge-gate", "7", "--fixture", join(home, "pr.json")], ["review", "watch", "7", "--task", "gating", "--once"]]) {
       const result = invoke(...args);
       expect(result.status).toBe(2);
       expect(result.stderr).toContain("required_checks");

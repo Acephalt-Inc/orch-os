@@ -9,13 +9,12 @@ import { ROOT } from "./_helpers.js";
 import { HEAD, OLD_HEAD, caseScenarios, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
 let dir: string;
-beforeAll(() => { dir = mkdtempSync(join(ROOT, ".os2-policy-")); });
+beforeAll(() => { dir = mkdtempSync(join(ROOT, ".required-checks-")); });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("RequiredChecksPolicy", () => {
   it("shared CI evaluator stays in the allowed mergegate module", () => {
-    // Review v1 scope mutation: restore the new src/checks.ts shared evaluator
-    // and its imports (src/checks.ts:30 was outside the production allowlist).
+    // Mutation witness: move the shared evaluator into a new src/checks.ts and import it from there.
     expect(existsSync(join(ROOT, "src", "checks.ts"))).toBe(false);
     expect(readFileSync(join(ROOT, "src", "mergegate.ts"), "utf8")).toContain("export function ciVerdict(");
     expect(readFileSync(join(ROOT, "src", "reviewwatch.ts"), "utf8")).not.toContain('./checks.js');
@@ -77,7 +76,7 @@ describe("RequiredChecksPolicy", () => {
   });
 
   it("generated two required names block one listed workflow in both requirement orders", () => {
-    // Review v1 exact replacement of src/reviewwatch.ts:516:
+    // Mutation witness: replace the ciAtHead call in watchOnce (src/reviewwatch.ts) with:
     // const ci = ciAtHead(head, rows, (inp.requiredChecks ?? []).slice(0, rows.filter(r => r.workflow != null && r.workflow !== "").length || undefined));
     for (const state of ["SKIPPED", "NEUTRAL"]) for (const reverse of [false, true]) {
       exercise({
