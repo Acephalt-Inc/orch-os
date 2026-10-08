@@ -5,7 +5,9 @@ description: Use when the machine must stay awake while the team keeps working w
 
 # /caffeine — the machine stays awake, the team keeps working
 
-Three modes, kept distinct:
+> Optional recipe. A person chooses to use it; it is not a product mode and nothing installs or schedules it. It grants no authority: every time, limit and permission in it is a value the operator sets.
+
+Three recipes, kept distinct:
 - `/away`: short absence, the human is back before anything sleeps.
 - `/caffeine`: the human sleeps or leaves for long; the team keeps working.
 - `/sleep`: the human sleeps and the team stops.
@@ -21,8 +23,8 @@ Three modes, kept distinct:
 
 2. **Set a cap that covers the whole absence.** Ask when the human expects to be back
    and add margin. A cap that expires at 5 a.m. lets the machine sleep, and every lease
-   and claim held by a sleeping worker then expires with it. Default 8 hours only when
-   the human names nothing.
+   and claim held by a sleeping worker then expires with it. There is no default: if
+   the human names no cap, ask again.
 
 3. **For `until`, check the condition can actually happen.** If the named task has an
    open `QUESTION` or `BLOCKED` message, its `DONE` may never come and the machine
@@ -31,7 +33,7 @@ Three modes, kept distinct:
 4. **Start it** and record the pid in `$ORCH_HOME/caffeine.json`:
 
    ```sh
-   CAP=$((8*3600))
+   CAP=<seconds, the cap the human named>
    # macOS: keep the system awake, let the display sleep (never -d)
    caffeinate -ims -t "$CAP" & echo $! > "$ORCH_HOME/caffeine.pid"
    # Linux with systemd
@@ -42,7 +44,7 @@ Three modes, kept distinct:
    kills the keep-awake pid (and, if the human asked for it, runs `/sleep`):
 
    ```sh
-   until gh pr view 42 --json state -q .state | grep -qx MERGED; do sleep 300; done
+   until gh pr view 42 --json state -q .state | grep -qx MERGED; do sleep "$POLL"; done   # POLL: seconds between checks, chosen by the operator
    kill "$(cat "$ORCH_HOME/caffeine.pid")"
    ```
 

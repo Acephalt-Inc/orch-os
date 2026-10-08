@@ -5,6 +5,8 @@ description: Use when the human says they are leaving and the team should keep w
 
 # /away — the human leaves, the team keeps working
 
+> Optional recipe. A person chooses to use it; it is not a product mode and nothing installs or schedules it. It grants no authority: every time, limit and permission in it is a value the operator sets.
+
 Two halves: **depart** now, and a **report debt** that stays open until the human
 explicitly comes back. The report is a delta, and a delta needs a fixed left edge, so
 the first thing this skill does is write that edge down.

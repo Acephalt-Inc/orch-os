@@ -5,21 +5,25 @@ description: Use when the team should keep working overnight but only on work th
 
 # /night-shift — only reversible, zero-cost work while nobody watches
 
+> Optional recipe. A person chooses to use it; it is not a product mode and nothing installs or schedules it. It grants no authority: every time, limit and permission in it is a value the operator sets.
+
 Nobody is awake to catch a mistake, so the night allows only work whose worst outcome
 is a discarded branch.
 
 ## Enter
 
-1. **Sort the queue.** For every queued task, decide ALLOW or DENY and write the
-   table down:
+1. **Sort the queue.** For every queued task, decide ALLOW or DENY from what the task
+   will actually do and under whose authority, and write the table down. The wording
+   of the task does not decide it:
 
-   | DENY if the task mentions | ALLOW only if it is |
+   | DENY if the task would | ALLOW only if every action in it is |
    |---|---|
-   | merge, deploy, production, database write, feature-flag or config change, spend / paid run, send / post / publish / email, force-push, delete, credential or key | review, research, documentation, tests, a draft PR that nobody merges, read-only diagnosis |
+   | merge, deploy, touch production, write a database, change a feature flag or configuration, spend money or start a paid run, send / post / publish / email, force-push, delete, or use a credential or key | review, research, documentation, tests, a draft PR that nobody merges, read-only diagnosis |
 
-   A task with no ALLOW signal is DENY: **fail closed**. If a DENY task is genuinely
-   safe, reword the task ("draft PR, no merge", "read-only"). Never widen the rules
-   for one task.
+   A task that is not clearly ALLOW is DENY: **fail closed**. A DENY task stays denied
+   until the person who holds that authority allows it. Rewording a denied task does
+   not make it allowed; if only part of it is safe, the human splits it into a new
+   task in the morning. Never widen the rules for one task.
 
 2. **Write the marker** `$ORCH_HOME/night.json`: start time, the ALLOW list, the DENY
    list, and the frozen actions. The morning report is a delta against it.
@@ -53,6 +57,7 @@ is a discarded branch.
 ## Signs the shift is set up wrong (put them in the report)
 
 - Any frozen action happened.
-- A question blocked a worker for more than 2 hours without a task switch.
-- The morning report took the human more than 15 minutes, or a night result was sent
-  back for rework.
+- A question blocked a worker without a task switch for longer than the operator
+  accepts.
+- The morning report took the human longer than they accept, or a night result was
+  sent back for rework.

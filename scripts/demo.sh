@@ -1,6 +1,8 @@
 #!/bin/sh
 # ORCH-os 5-minute demo. Offline; uses a throwaway ORCH_HOME so your real ~/.orch is untouched.
 # Usage: sh scripts/demo.sh        (needs `orch` on PATH: `npm i -g .` or `sh install.sh` first)
+# The script always exits 0: step() prints (exit=N) and continues, so that the expected refusals
+# are shown. Its exit status is not an acceptance result; read the output (docs/DEMO.md).
 # SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 set -u
 ORCH_HOME=$(mktemp -d) || exit 1   # always a fresh dir; an inherited ORCH_HOME is ignored
