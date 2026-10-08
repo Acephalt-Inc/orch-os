@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { defaultProbes, mergeRepoProblem, timeLimitProblem } from "../src/readiness.js";
+import { defaultProbes, mergeRepoProblem, readiness, render, timeLimitProblem } from "../src/readiness.js";
 import { pidAlive, which } from "../src/util.js";
 import { ROOT, waitFor } from "./_helpers.js";
 
@@ -34,6 +34,23 @@ function refuses(check: string, extra: string[] = []): void {
   expect(w.stderr).toContain(check);
   expect(existsSync(join(home, "workers", "blocked"))).toBe(false);
 }
+/** The row is UNVERIFIED (never OK, never FAIL), the verdict is NOT READY and launch is refused. */
+function unverified(check: string): void {
+  const d = run("doctor", "--ready");
+  expect(d.status, d.stdout + d.stderr).toBe(1);
+  expect(d.stdout).toContain(`UNVERIFIED  ${check}`);
+  expect(d.stdout).not.toContain(`OK  ${check}`);
+  expect(d.stdout).toContain("ready-for-live: NOT READY");
+  expect(d.stdout).toContain(`unverified checks: ${check}`);
+  const w = run("worker", "start", "blocked");
+  expect(w.status, w.stdout + w.stderr).not.toBe(0);
+  expect(w.stderr).toContain(`${check} (UNVERIFIED: `);
+  expect(existsSync(join(home, "workers", "blocked"))).toBe(false);
+}
+/** Run the packed CLI without rewriting config.toml. */
+function raw(args: string[], h = home) {
+  return spawnSync(bin, args, { cwd: repo, env: { HOME: h, ORCH_HOME: h, GIT_CEILING_DIRECTORIES: root, PATH: tools, ORCH_AGENT_DIRS: "", PROBE_LOG: log }, encoding: "utf8", timeout: 30_000 });
+}
 
 beforeAll(() => {
   root = mkdtempSync(join(ROOT, ".os4-packed-"));
@@ -57,8 +74,9 @@ beforeEach(() => {
   symlinkSync(timeoutTool!, join(tools, "timeout"));
   expect(spawnSync(gitTool, ["init", "-q", repo]).status).toBe(0);
   expect(spawnSync(gitTool, ["-C", repo, "remote", "add", "origin", "https://github.com/example/trial.git"]).status).toBe(0);
-  fake("worker-tool"); fake("reviewer-tool"); fake("gh");
-  worker = ["worker-tool"]; reviewer = ["reviewer-tool"]; merge = "example/trial"; minutes = 1;
+  // Only claude and codex have a login-status probe, so only they can pass admission.
+  fake("claude"); fake("codex"); fake("gh");
+  worker = ["claude", "-p"]; reviewer = ["codex", "exec", "-"]; merge = "example/trial"; minutes = 1;
   state = { tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 };
 });
 
@@ -72,11 +90,12 @@ describe("PackedReadiness", () => {
     const m = JSON.parse(readFileSync(join(home, "workers/good/worker.json"), "utf8"));
     expect(m.argv.slice(0, 2)).toEqual([join(tools, "timeout"), "60"]);
     const probes = readFileSync(log, "utf8");
-    expect(probes).toContain("worker-tool\n--version\n");
-    expect(probes).toContain("reviewer-tool\n--version\n");
+    expect(probes).toContain("claude\nauth\nstatus\n");
+    expect(probes).toContain("codex\nlogin\nstatus\n");
+    expect(probes).not.toContain("--version");
   });
   it("positive timeout terminates the worker launched by the packed binary", async () => {
-    worker = [process.execPath, "-e", "setTimeout(() => {}, 30000)"];
+    fake("claude", 'if [ "$1" = auth ]; then exit 0; fi; exec /bin/sleep 30'); worker = ["claude"];
     minutes = 0.02; // the launcher truncates this to one enforced second
     const r = run("worker", "start", "limited");
     expect(r.status, r.stdout + r.stderr).toBe(0);
@@ -84,8 +103,8 @@ describe("PackedReadiness", () => {
     expect(m.argv.slice(0, 2)).toEqual([join(tools, "timeout"), "1"]);
     expect(await waitFor(() => !pidAlive(m.pid), 40, 100)).toBe(true);
   });
-  it("missing worker tool", () => { rmSync(join(tools, "worker-tool")); refuses("worker command"); });
-  it("missing reviewer tool", () => { rmSync(join(tools, "reviewer-tool")); refuses("reviewer command"); });
+  it("missing worker tool", () => { rmSync(join(tools, "claude")); refuses("worker command"); });
+  it("missing reviewer tool", () => { rmSync(join(tools, "codex")); refuses("reviewer command"); });
   it.each([false, 0, "", "   ", "not-a-repo", "my.org/re_po.js", "-owner/name", "owner/-name", "x".repeat(45) + "/" + "n".repeat(120), "owner/name.git", "./..", "../..", "./.", ".git/.git", "https://github.com/owner/name", "git@github.com:owner/name.git", "github.com/owner/name", "owner/name/", "owner//name", "own er/name", "owner/name#", "所有者/name", [], {}])("rejects review repo input %j", (value) => { merge = value; refuses("merge repo"); });
   it.each([0, -1, 0.001, "soon", "Infinity"])("rejects timeout %j", (value) => { minutes = value; refuses("time limit"); });
   it("checks a timeout override", () => refuses("time limit", ["--minutes", "0"]));
@@ -105,13 +124,14 @@ describe("PackedReadiness", () => {
   });
   it("missing origin", () => { spawnSync(gitTool, ["-C", repo, "remote", "remove", "origin"]); refuses("origin"); });
   it("invalid git workdir", () => { rmSync(join(repo, ".git"), { recursive: true }); refuses("git repo"); });
-  it("env wrapper checks the actual claude auth", () => { fake("claude", 'exit 1'); worker = ["env", "TOKEN=test", "claude", "-p"]; refuses("worker auth"); expect(readFileSync(log, "utf8")).toContain("claude\nauth\nstatus\n"); });
-  it("a later claude argument never substitutes for gemini", () => { fake("gemini", "exit 1"); fake("claude"); worker = ["gemini", "--persona", "claude"]; refuses("worker auth"); expect(readFileSync(log, "utf8")).not.toContain("claude\n"); });
-  it.each([["ssh", "box", "claude", "-p"], ["sh", "-c", "claude -p"]])("unverifiable wrapper %j", (...argv) => { fake(argv[0]); fake("claude"); worker = argv; refuses("worker auth"); });
-  it("constructor executable is checked without a prototype lookup crash", () => { fake("constructor", "exit 1"); worker = ["constructor"]; refuses("worker auth"); });
+  it("env wrapper is UNVERIFIED and is not parsed", () => { fake("claude", 'exit 1'); worker = ["env", "TOKEN=test", "claude", "-p"]; unverified("worker auth"); expect(readFileSync(log, "utf8")).not.toContain("claude\n"); });
+  it("logged-out claude worker fails its login-status probe", () => { fake("claude", 'exit 1'); refuses("worker auth"); expect(readFileSync(log, "utf8")).toContain("claude\nauth\nstatus\n"); });
+  it("a later claude argument never substitutes for gemini", () => { fake("gemini", "exit 1"); fake("claude"); worker = ["gemini", "--persona", "claude"]; unverified("worker auth"); expect(readFileSync(log, "utf8")).not.toContain("claude\n"); });
+  it.each([["ssh", "box", "claude", "-p"], ["sh", "-c", "claude -p"]])("unverifiable wrapper %j", (...argv) => { fake(argv[0]); fake("claude"); worker = argv; unverified("worker auth"); });
+  it("constructor executable is checked without a prototype lookup crash", () => { fake("constructor", "exit 1"); worker = ["constructor"]; unverified("worker auth"); });
   it("string worker command fails with an accurate message", () => { worker = "claude -p"; const d = run("doctor", "--ready"); expect(d.status).toBe(1); expect(d.stdout).toContain("argv array"); });
   it("reviewer auth uses codex login status", () => { fake("codex", "exit 1"); reviewer = ["codex", "exec", "-"]; refuses("reviewer auth"); expect(readFileSync(log, "utf8")).toContain("codex\nlogin\nstatus\n"); });
-  it("unknown qwen uses its own version probe", () => { fake("qwen"); worker = ["qwen"]; expect(run("doctor", "--ready").status).toBe(0); expect(readFileSync(log, "utf8")).toContain("qwen\n--version\n"); });
+  it("unknown qwen is UNVERIFIED and --version is never run as login", () => { fake("qwen"); worker = ["qwen"]; unverified("worker auth"); expect(readFileSync(log, "utf8")).not.toContain("qwen\n"); });
   it("agent override checks the selected command, not the workers default", () => {
     configure(); writeFileSync(join(home, "config.toml"), readFileSync(join(home, "config.toml"), "utf8") + '\n[agents.bad]\ncommand = ["absent-agent"]\n');
     for (const args of [["doctor", "--ready", "--agent", "bad"], ["worker", "start", "blocked", "--agent", "bad"]]) {
@@ -121,12 +141,12 @@ describe("PackedReadiness", () => {
   });
   it("explicit command checks the selected executable", () => { const r = run("worker", "start", "blocked", "--", "absent-command"); expect(r.status).not.toBe(0); expect(r.stderr).toContain("worker command"); });
   it("relative worker executable resolves in its actual workdir", () => {
-    writeFileSync(join(repo, "local-worker"), "#!/bin/sh\nexit 0\n"); chmodSync(join(repo, "local-worker"), 0o755);
-    worker = ["./local-worker"];
+    writeFileSync(join(repo, "claude"), "#!/bin/sh\nexit 0\n"); chmodSync(join(repo, "claude"), 0o755);
+    worker = ["./claude"];
     expect(run("doctor", "--ready").status).toBe(0);
     const r = run("worker", "start", "relative", "--workdir", repo);
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(join(home, "workers/relative/worker.json"), "utf8")).argv[2]).toBe(join(repo, "local-worker"));
+    expect(JSON.parse(readFileSync(join(home, "workers/relative/worker.json"), "utf8")).argv[2]).toBe(join(repo, "claude"));
   });
   it("explicit reviewer checks the selected executable", () => {
     configure(); writeFileSync(join(home, "config.toml"), readFileSync(join(home, "config.toml"), "utf8") + '\n[review.agents.bad]\ncmd = ["absent-reviewer"]\n');
@@ -144,10 +164,95 @@ describe("PackedReadiness", () => {
     expect(r.stderr).toContain("WARNING: attended --force");
     expect(existsSync(join(home, "workers/attended/PID"))).toBe(true);
   });
+  it.each([["nice", "claude", "-p"], ["npx", "claude", "-p"], ["python3", "agent.py"], ["sudo", "claude", "-p"], ["timeout", "60", "claude", "-p"], ["nohup", "claude", "-p"], ["env", "A=1", "nice", "claude"]])("wrapper or unknown command %j is UNVERIFIED, never OK", (...argv) => {
+    fake("claude", "exit 1"); // logged out behind the wrapper
+    for (const tool of ["nice", "npx", "python3", "sudo", "nohup"]) fake(tool);
+    worker = argv; unverified("worker auth");
+    const probes = readFileSync(log, "utf8");
+    expect(probes).not.toContain("--version");
+    expect(probes).not.toContain("claude\n");
+  });
+  it("unknown reviewer CLI is UNVERIFIED, never OK", () => { fake("reviewer-tool"); reviewer = ["reviewer-tool"]; unverified("reviewer auth"); expect(readFileSync(log, "utf8")).not.toContain("reviewer-tool\n"); });
+  it("auth probe that could not run is NOT READY", () => {
+    fake("claude", 'if [ "$1" = auth ]; then kill -TERM $$; fi');
+    refuses("worker auth (claude auth status: could not run");
+  });
+  it("missing gh", () => { rmSync(join(tools, "gh")); refuses("gh (gh not on PATH)"); });
+  it("logged-out gh", () => { fake("gh", "exit 1"); refuses("gh auth (gh auth status failed or could not run)"); });
+  it("review watch dispatches its selected reviewer through the non-force path", () => {
+    const head = "a".repeat(40);
+    fake("gh", `case "$1 $2" in "pr view") printf '%s\\n' '{"headRefOid":"${head}","state":"OPEN","comments":[]}';; "api --paginate") case "$3" in */check-runs) printf '%s\\n' '["${head}","ci","success"]';; esac;; esac`);
+    fake("codex", "exit 1"); // r1 is listed first, holds the task (the author) and is logged out
+    configure();
+    writeFileSync(join(home, "config.toml"), readFileSync(join(home, "config.toml"), "utf8") + '\n[review.agents.r2]\ncmd = ["claude", "-p"]\n');
+    expect(raw(["task", "claim", "T1", "--as", "r1"]).status).toBe(0);
+    const r = raw(["review", "watch", "7", "--task", "T1", "--once"]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain("DISPATCHED");
+    const m = JSON.parse(readFileSync(join(home, "workers", `review-7-${head.slice(0, 12)}`, "worker.json"), "utf8"));
+    expect(m.argv.slice(2)).toEqual([join(tools, "claude"), "-p"]);
+    const probes = readFileSync(log, "utf8");
+    expect(probes).toContain("claude\nauth\nstatus\n");
+    expect(probes).not.toContain("codex\n"); // the unselected, logged-out reviewer is not what admission checks
+  });
   it("plain doctor retains fixture-friendly behavior", () => { const r = run("doctor"); expect(r.stdout).not.toContain("ready-for-live"); expect(existsSync(log)).toBe(false); });
 });
 
+/** The `orch ...` lines of the README command block, comments removed. */
+function readmeCommands(file: string): string[] {
+  const block = /\n## (?:Commands|命令)\n+```sh\n([\s\S]*?)```/.exec(readFileSync(join(ROOT, file), "utf8"));
+  expect(block, `${file} command block`).not.toBeNull();
+  return block![1].split("\n").filter((l) => l.startsWith("orch ")).map((l) => l.replace(/\s+#.*$/, "").trim());
+}
+const words = (line: string): string[] => (line.match(/"[^"]*"|\S+/g) ?? []).map((w) => w.replace(/^"|"$/g, ""));
+
+describe("ReadmeQuickstart", () => {
+  it("README command block runs as documented against the packed CLI", () => {
+    const en = readmeCommands("README.md");
+    const shape = (l: string) => l.replace(/"[^"]*"/g, '""');
+    expect(readmeCommands("README.zh.md").map(shape)).toEqual(en.map(shape));
+    // Documented outcomes after a plain `orch init`: everything exits 0 except these three.
+    const documented: Record<string, [number, string]> = {
+      "orch mem search review": [1, ""], // a fresh home has no note to match
+      "orch doctor --ready --agent claude": [1, "ready-for-live: NOT READY"],
+      "orch worker start w1 --agent claude --worktree --task task.md": [2, "worker: readiness failed: "],
+    };
+    for (const line of Object.keys(documented)) expect(en).toContain(line);
+    const qs = join(repo, "..", "quickstart-home"); mkdirSync(qs);
+    expect(spawnSync(gitTool, ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]).status).toBe(0);
+    writeFileSync(join(repo, "task.md"), "do the task\n");
+    for (const line of en) {
+      const r = raw(words(line).slice(1), qs);
+      const [code, text] = documented[line] ?? [0, ""];
+      expect(r.status, `${line}\n${r.stdout}${r.stderr}`).toBe(code);
+      expect(r.stdout + r.stderr).toContain(text);
+    }
+    expect(existsSync(join(qs, "workers", "w1"))).toBe(false);
+    // The prerequisites the README names turn the same two commands green.
+    const cfg = join(qs, "config.toml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace('repo = ""', 'repo = "example/trial"') + '\n[review.agents.r1]\ncmd = ["codex", "exec", "-"]\n');
+    writeFileSync(join(qs, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
+    const ready = raw(["doctor", "--ready", "--agent", "claude"], qs);
+    expect(ready.status, ready.stdout + ready.stderr).toBe(0);
+    expect(ready.stdout).toContain("ready-for-live: READY (unattended-ready)");
+    const started = raw(["worker", "start", "w1", "--agent", "claude", "--worktree", "--task", "task.md"], qs);
+    expect(started.status, started.stdout + started.stderr).toBe(0);
+    expect(started.stdout).toContain("worker w1 started");
+  });
+});
+
 describe("F4ProbeAndRules", () => {
+  it("a null auth probe result is NOT READY", () => {
+    const probes = { which: (c: string) => `/fake/${c}`, exitCode: () => null, output: () => null };
+    const rows = readiness({ workers: { command: ["claude", "-p"] }, review: { agents: { r1: { cmd: ["codex", "exec", "-"] } } } }, "/absent/load.json", {}, probes);
+    for (const name of ["worker auth", "reviewer auth"]) {
+      const row = rows.find((r) => r.name === name)!;
+      expect(row.ok, name).toBe(false);
+      expect(row.unverified, name).toBeUndefined();
+      expect(row.detail).toContain("could not run");
+    }
+    expect(render(rows).at(-1)).toContain("ready-for-live: NOT READY; failing checks: ");
+  });
   it("Infinity and sub-second limits fail", () => { for (const n of [Infinity, -Infinity, NaN, 0.001]) expect(timeLimitProblem(n)).not.toBeNull(); });
   it.each(["OWNER/Name", "owner/re_po.js", "owner/.hidden", "owner/repo-name"])("usable repo %s", (v) => expect(mergeRepoProblem(v)).toBeNull());
   it("the real probe returns null for timeout, signal and spawn failure", () => {
@@ -158,6 +263,7 @@ describe("F4ProbeAndRules", () => {
   it("Node minimum agrees in manifest, installer and both READMEs", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(pkg.engines.node).toBe(">=22");
+    expect(JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8")).packages[""].engines.node).toBe(">=22");
     const installer = readFileSync(join(ROOT, "install.sh"), "utf8");
     expect(installer).toContain('>= 22 ? 0 : 1');
     expect(installer).toContain('need Node.js >= 22');

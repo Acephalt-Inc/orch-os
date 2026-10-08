@@ -1,7 +1,7 @@
 # FAQ
 
 **Which agents does it work with?**
-Any CLI agent that can run one task non-interactively with the task text on stdin. `orch init` has templates for a few common ones (Claude Code, Codex CLI, Gemini CLI, Qwen Code). For anything else, add an `[agents.NAME]` table with a `command` list, or pass a command after `--` to `orch worker start`.
+Any CLI agent that can run one task non-interactively with the task text on stdin. `orch init` has templates for a few common ones (Claude Code, Codex CLI, Gemini CLI, Qwen Code). For anything else, add an `[agents.NAME]` table with a `command` list, or pass a command after `--` to `orch worker start`. Only `claude` and `codex` have a login-status command that readiness can check; any other command is `UNVERIFIED`, so `orch worker start` refuses it unless you add `--force` from a terminal.
 
 **How do I use the handbook with Claude Code?**
 Start each interactive session by telling it its role and file, for example: `export ORCH_AGENT=lead`, start `claude`, then say "Read ~/.orch/handbook/lead-boot.md and follow it." To load the files as skills instead, run `orch init --dir .claude/skills --layout skills` in the repository (or `--dir ~/.claude/skills` for every project); each file becomes `NAME/SKILL.md` with the `name` and `description` frontmatter Claude Code expects, and you can invoke it by name. Background workers started with `orch worker start --agent claude` get the task file on stdin; put "Read ~/.orch/handbook/worker-boot.md first" at the top of the task file.

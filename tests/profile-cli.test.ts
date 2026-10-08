@@ -508,13 +508,15 @@ describe("ProfileWorkers", () => {
     // Supply the prerequisites now required for the first, unattended launch.
     expect(spawnSync("git", ["init", "-q", d.home]).status).toBe(0);
     expect(spawnSync("git", ["-C", d.home, "remote", "add", "origin", "https://github.com/example/trial.git"]).status).toBe(0);
-    writeFileSync(cfgPath(d.home), readCfg(d.home).replace('repo = ""', 'repo = "example/trial"') + '\n[review.agents.r1]\ncmd = ["sleep"]\n');
-    fakeBin(d.bins, "sleep", 'if [ "$1" = "--version" ]; then exit 0; fi; exec /bin/sleep "$@"');
+    writeFileSync(cfgPath(d.home), readCfg(d.home).replace('repo = ""', 'repo = "example/trial"') + '\n[review.agents.r1]\ncmd = ["codex"]\n');
+    // Only claude and codex have a login-status probe; this claude is a long-running stand-in.
+    fakeBin(d.bins, "claude", 'if [ "$1" = "auth" ]; then exit 0; fi; exec /bin/sleep 30');
+    fakeBin(d.bins, "codex", 'exit 0');
     fakeBin(d.bins, "gh", 'exit 0');
     expect(timeoutTool).toBeTruthy();
     symlinkSync(timeoutTool!, join(d.bins, "timeout"));
     writeFileSync(join(d.home, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
-    const start = (name: string, ...extra: string[]) => run("worker", "start", name, "--reviewer", "r1", "--workdir", d.home, "--minutes", "1", ...extra, "--", "sleep", "30");
+    const start = (name: string, ...extra: string[]) => run("worker", "start", name, "--reviewer", "r1", "--workdir", d.home, "--minutes", "1", ...extra, "--", "claude");
     try {
       expect((await start("w1"))[0]).toBe(0);
       expect(await waitFor(() => readFileSync(join(d.home, "workers", "w1", "PID"), "utf8").trim() !== "")).toBe(true);

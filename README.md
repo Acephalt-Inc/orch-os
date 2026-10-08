@@ -176,20 +176,22 @@ The role files are `~/.orch/handbook/lead-boot.md` and `~/.orch/handbook/worker-
 orch init                                   # Create config, mailbox, and role handbook
 orch agents                                 # See detected and configured agent CLIs
 orch doctor                                 # Check local prerequisites
-orch load                                   # Record a fresh load sample
-orch doctor --ready                         # Require worker/reviewer tools, repo and timeout before unattended launch
+orch load                                   # Record a fresh load sample (readiness needs one under 120 s old)
+orch doctor --ready --agent claude          # Print the checks worker start must pass; NOT READY (exit 1) until every row is OK
 orch lease status                           # Show the lead lease
 orch lease acquire --session lead           # Take the lead lease
 orch mailbox read                           # Read shared mailbox entries
 orch msg send QUESTION --as w1 --to lead -m "Need a decision"  # Send an addressed question
 orch msg read --as lead                     # Read the lead's pending messages
 orch task claim first-task --as w1          # Claim a task exclusively
-orch worker start w1 --agent claude --worktree --task task.md  # Start a detached worker
+orch worker start w1 --agent claude --worktree --task task.md  # Start a detached worker; refused (exit 2) while readiness is NOT READY
 orch worker list                            # Show workers
 orch merge-gate 101 --fixture approved      # Try the gate with an offline fixture
 orch load                                   # Sample machine load
-orch mem search review                      # Search durable notes
+orch mem search review                      # Search durable notes (exit 1 when no note matches)
 ```
+
+Every `orch worker start` without `--force` runs the readiness checks first, on a terminal or not. Right after a plain `orch init`, the start above is refused with `worker: readiness failed: ...` (exit 2). It starts once `orch doctor --ready --agent claude` prints `ready-for-live: READY`: the worker and a `[review.agents.NAME]` reviewer are executables named `claude` or `codex` and are logged in, `[merge] repo = "owner/name"` is set, the workdir is a git repository with `origin`, `gh` is logged in, `timeout` or `gtimeout` is installed, and `orch load` ran less than 120 seconds ago. Any other agent CLI or wrapped command is shown as `UNVERIFIED` and refused; from a terminal, `--force` starts it with a warning.
 
 Full flags and exit codes: [Command reference](docs/commands.md).
 

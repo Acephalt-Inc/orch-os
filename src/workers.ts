@@ -202,7 +202,7 @@ export class Workers {
         reviewer: opts.reviewer ?? (opts.env?.ORCH_REVIEW_PR ? opts.env.ORCH_AGENT : undefined),
       });
       const failing = checks.filter((c) => !c.ok);
-      if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.detail})`).join("; ")}`);
+      if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.unverified ? "UNVERIFIED: " : ""}${c.detail})`).join("; ")}`);
     }
     if (!commandBin) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
     const to = which("timeout") ?? which("gtimeout");

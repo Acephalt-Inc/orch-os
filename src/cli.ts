@@ -289,7 +289,7 @@ const cmdDoctor: Run = (a, io) => {
     try { cfg = C.load(); } catch (e: any) { eprintln(io, `FAIL config (${e.message})`); return 1; }
     const checks = RD.readiness(cfg, loadPath(cfg), { agent: a.agent, reviewer: a.reviewer, minutes: a.minutes, workdir: a.workdir });
     for (const line of RD.render(checks)) println(io, line);
-    return checks.every((c) => c.ok) ? 0 : 1;
+    return checks.every((c) => c.ok && !c.unverified) ? 0 : 1;
   }
   const rows: [string, string, string][] = [];
   const add = (ok: boolean, name: string, detail: string, optional = false) => {
@@ -970,8 +970,8 @@ export function buildTree(): CmdSpec<Run> {
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
-      { name: "doctor", help: "PASS/FAIL per prerequisite; --ready checks unattended launch", run: cmdDoctor, opts: [
-        opt("ready", ["--ready", "--ready-for-live"], "bool", "require all live readiness checks; exit 1 on failure"),
+      { name: "doctor", help: "PASS/FAIL per prerequisite; --ready prints the checks every worker start without --force must pass", run: cmdDoctor, opts: [
+        opt("ready", ["--ready", "--ready-for-live"], "bool", "require all live readiness checks; exit 1 on any FAIL or UNVERIFIED row"),
         opt("agent", ["--agent"], "str", "check the selected [agents.NAME] worker"),
         opt("reviewer", ["--reviewer"], "str", "check this [review.agents.NAME] reviewer"),
         opt("workdir", ["--workdir"], "str", "repository where the worker will run"),
@@ -1133,7 +1133,7 @@ export function buildTree(): CmdSpec<Run> {
             opts: [
               opt("task", ["--task"], "str", "file fed to the worker on stdin"),
               opt("workdir", ["--workdir"], "str", "working directory (with --worktree: the repository)"),
-              opt("minutes", ["--minutes"], "float", "time limit (0 = none; default [workers] timeout_minutes)"),
+              opt("minutes", ["--minutes"], "float", "time limit in minutes (default [workers] timeout_minutes); 0 is refused by readiness and means no limit only with --force"),
               opt("agent", ["--agent"], "str", "use the [agents.<name>] command"),
               opt("reviewer", ["--reviewer"], "str", "selected [review.agents.NAME] reviewer (default: review-watch policy)"),
               opt("worktree", ["--worktree"], "bool", "run in its own git worktree under [workers] worktree_root"),

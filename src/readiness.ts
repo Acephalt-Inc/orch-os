@@ -9,7 +9,8 @@ import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
 import { isPlainObject, which } from "./util.js";
 
-export interface Check { name: string; ok: boolean; detail: string }
+/** `unverified` marks a row readiness could not check; it is never OK and never READY. */
+export interface Check { name: string; ok: boolean; detail: string; unverified?: boolean }
 export interface Probes {
   which(cmd: string): string | null;
   exitCode(bin: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): number | null;
@@ -65,7 +66,7 @@ export function workerCommand(cfg: Record<string, any>, s: Selection): unknown {
   return s.command ?? cfg.workers?.command;
 }
 
-/** Inspect only argv[0], or the executable after a supported env prefix. Never scan arguments. */
+/** Inspect only argv[0]. Wrappers are not parsed and arguments are never scanned. */
 function commandChecks(label: string, raw: unknown, s: Selection, probes: Probes): Check[] {
   const rows: Check[] = [];
   const add = (name: string, ok: boolean, detail: string) => rows.push({ name: `${label} ${name}`, ok, detail });
@@ -75,36 +76,21 @@ function commandChecks(label: string, raw: unknown, s: Selection, probes: Probes
     return rows;
   }
   const cmd = raw.map((w: string) => w.replaceAll("{name}", s.name ?? "readiness").replaceAll("{workdir}", s.workdir ?? process.cwd()));
-  let at = 0;
-  const env: NodeJS.ProcessEnv = { ...process.env, ...s.env };
   const commandCwd = s.commandWorkdir ?? s.workdir ?? process.cwd();
-  if (basename(cmd[0]) === "env") {
-    const wrapper = cmd[0].includes("/") ? resolve(commandCwd, cmd[0]) : cmd[0];
-    if (!probes.which(wrapper)) { add("command", false, `${cmd[0]} not on PATH`); add("auth", false, "env wrapper unavailable"); return rows; }
-    at = 1;
-    if (cmd[at] === "--") at++;
-    while (at < cmd.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(cmd[at])) {
-      const eq = cmd[at].indexOf("=");
-      const key = cmd[at].slice(0, eq);
-      // Altering command lookup would make the readiness and launch environments differ.
-      if (key === "PATH") { add("command", false, "env PATH override cannot be verified"); add("auth", false, "command environment unknown"); return rows; }
-      env[key] = cmd[at].slice(eq + 1);
-      at++;
-    }
-  }
-  const word = cmd[at] ?? "";
+  const word = cmd[0];
   const executable = word.includes("/") ? resolve(commandCwd, word) : word;
-  const bin = word ? probes.which(executable) : null;
-  add("command", bin !== null, bin ?? `${word || "executable"} not on PATH`);
+  const bin = probes.which(executable);
+  add("command", bin !== null, bin ?? `${word} not on PATH`);
   if (!bin) { add("auth", false, "executable unavailable"); return rows; }
+  // Login is verified only for a CLI with a real login-status command. Every other executable,
+  // wrappers and unknown CLIs alike, is UNVERIFIED: it is not run, and --version is never login.
   const name = basename(word);
-  if (["sh", "bash", "zsh", "ssh", "env"].includes(name) || word.startsWith("-")) {
-    add("auth", false, `cannot verify the executed agent behind ${name}`);
+  const args = AUTH_STATUS.get(name);
+  if (!args) {
+    rows.push({ name: `${label} auth`, ok: false, unverified: true, detail: `no login-status probe is known for '${name}'; only ${[...AUTH_STATUS.keys()].join(" and ")} can be verified, and wrappers are not parsed` });
     return rows;
   }
-  // Known agents require login status; other CLIs must pass their own no-spend version probe.
-  const args = AUTH_STATUS.get(name) ?? ["--version"];
-  const code = probes.exitCode(bin, args, s.workdir ?? process.cwd(), env);
+  const code = probes.exitCode(bin, args, s.workdir ?? process.cwd(), { ...process.env, ...s.env });
   add("auth", code === 0, `${word} ${args.join(" ")}: ${code === null ? "could not run (timeout, signal or spawn error)" : `exit ${code}`}`);
   return rows;
 }
@@ -172,7 +158,10 @@ export function readiness(cfg: Record<string, any>, loadPath: string, s: Selecti
   return rows;
 }
 export function render(rows: Check[]): string[] {
-  const fails = rows.filter((r) => !r.ok);
-  return [...rows.map((r) => `${r.ok ? "OK" : "FAIL"}  ${r.name}${r.ok ? `  ${r.detail}` : ` (${r.detail})`}`),
-    fails.length ? `ready-for-live: NOT READY; failing checks: ${fails.map((r) => r.name).join(", ")}` : "ready-for-live: READY (unattended-ready)"];
+  const fails = rows.filter((r) => !r.ok && !r.unverified);
+  const unverified = rows.filter((r) => r.unverified);
+  const label = (r: Check) => (r.unverified ? "UNVERIFIED" : r.ok ? "OK" : "FAIL");
+  const why = [fails.length ? `failing checks: ${fails.map((r) => r.name).join(", ")}` : "", unverified.length ? `unverified checks: ${unverified.map((r) => r.name).join(", ")}` : ""].filter(Boolean).join("; ");
+  return [...rows.map((r) => `${label(r)}  ${r.name}${r.ok && !r.unverified ? `  ${r.detail}` : ` (${r.detail})`}`),
+    why ? `ready-for-live: NOT READY; ${why}` : "ready-for-live: READY (unattended-ready)"];
 }
