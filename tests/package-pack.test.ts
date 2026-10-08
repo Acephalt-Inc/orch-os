@@ -48,6 +48,13 @@ function candidate() {
     expect(result.status, `${command} ${args.join(" ")}\n${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
     return result.stdout;
   };
+  expect(run("npm", ["config", "get", "offline"]).trim()).toBe("true");
+  expect(run("npm", ["config", "get", "userconfig"]).trim()).toBe(userconfig);
+  expect(run("npm", ["config", "get", "globalconfig"]).trim()).toBe(globalconfig);
+  expect(run("npm", ["config", "get", "cache"]).trim()).toBe(join(dir, "cache"));
+  expect(run(process.execPath, ["-e", "process.stdout.write(JSON.stringify([process.env.HOME, process.env.XDG_CONFIG_HOME]))"])).toBe(
+    JSON.stringify([home, home]),
+  );
   return { repo, run };
 }
 
