@@ -173,7 +173,7 @@ The commands above apply a few rules. Each row names the command that applies it
 | An approval binds to a commit. Reviews count only for the PR's current head, after CI at that head. | `orch merge-gate` |
 | The gate reports; people merge. No `orch` command merges a PR. | `orch merge-gate` |
 | The review label is explicit. Each reviewer is labelled against the authors from the declared tables (other vendor, other account, or same account in a fresh context); with a profile set, a reviewer below `required_review` is never substituted, the request is blocked instead. The label is not a measure of review quality. | `orch review watch`, `orch profile` |
-| Unknown fails closed. A missing or unrecognized risk tier is treated as high, and a profile written for the removed built-in policy table is refused, not converted. | `orch profile` |
+| A tier is never guessed. The tier is `--tier` when given; else `high` when the profile has `high_paths` and a changed file matches or the file list cannot be read; else `default_tier`. A `--tier` or `default_tier` other than `low` or `high` is an error. A profile written for the removed built-in policy table is refused, not converted. | `orch merge-gate`, `orch profile` |
 | Protect the machine, never kill work. High load refuses new workers; running ones are left alone. | `orch load`, `orch worker start` |
 | Cleanup never destroys work. A worktree is removed only when Git reports nothing changed, untracked or ignored. | `orch worker stop` |
 | Knowledge is superseded, not deleted. Retiring a note records its successor and keeps the file. | `orch mem retire` |

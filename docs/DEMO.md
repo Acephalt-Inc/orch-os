@@ -9,7 +9,7 @@ npm install && npm run build && npm i -g .     # or: sh install.sh && export PAT
 sh scripts/demo.sh
 ```
 
-The script always exits 0. Each step prints `(exit=N)` when its command fails and then continues, because several steps are refusals you are meant to see (`BUSY`, `BLOCKED`, a refused worker start). The script's exit status is therefore not a test result: compare the printed output with "Expected output" below. The worker in step 6 is a shell command (`sh -c …`), not an agent CLI, and a person runs and watches the script; it shows the worker lifecycle, not unattended agent work.
+A failing step does not stop the script or change its exit status: each step prints `(exit=N)` when its command fails and then continues, because several steps are refusals you are meant to see (`BUSY`, `BLOCKED`, a refused worker start). Only the two setup checks at the top exit 1. The script's exit status is therefore not a test result: compare the printed output with "Expected output" below. The worker in step 6 is a shell command (`sh -c …`), not an agent CLI, and a person runs and watches the script; it shows the worker lifecycle, not unattended agent work.
 
 ## What each step shows
 

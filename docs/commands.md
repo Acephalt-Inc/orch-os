@@ -15,7 +15,8 @@ Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `
 
 ```text
 orch init [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
-          [--compute one|same-vendor|multi-vendor --people solo|team | --no-profile]
+          [--compute one|same-vendor|multi-vendor --people solo|team
+           [--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N] | --no-profile]
 ```
 
 Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not given), creates `workers/` and the mailbox file, and writes the handbook. The message, task and notes directories are created on first use. Prints one `agent NAME PATH` line per detected agent and marks the default.
@@ -28,10 +29,10 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 | `--layout` | `flat` (default): `DIR/NAME.md`. `skills`: `DIR/NAME/SKILL.md` |
 | `--force-handbook` | Overwrite handbook files that already exist (they are kept by default) |
 | `--no-handbook` | Do not write the handbook |
-| `--compute V --people V` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. The two go together: either alone is exit 2. The new profile carries the public example policy written out (`policy = "human-merge"`, `required_review = "single-agent"`, `max_workers = 1`); the detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) as labels to edit |
+| `--compute V --people V --policy human-merge --required-review S --max-workers N` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. `--compute` and `--people` go together (either alone is exit 2), and the other three need them (exit 2 without). The policy, the review requirement and the worker limit have no default: when any of the three is missing, `init` writes no `[profile]` table and prints `no profile written from the flags: …` with the command that creates one. The detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) as labels to edit |
 | `--no-profile` | On a terminal, skip the two profile questions and write no `[profile]` |
 
-**Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`), then writes a `[profile]` with the same example policy values. The answers are declared context: they select no rule. Three unusable answers, or end of input, write no profile. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless `--compute`/`--people` replace it). When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
+**Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`). These two answers are declared context: they select no rule. It then asks three questions that have no default: whether to select the `human-merge` policy (`yes`/`no`), the weakest agent review that passes (`1`/`2`/`3` for `single-agent`/`cross-account`/`cross-vendor`), and the most workers running at once (a whole number, 1 or more). Three unusable answers to any question, `no` to the policy, or end of input write no profile, and `init` prints `no profile written: …` with the command that creates one. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless a complete set of the five profile flags replaces it). If the kept profile cannot be used, for example because it was written for the removed built-in table, `init --force` still keeps it byte for byte, prints the refusal with what to set on stderr, does not print `next: orch doctor`, and exits 2. When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
 
 ## orch agents
 
@@ -222,7 +223,7 @@ A new head means a new pass from step 3: a new reviewer once its CI is green. A 
 #7 head=4f2c9a1e7 => REVIEWED (ORCH-REVIEW APPROVE 4f2c9a1e7b3d... by rx (cross-vendor))
 ```
 
-Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` makes one pass, prints the chosen reviewer and its command, and starts nothing and writes nothing. `--json` prints each result as JSON. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
+Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` makes one pass, prints the chosen reviewer and its command, and starts nothing and writes nothing. `--json` prints each result as JSON; its `choice.policy` key was `choice.cell` under the removed built-in table (see [orch profile](#orch-profile)). With a `[profile]`, a dispatch is refused while `[profile] max_workers` workers are already running: the result is `BLOCKED` and nothing is started. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
 
 State: one file per PR, `$ORCH_HOME/review-watch/OWNER__NAME__PR.json` (head, agent, label, worker, pid, time, status `dispatched|reviewed|stale`, earlier heads), written under the lock. `orch doctor` shows a `SKIP` row per reviewer command and per stale reviewer; with no `[review.agents]` and no state it shows nothing new.
 
@@ -237,7 +238,7 @@ orch worker list
 orch worker stop NAME [--keep-worktree]
 ```
 
-With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach `[profile] max_workers`, the limit you wrote (see [orch profile](#orch-profile)); `--force` starts one anyway. Without a profile there is no such limit.
+With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach `[profile] max_workers`, the limit you wrote (see [orch profile](#orch-profile)). `--force` starts one anyway and prints `worker: warning: --force starts NAME above [profile] max_workers (…)` on stderr. The same limit applies when `review watch` starts a reviewer, and there it has no override. The count and the start are two steps, so two starts at the same instant can both pass. Without a profile there is no such limit.
 
 `start` runs the worker detached and prints its pid, load tier and directory, plus a `worktree PATH branch=B (created|attached)` line with `--worktree`. It refuses (exit 2) when NAME is already running, the load tier blocks it (unless `--force`), the command is not on PATH, `--agent` is unknown, both `--agent` and `-- CMD` are given, or the worktree cannot be created (not a git repository, the branch is checked out elsewhere, the path exists but is not a worktree). `--minutes 0` disables the time limit.
 
@@ -286,7 +287,7 @@ The public example policy is `human-merge`, selected with `policy = "human-merge
 | A non-author agent review at the PR's head, labelled at or above | `[profile] required_review` (both tiers) |
 | A listed teammate's GitHub approval at the head | needed for a `high`-tier PR in a `team` profile |
 | Who performs the merge | a person, always; `merge-gate --auto` is always `BLOCKED` |
-| Most workers running at once | `[profile] max_workers` (an integer ≥ 1) |
+| Limit on running workers | `[profile] max_workers` (an integer ≥ 1), checked at `worker start` and at a `review watch` dispatch; `worker start --force` overrides it with a warning |
 
 Nothing is derived from the number of accounts or vendors. A review strength the setup cannot give is `BLOCKED` and reported as a missing capability; the rule is not lowered. A `team` with no teammates listed blocks every high-tier PR.
 
@@ -294,7 +295,9 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 
 `show` prints the selected policy with the declared compute and people, the accounts, agents, teammates, tier settings, the rule for `low` and `high`, and each missing capability. `--json` prints `policy, compute, people, lead_account, required_review, default_tier, high_paths, teammates, accounts, agents, max_workers, rules, missing`. Without a `[profile]` it prints `profile: not set (merge gate uses the plain rule)` and exits 0; `--json` prints `{"profile": null}`.
 
-`update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs both `--compute` and `--people`; the new profile gets the example policy values (`human-merge`, `single-agent`, `max_workers = 1`) unless `--policy`, `--required-review` or `--max-workers` say otherwise. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
+**`--json` keys changed with the removal of the built-in table (a wire compatibility change).** `merge-gate --json`: the `profile` object loses `cell`, `declared_cell` and `degraded` and gains `policy` (the policy name); `authority` is never `auto`. `profile show --json`: `cell`, `declared_cell`, `effective_compute`, `workers_per_account` and `degraded` are gone; `policy` was an object with a rule per tier and is now the policy name, the per-tier rules are under the new key `rules`, and `required_review` is added. `review watch --json`: `choice.cell` is now `choice.policy` (the policy name, or `null` without a `[profile]`). The table and a before/after example are in [docs/profiles.md](profiles.md), section 6.
+
+`update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
 
 ## Config keys
 

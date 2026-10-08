@@ -173,7 +173,7 @@ orch mem search review                      # 搜索长期笔记
 | 批准绑定到提交。只有 PR 当前提交上的评审、且该提交 CI 通过后才算数。 | `orch merge-gate` |
 | 闸门只报告，由人合并。没有任何 `orch` 命令会合并 PR。 | `orch merge-gate` |
 | 评审标签明确。每位评审者按声明的表格相对作者打标签（不同厂商、不同账号，或同一账号的全新上下文）；设置了配置档时，不会用低于 `required_review` 的评审者顶替，而是直接阻塞。标签不代表评审质量。 | `orch review watch`、`orch profile` |
-| 未知即关闭。缺失或无法识别的风险档一律按高风险处理；为已移除的内置策略表编写的配置档会被拒绝，不会被自动转换。 | `orch profile` |
+| 风险档不靠猜。给了 `--tier` 就用它；否则，配置档有 `high_paths` 且变更文件命中规则或文件列表读不全时为 `high`；否则用 `default_tier`。`--tier` 或 `default_tier` 不是 `low` 或 `high` 时报错。为已移除的内置策略表编写的配置档会被拒绝，不会被自动转换。 | `orch merge-gate`、`orch profile` |
 | 保护机器，从不杀掉工作。负载高时拒绝新工作进程，正在运行的不动。 | `orch load`、`orch worker start` |
 | 清理从不毁掉工作。只有 Git 报告没有改动、未跟踪或被忽略的文件时才删除 worktree。 | `orch worker stop` |
 | 知识被取代，而不是被删除。退役一条笔记会记录继任者并保留文件。 | `orch mem retire` |

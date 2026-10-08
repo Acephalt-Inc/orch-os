@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 // Profiles (docs/profiles.md): the human-merge example policy, the refusal of a profile written for the removed
 // built-in table, grading, tiers, the gate, the table writer.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigError } from "../src/config.js";
 import * as M from "../src/mergegate.js";
 import * as P from "../src/profile.js";
 import { parseToml, replaceTables, tableHeaders } from "../src/toml.js";
+import { ROOT } from "./_helpers.js";
 
 const prof = (toml: string) => P.readProfile(parseToml(toml))!;
 
@@ -227,6 +230,30 @@ describe("ProfileGrading", () => {
 describe("ProfileTier", () => {
   const withPaths = (extra = "") => prof(head("one", "solo", "single-agent", `high_paths = ["migrations/**", "src/*.ts"]\n${extra}`));
 
+  it("the_documented_tier_order_and_its_two_exceptions_hold", () => {
+    const lowWithPaths = withPaths('default_tier = "low"\n');
+    const lowNoPaths = prof(head("one", "solo", "single-agent", 'default_tier = "low"\n'));
+    // with path rules, a list that cannot be read is high
+    expect(P.chooseTier(lowWithPaths, null, null)).toEqual({ tier: "high", source: "files unreadable" });
+    // exception 1: --tier low is taken as given, even then
+    expect(P.chooseTier(lowWithPaths, "low", null)).toEqual({ tier: "low", source: "flag" });
+    // exception 2: without path rules the list is not read, so the tier is default_tier
+    expect(P.chooseTier(lowNoPaths, null, null)).toEqual({ tier: "low", source: "default" });
+    // a configured tier outside low/high is a config error, not a silent high
+    expect(() => prof(head("one", "solo", "single-agent", 'default_tier = "medium"\n'))).toThrow(ConfigError);
+    // the public pages state this order, and not the unconditional sentence they carried before
+    const pages: [string, string, string][] = [
+      ["docs/profiles.md", "Any value other than `low` is treated as `high`", "`--tier low` is taken as given even when the list cannot be read, and a profile without `high_paths` does not read the list, so its tier is `default_tier`"],
+      ["README.md", "A missing or unrecognized risk tier is treated as high", "else `high` when the profile has `high_paths` and a changed file matches or the file list cannot be read; else `default_tier`"],
+      ["README.zh.md", "缺失或无法识别的风险档一律按高风险处理", "配置档有 `high_paths` 且变更文件命中规则或文件列表读不全时为 `high`；否则用 `default_tier`"],
+    ];
+    for (const [file, removed, stated] of pages) {
+      const text = readFileSync(join(ROOT, file), "utf8");
+      expect(text, file).not.toContain(removed);
+      expect(text, file).toContain(stated);
+    }
+  });
+
   it("flag_then_path_then_default", () => {
     expect(P.chooseTier(withPaths(), "low", ["migrations/1.sql"])).toEqual({ tier: "low", source: "flag" }); // --tier low beats a path
     expect(P.chooseTier(withPaths(), "high", null)).toEqual({ tier: "high", source: "flag" });
@@ -446,17 +473,20 @@ nice = 5
     expect(replaceTables(arr, (n) => n[0] === "profile", "")).toBe('[w]\nx = [\n [1],\n]\n');
   });
 
-  it("initial_profile_writes_the_example_policy_and_the_detected_clis", () => {
-    const example = { policy: "human-merge", required_review: "single-agent", max_workers: 1 };
-    expect(P.initialProfile("one", "solo", ["codex", "claude"])).toEqual({ ...example, compute: "one", people: "solo", lead_account: "acct1", accounts: { acct1: "codex" }, agents: {} });
-    expect(P.initialProfile("same-vendor", "team", ["claude"]).accounts).toEqual({ acct1: "claude", acct2: "claude" });
-    expect(P.initialProfile("multi-vendor", "solo", ["claude", "codex"]).accounts).toEqual({ acct1: "claude", acct2: "codex" });
-    expect(P.initialProfile("multi-vendor", "solo", [])).toEqual({ ...example, compute: "multi-vendor", people: "solo", accounts: {}, agents: {} });
-    // the same example for every setup: the number of accounts or vendors found changes no policy value
-    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) {
-      const raw = P.initialProfile(compute, people, ["claude", "codex"]);
-      expect([raw.policy, raw.required_review, raw.max_workers]).toEqual(["human-merge", "single-agent", 1]);
-      expect(P.readProfile(parseToml(P.renderProfile(raw)))!.max_workers).toBe(1); // what init writes reads back
+  it("initial_profile_writes_the_given_selection_and_the_detected_clis", () => {
+    const example = { policy: "human-merge", required_review: "single-agent", max_workers: 1 } as const;
+    expect(P.initialProfile("one", "solo", ["codex", "claude"], example)).toEqual({ ...example, compute: "one", people: "solo", lead_account: "acct1", accounts: { acct1: "codex" }, agents: {} });
+    expect(P.initialProfile("same-vendor", "team", ["claude"], example).accounts).toEqual({ acct1: "claude", acct2: "claude" });
+    expect(P.initialProfile("multi-vendor", "solo", ["claude", "codex"], example).accounts).toEqual({ acct1: "claude", acct2: "codex" });
+    expect(P.initialProfile("multi-vendor", "solo", [], example)).toEqual({ ...example, compute: "multi-vendor", people: "solo", accounts: {}, agents: {} });
+    // the selection is written as given for every setup: the number of accounts or vendors found changes no policy value
+    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) for (const review of P.STRENGTHS) for (const max of [1, 6]) {
+      const raw = P.initialProfile(compute, people, ["claude", "codex"], { policy: "human-merge", required_review: review, max_workers: max });
+      expect([raw.policy, raw.required_review, raw.max_workers]).toEqual(["human-merge", review, max]);
+      expect(P.readProfile(parseToml(P.renderProfile(raw)))!.max_workers).toBe(max); // what init writes reads back
     }
+    // there is no default selection to fall back on
+    expect((P as any).EXAMPLE_POLICY).toBeUndefined();
+    expect(() => P.readProfile(parseToml(P.renderProfile((P.initialProfile as any)("one", "solo", ["claude"], {}))))).toThrow(ConfigError);
   });
 });

@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { reviewStart } from "../src/cli.js";
 import * as P from "../src/profile.js";
 import * as RW from "../src/reviewwatch.js";
 import { parseToml } from "../src/toml.js";
@@ -229,6 +230,8 @@ describe("ReviewWatchChoice", () => {
     // the author w1 is a declared review agent too, so its vendor and account are known
     const agents = [agent("w1", "claude", "a1"), agent("s1", "claude", "a1"), agent("s2", "claude", "a2"), agent("x1", "codex", "a3")];
     expect([choose(agents, null).pick?.name, choose(agents, null).pick?.label, choose(agents, null).need]).toEqual(["x1", "cross-vendor", null]);
+    // the --json key is `policy` (it was `cell`), and it is null without a profile
+    expect([choose(agents, null).policy, "cell" in choose(agents, null)]).toEqual([null, false]);
     expect(choose(agents.slice(0, 3), null).pick?.label).toBe("cross-account");
     expect(choose(agents.slice(0, 2), null).pick?.label).toBe("single-agent (fresh context)");
     // nothing declared: unmapped, first in config order
@@ -468,5 +471,35 @@ describe("ReviewWatchDispatch", () => {
     });
     expect(await waitFor(() => existsSync(out) && readFileSync(out, "utf8").includes("review this"))).toBe(true);
     expect(readFileSync(out, "utf8")).toBe(`r1 7 ${H1}\nreview this\n`);
+  });
+});
+
+describe("ReviewWatchWorkerLimit", () => {
+  const ctx = useTmpHome();
+
+  it("a_review_dispatch_is_refused_at_the_written_worker_limit", async () => {
+    const prof = profile("single-agent", "one", "solo", { a1: "codex" }, { w1: "a1", r1: "a1" }); // max_workers = 2
+    const prompt = join(ctx.home, "p.md");
+    writeFileSync(prompt, "review this\n");
+    const cfg = { workers: { nice: 0 } };
+    const start = reviewStart(cfg, prof);
+    const spec = (worker: string): RW.DispatchSpec => ({ worker, argv: ["/bin/sleep", "30"], env: {}, prompt, minutes: 0 });
+    const running = async () => (await run("worker", "list"))[1].split("\n").filter((l) => l.includes("RUNNING")).length;
+    try {
+      expect(start(spec("review-7-a")).pid).toBeGreaterThan(0);
+      expect(start(spec("review-7-b")).pid).toBeGreaterThan(0);
+      expect(await running()).toBe(2);
+      // the third dispatch is refused by the same limit `orch worker start` uses
+      expect(() => start(spec("review-7-c"))).toThrow("2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers");
+      // through the watch it is a BLOCKED result: nothing is started
+      const { host } = fakeHost();
+      const r = RW.watchOnce(input([agent("r1", "codex", "a1")], { profile: prof }), { ...host, dispatch: start });
+      expect([r.outcome, r.detail]).toEqual(["BLOCKED", "starting r1 failed: 2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers"]);
+      expect(await running()).toBe(2);
+      // without a profile there is no limit
+      expect(reviewStart(cfg, null)(spec("review-7-d")).pid).toBeGreaterThan(0);
+    } finally {
+      for (const n of ["a", "b", "c", "d"]) await run("worker", "stop", `review-7-${n}`);
+    }
   });
 });

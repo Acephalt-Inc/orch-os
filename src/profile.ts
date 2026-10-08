@@ -37,8 +37,17 @@ export const TIERS: Tier[] = ["low", "high"];
 export const STRENGTHS: Strength[] = ["single-agent", "cross-account", "cross-vendor"];
 export const POLICIES: PolicyName[] = ["human-merge"];
 
-/** The values `orch init` and `orch profile update` write into a NEW profile. Every one is visible in config.toml. */
-export const EXAMPLE_POLICY = { policy: "human-merge", required_review: "single-agent", max_workers: 1 } as const;
+/**
+ * The three values a person gives before a profile is written: the policy (which fixes who may
+ * merge), the review requirement and the worker limit. None has a default anywhere in orch.
+ */
+export interface Selection {
+  policy: PolicyName;
+  required_review: Strength;
+  max_workers: number;
+}
+/** The flags that carry a Selection, as the messages name them. */
+export const SELECT_FLAGS = "--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N";
 
 export interface Policy {
   name: PolicyName;
@@ -449,20 +458,21 @@ export function profileBlock(text: string): string {
 }
 
 /**
- * A new profile for `orch init`: the public example policy, written out in full, and starting
+ * A new profile for `orch init`: the selection the person gave, written out in full, and starting
  * accounts from the agent CLIs detection found. The accounts are labels to edit, not a rule.
+ * There is no default selection: the caller must have asked for one.
  */
-export function initialProfile(compute: Compute, people: People, found: string[]): Record<string, any> {
+export function initialProfile(compute: Compute, people: People, found: string[], sel: Selection): Record<string, any> {
   const accounts: Record<string, string> = {};
   if (found.length) {
     if (compute === "one") accounts.acct1 = found[0];
     else if (compute === "same-vendor") Object.assign(accounts, { acct1: found[0], acct2: found[0] });
     else found.forEach((v, i) => (accounts[`acct${i + 1}`] = v));
   }
-  const raw: Record<string, any> = { policy: EXAMPLE_POLICY.policy, compute, people };
+  const raw: Record<string, any> = { policy: sel.policy, compute, people };
   if (Object.keys(accounts).length) raw.lead_account = "acct1";
-  raw.required_review = EXAMPLE_POLICY.required_review;
-  raw.max_workers = EXAMPLE_POLICY.max_workers;
+  raw.required_review = sel.required_review;
+  raw.max_workers = sel.max_workers;
   raw.accounts = accounts;
   raw.agents = {};
   return raw;

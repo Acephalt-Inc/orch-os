@@ -3,7 +3,7 @@
 A profile is an optional `[profile]` table in `config.toml`. It holds two things:
 
 - **Declared review context**: labels you write for the agent accounts you use, the agent CLI ("vendor") each account is on, which agent runs on which account, and which GitHub logins are teammates.
-- **One selected policy**: the rule the merge gate applies on top of its plain rule. This release has one public example policy, `human-merge`. You select it by name and you write its two values yourself.
+- **One selected policy**: the rule the merge gate applies on top of its plain rule. This release has one public policy, `human-merge`. You select it by name and you give its two values yourself. `orch` has no default for the policy, the review requirement or the worker limit: until you give all three, no `[profile]` table is written.
 
 Without a `[profile]` table none of this runs, and the merge gate behaves as described in [commands.md](commands.md#orch-merge-gate) (section 7 below).
 
@@ -16,7 +16,7 @@ Without a `[profile]` table none of this runs, and the merge gate behaves as des
 | Every PR needs an agent review by a non-author, at the PR's current head, graded at or above `required_review`. | `[profile] required_review`, written by you. The same value applies to both tiers. |
 | In a `team` profile, a `high`-tier PR also needs an `APPROVED` GitHub review at the current head from a login in `teammates`. | `[profile] people`, `teammates`, and the tier (section 4). |
 | A person performs every merge. `orch merge-gate --auto` is always `BLOCKED`. | Fixed. No setting gives automation merge authority. |
-| At most `max_workers` workers run at once. | `[profile] max_workers`, written by you. |
+| `orch worker start` and a `review watch` dispatch are refused while `max_workers` workers are already running. `orch worker start --force` overrides the limit and prints a warning. The count and the start are two steps, so two starts at the same instant can both pass. | `[profile] max_workers`, written by you. |
 
 Nothing is derived from how many accounts or vendors you list. If the setup cannot give the review strength you asked for, the gate reports `BLOCKED` and `orch doctor` names what is missing (section 5). The rule is not lowered.
 
@@ -43,7 +43,7 @@ w1 = "main"
 r1 = "main"
 ```
 
-`orch init --compute one --people solo` and `orch profile update --compute one --people solo` (when no profile exists) write these three policy values into the new profile, so they are visible in the file. Change them with `orch profile update --required-review … --max-workers …`.
+`orch init` and `orch profile update` write a new profile only when you give all three values yourself: as flags (`--policy human-merge --required-review … --max-workers N`, together with `--compute` and `--people`), or as answers to the questions `orch init` asks on a terminal. Those three questions have no default answer. When a value is missing, no `[profile]` table is written and the command prints how to create one. The values above are an example, not a default. Change them later with `orch profile update --required-review … --max-workers …`.
 
 ```text
 #103 head=0a1b2c3d4 ci=green approvals=1/1 (stale=0 self=0) changes_requested=0 label=off
@@ -59,7 +59,7 @@ The profile is one `[profile]` table and two sub-tables, in `$ORCH_HOME/config.t
 |---|---|---|---|
 | `[profile] policy` | string | required | `human-merge`. A profile without this key is refused (section 6). |
 | `[profile] required_review` | string | required | Weakest agent review that passes: `single-agent`, `cross-account` or `cross-vendor` (section 3) |
-| `[profile] max_workers` | integer | required | Most workers running at once. An integer ≥ 1 that you choose. |
+| `[profile] max_workers` | integer | required | The limit on running workers, an integer ≥ 1 that you choose. It is checked when `orch worker start` or `review watch` starts a worker; `worker start --force` overrides it with a warning (section 1). |
 | `[profile] compute` | string | required | Declared context: `one` account, several accounts on the `same-vendor` agent CLI, or `multi-vendor`. Used for the `orch doctor` rows and the starting accounts `orch init` writes. It selects no rule. |
 | `[profile] people` | string | required | `solo`, or `team` (teammates approve on GitHub) |
 | `[profile] lead_account` | string | the only account, if there is one | Account id the lead runs on |
@@ -105,7 +105,7 @@ Every PR is `low` or `high`. In order; the first rule that decides wins:
 2. `high_paths`: if any changed file matches any pattern, the tier is `high`. Path rules can only raise the tier.
 3. `default_tier` (default `high`).
 
-If the changed-file list cannot be read in full, the tier is `high`. Any value other than `low` is treated as `high`. The verdict prints where the tier came from: `flag`, `path: FILE`, `default` or `files unreadable`.
+If the profile has `high_paths` and the changed-file list cannot be read in full, the tier is `high`. Two cases are not raised: `--tier low` is taken as given even when the list cannot be read, and a profile without `high_paths` does not read the list, so its tier is `default_tier`. `--tier` and `default_tier` accept only `low` and `high`; any other value is an error (exit 2). The verdict prints where the tier came from: `flag`, `path: FILE`, `default` or `files unreadable`.
 
 Under `human-merge` the tier decides one thing: whether a `team` profile needs a teammate approval. It never lowers `required_review`. In a `solo` profile the tier is printed and changes no requirement.
 
@@ -143,6 +143,23 @@ The old profile is not converted for you, because the public policy could requir
 | Fewer accounts or vendors than declared switched to a weaker rule. | The rule stays as written and the gate reports `BLOCKED` (section 5). |
 
 `orch doctor` shows the refusal as a `FAIL  profile` row. Commands that do not read the profile are unaffected.
+
+### `--json` output: a wire compatibility change
+
+A script that reads `--json` output written for the removed built-in table must be updated. These are all the key changes:
+
+| Command | Removed keys | Changed or added keys |
+|---|---|---|
+| `orch merge-gate --json`, the `profile` object | `cell`, `declared_cell`, `degraded` | `policy` is added and holds the policy name (`"human-merge"`). `authority` is `owner` or `teammate`, never `auto`. `needed` is the written `required_review` on both tiers. `worker_cap` is the written `max_workers`. |
+| `orch profile show --json` | `cell`, `declared_cell`, `effective_compute`, `workers_per_account`, `degraded` | `policy` was an object with a `low` and a `high` rule and is now the policy name, a string. The two per-tier rules moved to the new key `rules`, with the same inner keys (`need_agent`, `need_teammate`, `authority`, `worker_cap`). `required_review` is added. `max_workers` is always an integer ≥ 1. |
+| `orch review watch --json`, the `choice` object | `cell` | `policy` replaces `cell`: the policy name, or `null` when there is no `[profile]`. |
+
+`profile show --json` before and after, for the changed keys only:
+
+```text
+before: {"cell": "C", "policy": {"low": {...}, "high": {...}}, "degraded": [], ...}
+after:  {"policy": "human-merge", "required_review": "cross-account", "rules": {"low": {...}, "high": {...}}, "max_workers": 2, ...}
+```
 
 ## 7. No `[profile]` means the plain gate, byte for byte
 
