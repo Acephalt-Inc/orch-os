@@ -91,6 +91,34 @@ export class Workers {
     return `${this.root}/${name}`;
   }
 
+  /** Build the command selection shared by preview admission and the real launch. */
+  private selection(name: string, opts: StartOptions): { tmpl: string[]; wd: string; commandDir: string; probe: string[] } {
+    let tmpl: unknown;
+    if (opts.agent) {
+      if (!Object.hasOwn(this.agents, opts.agent)) throw new WorkerError(`no [agents.${opts.agent}] in config (configured: ${Object.keys(this.agents).sort().join(", ") || "none"}; run \`orch init --force\`)`);
+      tmpl = this.agents[opts.agent].command ?? [];
+    } else tmpl = opts.command && opts.command.length ? opts.command : this.cfg.command ?? [];
+    if (!Array.isArray(tmpl) || tmpl.some((v) => typeof v !== "string")) throw new WorkerError("worker command must be an argv array of strings");
+    if (!tmpl.length) throw new WorkerError("no worker command: set [workers] command, use --agent, or pass one after --");
+    const wd = realOrResolve(opts.workdir ?? process.cwd());
+    if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new WorkerError(`workdir is not a directory: ${wd}`);
+    const commandDir = opts.worktree ? `${realOrResolve(this.worktreeRoot())}/${name}` : wd;
+    const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", commandDir));
+    if (probe[0].includes("/")) probe[0] = resolve(commandDir, probe[0]);
+    return { tmpl, wd, commandDir, probe };
+  }
+
+  /** Run the exact command selection and readiness path used immediately before launch. */
+  admit(name: string, opts: StartOptions): void {
+    const { tmpl, wd, commandDir, probe } = this.selection(name, opts);
+    const checks = RD.readiness(this.fullConfig, this.loadState, {
+      ...opts, command: probe, agent: undefined, workerIdentity: opts.agent ?? Object.keys(this.agents).find((n) => JSON.stringify(this.agents[n].command) === JSON.stringify(tmpl)), workdir: wd, commandWorkdir: commandDir, name,
+      reviewer: opts.reviewer ?? (opts.env?.ORCH_REVIEW_PR ? opts.env.ORCH_AGENT : undefined),
+    });
+    const failing = checks.filter((c) => !c.ok);
+    if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.unverified ? "UNVERIFIED: " : ""}${c.detail})`).join("; ")}`);
+  }
+
   pid(name: string): number | null {
     try {
       const t = readFileSync(`${this.dir(name)}/PID`, "utf8").trim();
@@ -175,34 +203,14 @@ export class Workers {
     const nice = Math.trunc(configNumber(this.cfg.nice, 5, "[workers] nice", -20));
     const tier = loadmod.readState(this.loadState).tier ?? "NORMAL";
     if (opts.agent && opts.command && opts.command.length) throw new WorkerError("pass --agent or a command after --, not both");
-    let tmpl: string[];
-    if (opts.agent) {
-      if (!Object.hasOwn(this.agents, opts.agent)) {
-        throw new WorkerError(`no [agents.${opts.agent}] in config (configured: ${Object.keys(this.agents).sort().join(", ") || "none"}; run \`orch init --force\`)`);
-      }
-      tmpl = this.agents[opts.agent].command ?? [];
-    } else {
-      tmpl = opts.command && opts.command.length ? opts.command : this.cfg.command ?? [];
-    }
-    if (!Array.isArray(tmpl) || tmpl.some((v) => typeof v !== "string")) throw new WorkerError("worker command must be an argv array of strings");
-    if (!tmpl.length) throw new WorkerError("no worker command: set [workers] command, use --agent, or pass one after --");
-    let wd = realOrResolve(opts.workdir ?? process.cwd());
-    if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new WorkerError(`workdir is not a directory: ${wd}`);
-    // A command tied to a not-yet-created worktree cannot be verified before admission.
-    const commandDir = opts.worktree ? `${realOrResolve(this.worktreeRoot())}/${name}` : wd;
-    const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", commandDir));
-    if (probe[0].includes("/")) probe[0] = resolve(commandDir, probe[0]);
+    const { tmpl, wd: selectedWd, probe } = this.selection(name, opts);
+    let wd = selectedWd;
     const commandBin = which(probe[0]);
     if (opts.force && process.stdin.isTTY !== true) throw new WorkerError("--force is for attended use only; requires a terminal on stdin");
     if (opts.force) {
       process.stderr.write("WARNING: attended --force bypasses readiness and load admission\n");
     } else {
-      const checks = RD.readiness(this.fullConfig, this.loadState, {
-        ...opts, command: probe, agent: undefined, workerIdentity: opts.agent ?? Object.keys(this.agents).find((n) => JSON.stringify(this.agents[n].command) === JSON.stringify(tmpl)), workdir: wd, commandWorkdir: commandDir, name,
-        reviewer: opts.reviewer ?? (opts.env?.ORCH_REVIEW_PR ? opts.env.ORCH_AGENT : undefined),
-      });
-      const failing = checks.filter((c) => !c.ok);
-      if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.unverified ? "UNVERIFIED: " : ""}${c.detail})`).join("; ")}`);
+      this.admit(name, opts);
     }
     if (!commandBin) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
     const to = which("timeout") ?? which("gtimeout");

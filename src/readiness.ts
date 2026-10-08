@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-/** OS-F4 admission rules, extended to the commands actually selected for this launch. */
+/** Admission rules, extended to the commands actually selected for this launch. */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
@@ -29,7 +29,7 @@ export const defaultProbes: Probes = {
 };
 const AUTH_STATUS = new Map<string, string[]>([["claude", ["auth", "status"]], ["codex", ["login", "status"]]]);
 
-/** Reject the F4 wrong-type, blank, pseudo-path and .git suffix cases. */
+/** Reject wrong-type, blank, pseudo-path and .git suffix cases. */
 export function mergeRepoProblem(v: unknown): string | null {
   if (typeof v !== "string" || !v.trim()) return "[merge] repo must be a non-blank owner/name string";
   const parts = v.split("/");
@@ -67,7 +67,7 @@ export function workerCommand(cfg: Record<string, any>, s: Selection): unknown {
 }
 
 /** Inspect only argv[0]. Wrappers are not parsed and arguments are never scanned. */
-function commandChecks(label: string, raw: unknown, s: Selection, probes: Probes): Check[] {
+export function commandChecks(label: string, raw: unknown, s: Selection, probes: Probes = defaultProbes): Check[] {
   const rows: Check[] = [];
   const add = (name: string, ok: boolean, detail: string) => rows.push({ name: `${label} ${name}`, ok, detail });
   if (!Array.isArray(raw) || !raw.length || raw.some((w) => typeof w !== "string") || !raw[0]) {
@@ -131,7 +131,7 @@ export function readiness(cfg: Record<string, any>, loadPath: string, s: Selecti
   const gh = probes.which("gh");
   add("gh", gh !== null, gh ?? "gh not on PATH");
   const ghCode = gh ? probes.exitCode(gh, ["auth", "status"], cwd, { ...process.env, ...s.env }) : null;
-  add("gh auth", ghCode === 0, ghCode === 0 ? "authenticated" : "gh auth status failed or could not run");
+  add("gh auth", ghCode === 0, ghCode === null ? "gh auth status: could not run" : `gh auth status: exit ${ghCode}`);
   let minutes: number | null = null;
   try { minutes = s.minutes ?? configNumber(cfg.workers?.timeout_minutes, 60, "[workers] timeout_minutes"); }
   catch (e: any) { add("worker limits", false, e.message); }

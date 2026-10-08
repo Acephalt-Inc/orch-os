@@ -366,16 +366,18 @@ const cmdDoctor: Run = (a, io) => {
     add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
-    const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
-    add(Boolean(wcmd) && which(wcmd) !== null, "worker command",
-      wcmd ? which(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
+    const commandRow = (name: string, raw: unknown, missing: string) => {
+      const checks = RD.commandChecks("worker", raw, {});
+      const refused = checks.find((row) => !row.ok);
+      add(!refused, name, refused ? (Array.isArray(raw) && raw.length ? `${refused.unverified ? "UNVERIFIED: " : ""}${refused.detail}` : missing) : checks[0].detail, true);
+    };
+    commandRow("worker command", (cfg.workers ?? {}).command, "none configured - use --agent or pass a command after --");
     const to = which("timeout") ?? which("gtimeout");
-    add(to !== null, "timeout (worker time limit)", to ?? "absent - workers run without a time limit", true);
+    add(to !== null, "timeout (worker time limit)", to ?? "absent - worker start is refused without it (attended --force runs with no time limit)", true);
     const found = D.installed().map((x) => x.name);
     add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
-      const b = (ag.command ?? [""])[0] ?? "";
-      add(Boolean(b) && which(b) !== null, `agent ${name}`, b || "empty command", true);
+      commandRow(`agent ${name}`, ag.command, "empty command");
     }
     const tier = LD.readState(loadPath(cfg)).tier;
     add(true, "load state", tier || "no sample yet (run `orch load`)");
@@ -389,7 +391,15 @@ const cmdDoctor: Run = (a, io) => {
     if (prof) for (const [ok, name, detail] of P.capabilityRows(prof, profileEnv(cfg))) add(ok, name, detail, true);
     // review watch rows only with [review.agents] or a watch state directory: otherwise none
     check("review watch", () => {
-      for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
+      const reviewRows = RW.doctorRows(cfg!, Date.now() / 1000);
+      const agents = new Map(RW.readAgents(cfg!).map((agent) => [agent.name, agent]));
+      for (const [available, name, detail] of reviewRows) {
+        const agent = agents.get(name.replace(/^review agent /, ""));
+        if (!agent) { add(available, name, detail, true); continue; }
+        const checks = RD.commandChecks("reviewer", agent.argv, {});
+        const refused = checks.find((row) => !row.ok);
+        add(!refused, name, refused ? (agent.argv && refused.name.endsWith(" command") && !checks[0].ok ? detail : `${refused.unverified ? "UNVERIFIED: " : ""}${refused.detail}`) : detail, true);
+      }
     });
   }
   const w = Math.max(...rows.map((r) => r[1].length));
@@ -599,10 +609,12 @@ const cmdReviewWatch: Run = async (a, io) => {
     println(io, `#${a.pr} => BLOCKED (${e.message ?? e})`);
     return 1;
   }
+  const liveWorkers = workers(cfg);
   const host = RW.override.host ?? RW.realHost((d) => {
-    const m = workers(cfg).start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
+    const m = liveWorkers.start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
     return { pid: typeof m.pid === "number" ? m.pid : null };
   });
+  if (!RW.override.host) host.admit = (d) => liveWorkers.admit(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env });
   const inp: RW.WatchInput = {
     pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings,
     tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
@@ -1115,7 +1127,7 @@ export function buildTree(): CmdSpec<Run> {
             opt("repo", ["--repo"], "str", "owner/name (default [merge] repo)"),
             opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
             opt("once", ["--once"], "bool", "one pass, then exit (for cron)"),
-            opt("dry_run", ["--dry-run"], "bool", "one pass; print the chosen reviewer and its command; start nothing, write nothing"),
+            opt("dry_run", ["--dry-run"], "bool", "one pass; run the readiness checks of a real start (login-status probes, gh auth status); print the reviewer command only if it would start; start no reviewer, write nothing"),
             opt("force", ["--force"], "bool", "start a reviewer even though this head already had one"),
             opt("interval", ["--interval"], "float", "seconds between passes (default [review.watch] poll_seconds)"),
             opt("timeout", ["--timeout"], "float", "stop after this many seconds (default: until reviewed, stale or blocked)"),

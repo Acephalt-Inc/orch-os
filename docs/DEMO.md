@@ -58,7 +58,7 @@ PASS  git                          /usr/bin/git
 SKIP  gh (merge-gate live mode)    absent - fixtures still work
 SKIP  merge repo                   unset - pass --repo or use --fixture
 SKIP  worker command               none configured - use --agent or pass a command after --
-SKIP  timeout (worker time limit)  absent - workers run without a time limit
+SKIP  timeout (worker time limit)  absent - worker start is refused without it (attended --force runs with no time limit)
 SKIP  agent CLIs                   none found (install one, then `orch init --force`)
 PASS  load state                   no sample yet (run `orch load`)
 doctor: PASS (0 required check(s) failed)

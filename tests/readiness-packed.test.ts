@@ -1,9 +1,9 @@
 // Run the package's bin entry with a clean home and controlled, no-spend executables.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { defaultProbes, mergeRepoProblem, readiness, render, timeLimitProblem } from "../src/readiness.js";
+import { commandChecks, defaultProbes, mergeRepoProblem, readiness, render, timeLimitProblem } from "../src/readiness.js";
 import { pidAlive, which } from "../src/util.js";
 import { ROOT, waitFor } from "./_helpers.js";
 
@@ -53,7 +53,7 @@ function raw(args: string[], h = home) {
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(ROOT, ".os4-packed-"));
+  root = mkdtempSync(join(ROOT, ".readiness-packed-"));
   const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", root], { cwd: ROOT, env: { ...process.env, npm_config_cache: join(root, "npm-cache") }, encoding: "utf8", timeout: 60_000 });
   expect(packed.status, packed.stderr).toBe(0);
   const filename = JSON.parse(packed.stdout)[0].filename;
@@ -85,6 +85,7 @@ describe("PackedReadiness", () => {
     const d = run("doctor", "--ready");
     expect(d.status, d.stdout + d.stderr).toBe(0);
     for (const name of ["worker command", "worker auth", "reviewer command", "reviewer auth", "git repo", "origin", "merge repo", "time limit", "timeout", "required-check load state"]) expect(d.stdout).toContain(`OK  ${name}`);
+    expect(d.stdout).toContain("OK  gh auth  gh auth status: exit 0");
     const w = run("worker", "start", "good");
     expect(w.status, w.stdout + w.stderr).toBe(0);
     const m = JSON.parse(readFileSync(join(home, "workers/good/worker.json"), "utf8"));
@@ -178,7 +179,7 @@ describe("PackedReadiness", () => {
     refuses("worker auth (claude auth status: could not run");
   });
   it("missing gh", () => { rmSync(join(tools, "gh")); refuses("gh (gh not on PATH)"); });
-  it("logged-out gh", () => { fake("gh", "exit 1"); refuses("gh auth (gh auth status failed or could not run)"); });
+  it("logged-out gh", () => { fake("gh", "exit 1"); refuses("gh auth (gh auth status: exit 1)"); });
   it("review watch dispatches its selected reviewer through the non-force path", () => {
     const head = "a".repeat(40);
     fake("gh", `case "$1 $2" in "pr view") printf '%s\\n' '{"headRefOid":"${head}","state":"OPEN","comments":[]}';; "api --paginate") case "$3" in */check-runs) printf '%s\\n' '["${head}","ci","success"]';; esac;; esac`);
@@ -195,7 +196,25 @@ describe("PackedReadiness", () => {
     expect(probes).toContain("claude\nauth\nstatus\n");
     expect(probes).not.toContain("codex\n"); // the unselected, logged-out reviewer is not what admission checks
   });
-  it("plain doctor retains fixture-friendly behavior", () => { const r = run("doctor"); expect(r.stdout).not.toContain("ready-for-live"); expect(existsSync(log)).toBe(false); });
+  it.each([["gemini", "-p"], "claude -p"])("review dry run refuses the same reviewer as once: %j", (bad) => {
+    const head = "b".repeat(40);
+    fake("gemini");
+    fake("gh", `case "$1 $2" in "pr view") printf '%s\\n' '{"headRefOid":"${head}","state":"OPEN","comments":[]}';; "api --paginate") case "$3" in */check-runs) printf '%s\\n' '["${head}","ci","success"]';; esac;; esac`);
+    reviewer = bad;
+    configure();
+    expect(raw(["task", "claim", "T1", "--as", "author"]).status).toBe(0);
+    const dry = raw(["review", "watch", "7", "--task", "T1", "--dry-run", "--json"]);
+    const once = raw(["review", "watch", "7", "--task", "T1", "--once"]);
+    expect([dry.status, JSON.parse(dry.stdout).outcome, JSON.parse(dry.stdout).command]).toEqual([1, "BLOCKED", null]);
+    expect(once.status).toBe(1);
+    expect(once.stdout).toContain("BLOCKED");
+    expect(dry.stdout).toContain("readiness failed:");
+    expect(once.stdout).toContain("readiness failed:");
+    const doctor = run("doctor");
+    expect(doctor.stdout).not.toMatch(/PASS\s+review agent r1/);
+    expect(doctor.stdout).toMatch(/SKIP\s+review agent r1\s+(?:UNVERIFIED:|expected a non-empty argv)/);
+  });
+  it("plain doctor retains its concise report", () => { const r = run("doctor"); expect(r.stdout).not.toContain("ready-for-live"); expect(r.stdout).toMatch(/PASS\s+worker command/); expect(r.stdout).toMatch(/PASS\s+review agent r1/); expect(readFileSync(log, "utf8")).toContain("codex\nlogin\nstatus\n"); });
 });
 
 /** The `orch ...` lines of the README command block, comments removed. */
@@ -241,7 +260,7 @@ describe("ReadmeQuickstart", () => {
   });
 });
 
-describe("F4ProbeAndRules", () => {
+describe("ReadinessProbeAndRules", () => {
   it("a null auth probe result is NOT READY", () => {
     const probes = { which: (c: string) => `/fake/${c}`, exitCode: () => null, output: () => null };
     const rows = readiness({ workers: { command: ["claude", "-p"] }, review: { agents: { r1: { cmd: ["codex", "exec", "-"] } } } }, "/absent/load.json", {}, probes);
@@ -269,5 +288,20 @@ describe("F4ProbeAndRules", () => {
     expect(installer).toContain('need Node.js >= 22');
     expect(readFileSync(join(ROOT, "README.md"), "utf8")).toContain("Node.js 22 or newer");
     expect(readFileSync(join(ROOT, "README.zh.md"), "utf8")).toContain("Node.js 22 或更高版本");
+  });
+  it("every documented command assignment is admitted or marked attended-only", () => {
+    const files = ["README.md", "README.zh.md", ...["docs", "templates"].flatMap((dir) =>
+      readdirSync(join(ROOT, dir), { recursive: true }).map(String).filter((file) => file.endsWith(".md")).map((file) => join(dir, file)))];
+    const probes = { which: (cmd: string) => `/tool/${cmd}`, exitCode: () => 0, output: () => null };
+    for (const file of files) for (const [index, line] of readFileSync(join(ROOT, file), "utf8").split("\n").entries()) {
+      const match = /^\s*(?:cmd|command)\s*=\s*(.+?)(?:\s+#.*)?$/.exec(line);
+      if (!match) continue;
+      if (/attended-only|--force/.test(line)) continue;
+      // a TOML literal string ('...') is a shell string; anything else here is an array or a basic string
+      const text = match[1].trim();
+      const value = text.startsWith("'") ? text.slice(1, -1) : JSON.parse(text.replaceAll("'", '"'));
+      const refused = commandChecks("documented", value, {}, probes).filter((row) => !row.ok);
+      expect(refused, `${file}:${index + 1}`).toEqual([]);
+    }
   });
 });

@@ -52,7 +52,8 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 | Check | Required |
 |---|---|
 | Node.js ≥ 22, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
-| handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
+| handbook files present, `gh`, merge repo set, `timeout`/`gtimeout`, agent CLIs found | no (SKIP) |
+| worker command, each `[agents.*]` command, each `[review.agents.*]` command: `PASS` only when the command passes the command and login checks of `--ready` (below), else `SKIP` with that reason. Doctor runs `claude auth status` or `codex login status` for these rows | no (SKIP) |
 | load state | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid; every other profile row is `PASS` or `SKIP` |
 
@@ -197,11 +198,6 @@ cmd = ["codex", "exec", "-"]                   # argv, no shell; placeholders {p
 vendor = "codex"
 account = "a2"
 
-[review.agents.rc]
-cmd = 'claude -p < "$ORCH_REVIEW_PROMPT"'       # a string runs through /bin/sh; values only in the environment
-vendor = "claude"
-account = "a1"
-
 [review.watch]
 require_ci = true      # false: a repository without CI; a pending or failed check still blocks
 stale_minutes = 30     # a reviewer with no review line by then is STALE; also its worker time limit
@@ -217,7 +213,7 @@ One pass:
 3. If this head already has a reviewer (state file below), watch only follows it: `REVIEWED` once a comment whose first line is `ORCH-REVIEW <verdict> <head> by <that agent>` appears (a line for another commit does not count), `STALE` after `stale_minutes`, else `DISPATCHED`. It never starts a second reviewer for one head unless `--force`.
 4. The reviewer: every `[review.agents.NAME]` that is not an author and whose command is on `PATH`, graded against the authors: `cross-vendor`, then `cross-account`, then `single-agent (fresh context)` (same account: a new session, labelled so), then `single-agent (unmapped)` (vendor or account not declared). The strongest wins; ties go to the first in `config.toml`. An agent's account is `account`, else its `[profile.agents]` entry; its vendor is the account's vendor in `[profile.accounts]`, else `vendor` (a contradiction is a config error). With a `[profile]`, the needed strength is the policy's for the PR's tier (`--tier`, `high_paths`, `default_tier`, as in `merge-gate`); a best reviewer below it is `BLOCKED` with the reason, never a weaker review. So cells A and D give a labelled single-agent review when only the author's account is available, and cells B, C, E and F block.
 5. CI is read for the head commit only: `gh api repos/OWNER/NAME/commits/SHA/check-runs` and `.../commits/SHA/status`, keeping only the rows whose sha is the head. Any failed or pending check: `WAITING`, no reviewer. No check at all: `WAITING` too (CI may not have started), unless `require_ci = false`.
-6. Otherwise watch writes a prompt file and starts the reviewer as a worker named `review-PR-SHA12` (see `orch worker`: own process group, logs, time limit of `stale_minutes`, refused under a blocking load tier). The prompt is on its stdin and in `{prompt}`; the environment has `ORCH_AGENT`, `ORCH_REVIEW_PR`, `ORCH_REVIEW_HEAD`, `ORCH_REVIEW_REPO` and `ORCH_REVIEW_PROMPT`.
+6. Otherwise watch writes a prompt file and starts the reviewer as a worker named `review-PR-SHA12` (see `orch worker`: own process group, logs, time limit of `stale_minutes`, subject to the same readiness admission as `orch worker start`). The prompt is on its stdin and in `{prompt}`; the environment has `ORCH_AGENT`, `ORCH_REVIEW_PR`, `ORCH_REVIEW_HEAD`, `ORCH_REVIEW_REPO` and `ORCH_REVIEW_PROMPT`.
 
 A new head means a new pass from step 3: a new reviewer once its CI is green. A reviewer still running for the old head is left alone; its line names the old sha and does not count.
 
@@ -227,9 +223,9 @@ A new head means a new pass from step 3: a new reviewer once its CI is green. A 
 #7 head=4f2c9a1e7 => REVIEWED (ORCH-REVIEW APPROVE 4f2c9a1e7b3d... by rx (cross-vendor))
 ```
 
-Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` makes one pass, prints the chosen reviewer and its command, and starts nothing and writes nothing. `--json` prints each result as JSON. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
+Without `--once`, watch repeats every `--interval` seconds (default `poll_seconds`), printing a line when the status changes, until `REVIEWED` (exit 0), `STALE` or `BLOCKED` (exit 1), or `--timeout` (exit 1). `--once` makes one pass for cron; dispatch still requires every readiness check: exit 0 for `WAITING`, `DISPATCHED` or `REVIEWED`, 1 for `BLOCKED`, `STALE` or a `gh` error. `--dry-run` runs the same admission, prints a command only when it would start, and starts and writes nothing. Refusal is `BLOCKED` (exit 1), and JSON carries no runnable command. `--json` prints each result as JSON. A bad PR number, a bad config value, or `--tier` without a `[profile]` exits 2.
 
-State: one file per PR, `$ORCH_HOME/review-watch/OWNER__NAME__PR.json` (head, agent, label, worker, pid, time, status `dispatched|reviewed|stale`, earlier heads), written under the lock. `orch doctor` shows a `SKIP` row per reviewer command and per stale reviewer; with no `[review.agents]` and no state it shows nothing new.
+State: one file per PR, `$ORCH_HOME/review-watch/OWNER__NAME__PR.json` (head, agent, label, worker, pid, time, status `dispatched|reviewed|stale`, earlier heads), written under the lock. `orch doctor` shows one row per reviewer command (`PASS` only when it passes the readiness command and login checks, else `SKIP`) and a `SKIP` row per stale reviewer; with no `[review.agents]` and no state it shows nothing new.
 
 Like the comments gate, this is a process gate between cooperating agents, not a security boundary: accounts and vendors are declared, not verified.
 
@@ -313,7 +309,7 @@ A profile records the setup: **compute** (`one` account, several accounts on the
 | `[handbook] dir` | `~/.orch/handbook` | Where `init` writes the handbook |
 | `[merge] repo`, `required_approvals`, `required_label` | `""`, `1`, `""` | Live-mode repo; approvals needed at the head; optional label |
 | `[review] source` | `github` | Where `merge-gate` approvals come from: `github` reviews, or `comments` (ORCH-REVIEW comments; needs `--task`) |
-| `[review.agents.NAME] cmd`, `vendor`, `account` | none | A reviewer for `review watch`: argv or shell command line; declared vendor and account (the account's vendor in `[profile.accounts]` wins) |
+| `[review.agents.NAME] cmd`, `vendor`, `account` | none | A reviewer for `review watch`: a non-empty argv array whose executable has a known login-status check; declared vendor and account (the account's vendor in `[profile.accounts]` wins) |
 | `[review.watch] require_ci`, `stale_minutes`, `poll_seconds`, `dir` | `true`, `30`, `60`, `~/.orch/review-watch` | `false` = no CI expected; when a silent reviewer is stale; loop interval; state files |
 | `[workers] root`, `command`, `timeout_minutes`, `nice`, `block_tiers` | `~/.orch/workers`, first detected agent, `60`, `5`, `HIGH CRITICAL` | Worker defaults |
 | `[workers] worktree_root`, `worktree_branch_prefix` | `~/.orch/worktrees`, `orch/` | Where `--worktree` puts worktrees; default branch prefix |

@@ -191,7 +191,7 @@ orch load                                   # 采样机器负载
 orch mem search review                      # 搜索长期笔记（没有匹配时退出码为 1）
 ```
 
-不带 `--force` 的每一次 `orch worker start`，无论是否在终端中，都会先运行就绪检查。刚执行完 `orch init` 时，上面的启动命令会被拒绝，输出 `worker: readiness failed: ...`（退出码 2）。当 `orch doctor --ready --agent claude` 输出 `ready-for-live: READY` 后才会启动：工作进程和 `[review.agents.NAME]` 评审者的可执行文件名为 `claude` 或 `codex` 且已登录，已设置 `[merge] repo = "owner/name"`，工作目录是带 `origin` 的 Git 仓库，`gh` 已登录，已安装 `timeout` 或 `gtimeout`，并且 `orch load` 在 120 秒内运行过。其他代理 CLI 或包装命令显示为 `UNVERIFIED` 并被拒绝；在终端中加 `--force` 可以带警告启动。
+不带 `--force` 的每一次 `orch worker start`，无论是否在终端中，都会先运行就绪检查。刚执行完 `orch init` 时，上面的启动命令会被拒绝，输出 `worker: readiness failed: ...`（退出码 2）。`orch doctor --ready --agent claude` 输出 `ready-for-live: READY` 后，此命令可以通过准入，但工作进程名称重复或档案工作进程上限仍可拒绝启动。就绪检查要求：工作进程和 `[review.agents.NAME]` 评审者的可执行文件名为 `claude` 或 `codex` 且已登录，已设置 `[merge] repo = "owner/name"`，工作目录是带 `origin` 的 Git 仓库，`gh` 已登录，已安装 `timeout` 或 `gtimeout`，并且 `orch load` 在 120 秒内运行过。其他代理 CLI 或包装命令显示为 `UNVERIFIED` 并被拒绝；在终端中加 `--force` 可以带警告启动。
 
 完整参数和退出码见[命令参考](docs/commands.md)。
 

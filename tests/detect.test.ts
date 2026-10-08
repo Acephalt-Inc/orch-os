@@ -85,8 +85,8 @@ describe("InitDoctorTest", () => {
   });
 
   it("test_init_writes_detected_agents_and_default", async () => {
-    fakeBin(d.bins, "claude");
-    fakeBin(d.bins, "codex");
+    fakeBin(d.bins, "claude", "exit 0");
+    fakeBin(d.bins, "codex", "exit 3");
     let [code, out] = await run("init");
     expect(code, out).toBe(0);
     expect(out).toContain("<- default worker agent");
@@ -96,7 +96,8 @@ describe("InitDoctorTest", () => {
     [code, out] = await run("doctor");
     expect(code, out).toBe(0);
     expect(out).toContain("PASS  agent CLIs");
-    expect(out).toContain("PASS  agent codex");
+    expect(out).toMatch(/PASS {2}agent claude\s/);
+    expect(out).toMatch(/SKIP {2}agent codex\s+\S+ login status: exit 3\n/);
   });
 
   it("test_init_agent_flag_picks_default", async () => {
