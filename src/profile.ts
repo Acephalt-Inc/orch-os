@@ -1,101 +1,78 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /**
- * Adaptive profiles (docs/profiles.md): the [profile] tables of config.toml say which setup a
- * team has (compute: one / same-vendor / multi-vendor accounts; people: solo / team). policy()
- * turns the setup and a PR's tier into a reviewer requirement, a merge authority and a worker
- * cap. gateProfile() grades the approvals the plain gate already counted and reports the review
- * strength achieved.
+ * Profiles (docs/profiles.md): the [profile] tables of config.toml hold declared review context
+ * (accounts, vendors, people) and ONE explicitly selected policy, "human-merge": a non-author
+ * agent review of the PR's head at or above `required_review`, a listed teammate's approval on a
+ * high-tier PR of a team profile, and a person performing every merge. gateProfile() grades the
+ * approvals the plain gate already counted and reports the review strength achieved.
  *
- * Fail closed: an unknown account or vendor grades as single-agent, a missing capability turns
- * the feature that needs it off (never on), and `auto` authority is never reached through a
- * degrade. Accounts and vendors are declared, not verified: a process gate between cooperating
- * agents, not a security boundary. With no [profile] table none of this code runs.
+ * Nothing is derived from the number of accounts or vendors: the review strength needed and the
+ * worker limit are the values written in the table. A [profile] written for the built-in
+ * compute x people table of an earlier source version (no `policy` key) is refused with a migration
+ * message; it is never mapped to another rule.
+ *
+ * Fail closed: an unknown account or vendor grades as single-agent, a needed strength the setup
+ * cannot give is BLOCKED, and no merge authority is automatic. Accounts and vendors are declared,
+ * not verified: a process gate between cooperating agents, not a security boundary. With no
+ * [profile] table none of this code runs.
  */
 import { ConfigError } from "./config.js";
 import { ASSIGNMENTS, type Assignment, replaceTables, tableRanges, tomlKey, tomlValue } from "./toml.js";
 import { isPlainObject, validName } from "./util.js";
 
+/** Declared review context: how many agent accounts, and on how many agent CLIs. Selects no rule. */
 export type Compute = "one" | "same-vendor" | "multi-vendor";
 export type People = "solo" | "team";
 export type Tier = "low" | "high";
-/** Ordered, weakest first. */
+/** Ordered, weakest first. A label computed from declared accounts and vendors, not a measured quality. */
 export type Strength = "single-agent" | "cross-account" | "cross-vendor";
-export type Authority = "auto" | "owner" | "teammate";
-export type Cell = "A" | "B" | "C" | "D" | "E" | "F";
+/** Who performs the merge once the gate passes. Always a person. */
+export type Authority = "owner" | "teammate";
+/** The policies a [profile] can select. One public example; a profile names it explicitly. */
+export type PolicyName = "human-merge";
 
 export const COMPUTES: Compute[] = ["one", "same-vendor", "multi-vendor"];
 export const PEOPLE: People[] = ["solo", "team"];
 export const TIERS: Tier[] = ["low", "high"];
 export const STRENGTHS: Strength[] = ["single-agent", "cross-account", "cross-vendor"];
+export const POLICIES: PolicyName[] = ["human-merge"];
+
+/**
+ * The three values a person gives before a profile is written: the policy (which fixes who may
+ * merge), the review requirement and the worker limit. None has a default anywhere in orch.
+ */
+export interface Selection {
+  policy: PolicyName;
+  required_review: Strength;
+  max_workers: number;
+}
+/** The flags that carry a Selection, as the messages name them. */
+export const SELECT_FLAGS = "--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N";
 
 export interface Policy {
-  cell: Cell;
-  /** weakest agent review that satisfies the rule */
+  name: PolicyName;
+  /** weakest agent review that satisfies the rule: [profile] required_review */
   needAgent: Strength;
   /** a teammate's GitHub approval at the head is also required */
   needTeammate: boolean;
-  /** who may perform the merge once the gate passes */
+  /** who performs the merge once the gate passes */
   authority: Authority;
-  /** most workers running at once */
+  /** most workers running at once: [profile] max_workers */
   workerCap: number;
-}
-
-export interface PolicyInput {
-  compute: Compute;
-  people: People;
-  /** accounts listed in [profile.accounts] */
-  accounts: number;
-  workersPerAccount: number;
-  maxWorkers: number;
-  /** a degrade rule applied: `auto` authority is withdrawn */
-  degraded?: boolean;
-}
-
-type Row = { needAgent: Strength; needTeammate: boolean; authority: Authority };
-const r = (needAgent: Strength, needTeammate: boolean, authority: Authority): Row => ({ needAgent, needTeammate, authority });
-
-/** The decision table of docs/profiles.md section 5. */
-const TABLE: Record<Cell, Record<Tier, Row>> = {
-  A: { low: r("single-agent", false, "owner"), high: r("single-agent", false, "owner") },
-  B: { low: r("cross-account", false, "auto"), high: r("cross-account", false, "owner") },
-  C: { low: r("cross-account", false, "auto"), high: r("cross-vendor", false, "owner") },
-  D: { low: r("single-agent", true, "teammate"), high: r("single-agent", true, "teammate") },
-  E: { low: r("cross-account", false, "auto"), high: r("cross-account", true, "teammate") },
-  F: { low: r("cross-vendor", false, "auto"), high: r("cross-vendor", true, "teammate") },
-};
-
-export function cellOf(compute: Compute, people: People): Cell {
-  return (people === "solo" ? "ABC" : "DEF")[COMPUTES.indexOf(compute)] as Cell;
-}
-
-/**
- * Pure: the rule for one setup and tier. `compute` is the EFFECTIVE value (after degrade
- * rules). With `degraded`, an `auto` authority becomes the owner (solo) or a teammate (team);
- * a teammate authority always comes with a required teammate approval.
- */
-export function policy(p: PolicyInput, tier: Tier): Policy {
-  const cell = cellOf(p.compute, p.people);
-  // anything but "low" (a typo, a missing value) is the fail-closed tier
-  let { needAgent, needTeammate, authority } = TABLE[cell][tier === "low" ? "low" : "high"];
-  if (p.degraded && authority === "auto") {
-    authority = p.people === "solo" ? "owner" : "teammate";
-    needTeammate = authority === "teammate";
-  }
-  const derived = p.compute === "one" ? 1 : Math.max(1, p.workersPerAccount * (p.accounts - 1));
-  return { cell, needAgent, needTeammate, authority, workerCap: p.maxWorkers > 0 ? p.maxWorkers : derived };
 }
 
 // ---- the [profile] tables ---------------------------------------------------------------------
 
 export interface Profile {
+  policy: PolicyName;
   compute: Compute;
   people: People;
   lead_account: string | null;
+  required_review: Strength;
   default_tier: Tier;
   high_paths: string[];
   teammates: string[];
   max_workers: number;
-  workers_per_account: number;
   /** account id -> vendor (agent CLI name) */
   accounts: Record<string, string>;
   /** agent name (lower case) -> account id */
@@ -104,7 +81,11 @@ export interface Profile {
   raw: Record<string, any>;
 }
 
-const KEYS = ["compute", "people", "lead_account", "default_tier", "high_paths", "teammates", "max_workers", "workers_per_account", "accounts", "agents"];
+const KEYS = ["policy", "compute", "people", "lead_account", "required_review", "default_tier", "high_paths", "teammates", "max_workers", "accounts", "agents"];
+
+/** What to write instead of a profile that relied on the removed built-in table. */
+export const MIGRATION_HELP = 'set policy = "human-merge", required_review = "single-agent" | "cross-account" | "cross-vendor" and max_workers = N (N >= 1) in [profile], ' +
+  "using `orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`; a person performs every merge under this policy (docs/profiles.md)";
 
 function bad(msg: string): never {
   throw new ConfigError(msg);
@@ -116,10 +97,28 @@ function strList(v: unknown, key: string): string[] {
   return v as string[];
 }
 
-function count(v: unknown, dflt: number, key: string): number {
-  if (v === undefined) return dflt;
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) bad(`[profile] ${key} must be an integer >= 0 (got ${JSON.stringify(v)})`);
+/** [profile] max_workers: chosen by the operator, never derived. Missing, 0 or negative is refused. */
+function workerLimit(v: unknown): number {
+  if (v === undefined) bad("[profile] max_workers is required: the most workers running at once, an integer >= 1 that you choose (it is not derived from the number of accounts)");
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    bad(`[profile] max_workers must be an integer >= 1 (got ${JSON.stringify(v)}); 0 meant "derived from the number of accounts" in an earlier source version, and that derivation is removed`);
+  }
   return v as number;
+}
+
+/**
+ * A [profile] written for the removed compute x people table: refused, with what to set instead.
+ * It is not mapped to the public policy, because that could require less than the old table did.
+ */
+function refuseLegacy(raw: Record<string, any>): void {
+  if (raw.policy === undefined) {
+    bad("[profile] has no policy key: it may have been written for the built-in compute x people table that an earlier orch-os source version carried, or written by hand. That table is removed. " +
+      `No rule is chosen for you and none is applied; ${MIGRATION_HELP}`);
+  }
+  if (raw.workers_per_account !== undefined) {
+    bad("[profile] workers_per_account is not supported: the worker limit is not derived from the number of accounts. " +
+      "Remove the key and set max_workers = N (N >= 1); `orch profile update --max-workers N` does both");
+  }
 }
 
 function oneOf<T extends string>(v: unknown, allowed: T[], key: string, dflt?: T): T {
@@ -184,6 +183,7 @@ export function readProfile(cfg: Record<string, any>): Profile | null {
   if (raw === undefined) return null;
   if (!isPlainObject(raw)) bad("[profile] must be a table");
   checkForm(cfg);
+  refuseLegacy(raw);
   for (const k of Object.keys(raw)) if (!KEYS.includes(k)) bad(`[profile] unknown key '${k}' (known: ${KEYS.join(", ")})`);
   const accounts = nameMap(raw.accounts, "profile.accounts", "a vendor name, e.g. \"claude\"", true);
   const byName = nameMap(raw.agents, "profile.agents", "an account id");
@@ -200,52 +200,32 @@ export function readProfile(cfg: Record<string, any>): Profile | null {
     lead = raw.lead_account;
   } else if (Object.keys(accounts).length === 1) lead = Object.keys(accounts)[0];
   return {
+    policy: oneOf(raw.policy, POLICIES, "policy"),
     compute: oneOf(raw.compute, COMPUTES, "compute"),
     people: oneOf(raw.people, PEOPLE, "people"),
     lead_account: lead,
+    required_review: oneOf(raw.required_review, STRENGTHS, "required_review"),
     default_tier: oneOf(raw.default_tier, TIERS, "default_tier", "high"),
     high_paths: globList(raw.high_paths),
     teammates: strList(raw.teammates, "teammates"),
-    max_workers: count(raw.max_workers, 0, "max_workers"),
-    workers_per_account: count(raw.workers_per_account, 2, "workers_per_account"),
+    max_workers: workerLimit(raw.max_workers),
     accounts, agents, raw,
   };
 }
 
-// ---- degrade rules ----------------------------------------------------------------------------
+// ---- the policy -------------------------------------------------------------------------------
 
-export type Degrade = "one-account" | "no-second-vendor" | "one-reviewer-account";
-
-/** What each degrade code means, for the verdict. */
-export const DEGRADE_TEXT: Record<Degrade, string> = {
-  "one-account": "fewer than two accounts in [profile.accounts]",
-  "no-second-vendor": "every account in [profile.accounts] is on one vendor",
-  "one-reviewer-account": "the agents in [profile.agents] are on fewer than two accounts",
-};
-
-/** The compute value the accounts actually back, and the degrade rules that applied. */
-export function effective(p: Profile): { compute: Compute; degraded: Degrade[] } {
-  const accts = Object.keys(p.accounts);
-  const degraded: Degrade[] = [];
-  let compute = p.compute;
-  if (compute !== "one" && accts.length < 2) {
-    compute = "one";
-    degraded.push("one-account");
-  } else if (compute === "multi-vendor" && new Set(Object.values(p.accounts)).size < 2) {
-    compute = "same-vendor";
-    degraded.push("no-second-vendor");
-  }
-  if (compute !== "one" && new Set(Object.values(p.agents)).size < 2) degraded.push("one-reviewer-account");
-  return { compute, degraded };
-}
-
-export function policyFor(p: Profile, tier: Tier): Policy & { declaredCell: Cell; degraded: Degrade[] } {
-  const eff = effective(p);
-  const pol = policy({
-    compute: eff.compute, people: p.people, accounts: Object.keys(p.accounts).length,
-    workersPerAccount: p.workers_per_account, maxWorkers: p.max_workers, degraded: eff.degraded.length > 0,
-  }, tier);
-  return { ...pol, declaredCell: cellOf(p.compute, p.people), degraded: eff.degraded };
+/**
+ * Pure: the "human-merge" rule for one profile and tier. Every value is the one written in the
+ * table: the review strength is `required_review` on both tiers and the worker limit is
+ * `max_workers`. A team profile also needs a listed teammate's approval on the high tier.
+ * Anything but "low" (a typo, a missing value) is the high tier. The declared `compute`, the
+ * number of accounts and their vendors change nothing here: a strength the setup cannot give is
+ * BLOCKED by the gate, not lowered.
+ */
+export function policyFor(p: Profile, tier: Tier): Policy {
+  const needTeammate = p.people === "team" && tier !== "low";
+  return { name: p.policy, needAgent: p.required_review, needTeammate, authority: needTeammate ? "teammate" : "owner", workerCap: p.max_workers };
 }
 
 // ---- grading ----------------------------------------------------------------------------------
@@ -328,7 +308,7 @@ export function isTeammate(p: Profile, login: string): boolean {
 
 export interface GateInput {
   tierFlag?: Tier | null;
-  /** the caller merges automatically on PASS */
+  /** the caller would merge automatically on PASS: always a BLOCKED reason, no policy gives that authority */
   auto?: boolean;
   /** changed files, or null when unreadable */
   files: string[] | null;
@@ -351,21 +331,20 @@ export function gateProfile(p: Profile, g: GateInput): { ok: boolean; info: Reco
   if (pol.needTeammate && teammate !== "approved") {
     reasons.push(p.teammates.length ? "a teammate's approval at the head is required" : "no teammates listed in [profile] teammates");
   }
-  if (g.auto && pol.authority !== "auto") reasons.push(`--auto: merge authority is ${pol.authority}, not auto`);
+  if (g.auto) reasons.push(`--auto: policy ${pol.name} gives no automatic merge authority; a person performs the merge`);
   return {
     ok: reasons.length === 0,
     info: {
-      cell: pol.cell, declared_cell: pol.declaredCell, tier, tier_source: source, achieved: got, needed: pol.needAgent,
-      teammate, need_teammate: pol.needTeammate, authority: pol.authority, worker_cap: pol.workerCap,
-      degraded: pol.degraded, reasons,
+      policy: pol.name, tier, tier_source: source, achieved: got, needed: pol.needAgent,
+      teammate, need_teammate: pol.needTeammate, authority: pol.authority, worker_cap: pol.workerCap, reasons,
     },
   };
 }
 
 /** The strength line printed between the summary and the verdict. */
 export function strengthLine(i: Record<string, any>): string {
-  return `profile=${i.cell} tier=${i.tier}(${i.tier_source}) review=${i.achieved} needed=${i.needed} ` +
-    `teammate=${i.teammate} authority=${i.authority}` + (i.degraded.length ? ` degraded=${i.degraded.join(",")}` : "");
+  return `profile=${i.policy} tier=${i.tier}(${i.tier_source}) review=${i.achieved} needed=${i.needed} ` +
+    `teammate=${i.teammate} authority=${i.authority}`;
 }
 
 /** The verdict line under a profile. */
@@ -373,7 +352,6 @@ export function verdictLine(ok: boolean, i: Record<string, any>): string {
   const notes: string[] = [...i.reasons];
   if (ok && i.authority === "owner") notes.push(i.achieved.startsWith("single-agent") ? "single-agent review only; the owner decides the merge" : "the owner decides the merge");
   if (ok && i.authority === "teammate") notes.push("the teammate who approved, or the owner, performs the merge");
-  if (i.degraded.length) notes.push("missing: " + i.degraded.map((d: Degrade) => DEGRADE_TEXT[d]).join("; "));
   return `=> ${ok ? "PASS" : "BLOCKED"}` + (notes.length ? ` (${notes.join("; ")})` : "");
 }
 
@@ -396,25 +374,27 @@ function groupAccounts(p: Profile): string {
   return [...byVendor.entries()].map(([v, ids]) => `${ids.join(", ")} (${v})`).join(", ") || "none listed";
 }
 
-export function cellLabel(p: Profile): string {
-  const eff = effective(p);
-  return `cell ${cellOf(eff.compute, p.people)} (${eff.compute} · ${p.people})`;
+/** The selected policy and the declared context, for `init`, `profile show` and the doctor row. */
+export function profileLabel(p: Profile): string {
+  return `${p.policy} (${p.compute} · ${p.people})`;
 }
 
-/** One row per profile check. ok=false means a missing capability (SKIP): never a FAIL. */
+/**
+ * One row per profile check. ok=false means a missing capability (SKIP): never a FAIL. A missing
+ * capability never lowers the rule: the row says what stays BLOCKED until it is added.
+ */
 export function capabilityRows(p: Profile, env: Env): CapRow[] {
-  const rows: CapRow[] = [[true, "profile", `${cellLabel(p)}: accounts ${groupAccounts(p)}`]];
+  const rows: CapRow[] = [[true, "profile", `${profileLabel(p)}: accounts ${groupAccounts(p)}`]];
   const accts = Object.keys(p.accounts);
   const vendors = [...new Set(Object.values(p.accounts))];
   if (p.compute !== "one") {
     rows.push(accts.length >= 2 ? [true, "profile accounts", `${accts.length} accounts`]
       : [false, "profile accounts", `${p.compute} declared, but ${accts.length ? "only one account is" : "no account is"} listed in [profile.accounts]; ` +
-        "reviews count as single-agent and nothing merges automatically until a second account is added"]);
+        "no review can grade above single-agent until a second account is added"]);
   }
   if (p.compute === "multi-vendor" && accts.length >= 2) {
     rows.push(vendors.length >= 2 ? [true, "profile vendors", vendors.join(", ")]
-      : [false, "profile vendors", `multi-vendor declared, but every account is on '${vendors[0]}'; high-tier PRs get a same-vendor review only and ` +
-        (p.people === "solo" ? "the owner decides" : "a teammate decides")]);
+      : [false, "profile vendors", `multi-vendor declared, but every account is on '${vendors[0]}'; no review can grade as cross-vendor until an account on another vendor is added`]);
   }
   for (const v of vendors) {
     const ids = accts.filter((a) => p.accounts[a] === v);
@@ -425,15 +405,19 @@ export function capabilityRows(p: Profile, env: Env): CapRow[] {
   }
   if (p.people === "team") {
     rows.push(p.teammates.length ? [true, "profile teammates", p.teammates.join(", ")]
-      : [false, "profile teammates", "people = team, but [profile] teammates is empty; high-tier PRs (and every PR in cell D) stay BLOCKED until a login is added"]);
+      : [false, "profile teammates", "people = team, but [profile] teammates is empty; high-tier PRs stay BLOCKED until a login is added"]);
     rows.push(env.gh && env.repo ? [true, "profile teammate reviews", `read from GitHub (${env.repo})`]
       : [false, "profile teammate reviews", "teammate approvals are read from GitHub; gh is absent or [merge] repo is unset"]);
   }
-  if (effective(p).compute !== "one") {
+  if (p.required_review !== "single-agent") {
+    // can two mapped agents differ in what required_review compares: the account, or the account's vendor?
     const on = [...new Set(Object.values(p.agents))];
-    rows.push(on.length >= 2 ? [true, "profile reviewers", `agents on accounts ${on.join(", ")}`]
-      : [false, "profile reviewers", (on.length ? `every agent in [profile.agents] is on account ${on[0]}` : "no agent is listed in [profile.agents]") +
-        "; no review can be cross-account, so low-tier PRs will not merge automatically"]);
+    const kinds = p.required_review === "cross-vendor" ? [...new Set(on.map((a) => p.accounts[a]))] : on;
+    const what = p.required_review === "cross-vendor" ? "vendor" : "account";
+    rows.push(kinds.length >= 2 ? [true, "profile reviewers", `agents on ${what}s ${kinds.join(", ")}`]
+      : [false, "profile reviewers", `required_review = ${p.required_review}, but ` +
+        (kinds.length ? `every agent in [profile.agents] is on ${what} ${kinds[0]}` : "no agent is listed in [profile.agents]") +
+        `; every PR stays BLOCKED until an agent on another ${what} is added`]);
   }
   const unmapped = env.configured.filter((n) => !Object.hasOwn(p.agents, n.normalize("NFC").toLowerCase()));
   rows.push(unmapped.length ? [false, "profile agents", `${unmapped.length} agent(s) in [agents.*] have no account in [profile.agents]; their approvals grade as single-agent`]
@@ -443,7 +427,7 @@ export function capabilityRows(p: Profile, env: Env): CapRow[] {
 
 // ---- writing ----------------------------------------------------------------------------------
 
-const TOP_ORDER = ["compute", "people", "lead_account", "default_tier", "high_paths", "teammates", "max_workers", "workers_per_account"];
+const TOP_ORDER = ["policy", "compute", "people", "lead_account", "required_review", "default_tier", "high_paths", "teammates", "max_workers"];
 
 /** The [profile], [profile.accounts] and [profile.agents] tables for a raw profile object. */
 export function renderProfile(raw: Record<string, any>): string {
@@ -473,16 +457,22 @@ export function profileBlock(text: string): string {
   return tableRanges(text, isProfileTable).map(([s, e]) => text.slice(s, e)).join("");
 }
 
-/** Starting accounts for `orch init`: from the agent CLIs detection found. */
-export function initialProfile(compute: Compute, people: People, found: string[]): Record<string, any> {
+/**
+ * A new profile for `orch init`: the selection the person gave, written out in full, and starting
+ * accounts from the agent CLIs detection found. The accounts are labels to edit, not a rule.
+ * There is no default selection: the caller must have asked for one.
+ */
+export function initialProfile(compute: Compute, people: People, found: string[], sel: Selection): Record<string, any> {
   const accounts: Record<string, string> = {};
   if (found.length) {
     if (compute === "one") accounts.acct1 = found[0];
     else if (compute === "same-vendor") Object.assign(accounts, { acct1: found[0], acct2: found[0] });
     else found.forEach((v, i) => (accounts[`acct${i + 1}`] = v));
   }
-  const raw: Record<string, any> = { compute, people };
+  const raw: Record<string, any> = { policy: sel.policy, compute, people };
   if (Object.keys(accounts).length) raw.lead_account = "acct1";
+  raw.required_review = sel.required_review;
+  raw.max_workers = sel.max_workers;
   raw.accounts = accounts;
   raw.agents = {};
   return raw;

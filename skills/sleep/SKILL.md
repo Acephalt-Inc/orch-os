@@ -1,9 +1,11 @@
 ---
 name: sleep
-description: Use when the human says the whole team should stop for the night ("going to sleep, stop everything", "we're done for today") or invokes /sleep. Persists work state to disk, tells every worker to stop at a safe point, stops workers and scheduled polling, and writes a snapshot that the next morning's boot restores from. Not for leaving while work continues (/away, /caffeine).
+description: Use when the human says the whole team should stop for the night ("going to sleep, stop everything", "we're done for today") or invokes /sleep. Persists work state to disk, tells every worker to stop at a safe point, stops workers and scheduled polling, and writes a snapshot that the next morning's lead session restores from. Not for leaving while work continues (/away, /caffeine).
 ---
 
 # /sleep — persist, announce, stop, verify
+
+> Optional recipe. A person chooses to use it; it is not a product mode and nothing installs or schedules it. It grants no authority: every time, limit and permission in it is a value the operator sets.
 
 The morning restart must come from a written snapshot, never from what a session
 remembers. A restart from recollection silently drops the one loop nobody wrote down.
@@ -52,5 +54,6 @@ stopped before it hears "stop at a safe point" can die mid-commit.
 
 ## Morning
 
-Boot the lead (`/orch-lead-boot`), read `$ORCH_HOME/sleep.json`, and restart exactly the
+Start the lead session from the handbook file `orch init` wrote (`lead-boot.md`, by
+default `~/.orch/handbook/lead-boot.md`), read `$ORCH_HOME/sleep.json`, and restart exactly the
 jobs it lists. Compare the list with what is now running and report any difference.

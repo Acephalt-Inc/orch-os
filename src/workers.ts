@@ -30,6 +30,14 @@ export class WorkerError extends Error {
   }
 }
 
+/** start() refused: the running workers already reach the limit the caller passed. */
+export class WorkerLimitError extends WorkerError {
+  constructor(public running: number, public limit: number) {
+    super(`${running} worker(s) running and [profile] max_workers is ${limit}; stop one or raise max_workers`);
+    this.name = "WorkerLimitError";
+  }
+}
+
 /** Kernel start time of pid as printed by ps, or null. Tells a worker from a later pid reuse. */
 export function procStart(pid: number): string | null {
   try {
@@ -73,6 +81,8 @@ export interface StartOptions {
   base?: string | null;
   /** extra environment variables for the worker (added to this process's environment) */
   env?: Record<string, string>;
+  /** most workers running at once ([profile] max_workers); null or absent = no limit */
+  limit?: number | null;
 }
 
 export class Workers {
@@ -171,6 +181,12 @@ export class Workers {
     const tier = loadmod.readState(this.loadState).tier ?? "NORMAL";
     const blockTiers: string[] = this.cfg.block_tiers ?? ["HIGH", "CRITICAL"];
     if (blockTiers.includes(tier) && !opts.force) throw new WorkerError(`load tier ${tier}: start refused (wait, or --force)`);
+    // the written worker limit, checked here so that every caller of start() gets it. The count
+    // and the spawn are not one atomic step: two starts at the same instant can both pass.
+    if (opts.limit !== null && opts.limit !== undefined && !opts.force) {
+      const running = this.list().filter((x) => x.state === "RUNNING").length;
+      if (running >= opts.limit) throw new WorkerLimitError(running, opts.limit);
+    }
     if (opts.agent && opts.command && opts.command.length) throw new WorkerError("pass --agent or a command after --, not both");
     let tmpl: string[];
     if (opts.agent) {

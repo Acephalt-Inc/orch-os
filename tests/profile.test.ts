@@ -1,80 +1,139 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-// Adaptive profiles (docs/profiles.md): policy(), degrade rules, grading, tiers, the gate, the table writer.
+// Profiles (docs/profiles.md): the human-merge example policy, the refusal of a profile written for the removed
+// built-in table, grading, tiers, the gate, the table writer.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigError } from "../src/config.js";
 import * as M from "../src/mergegate.js";
 import * as P from "../src/profile.js";
 import { parseToml, replaceTables, tableHeaders } from "../src/toml.js";
+import { ROOT } from "./_helpers.js";
 
 const prof = (toml: string) => P.readProfile(parseToml(toml))!;
 
-/** docs/profiles.md section 5, "Decision table", copied as written. */
-const DOC_TABLE = `
-| A one · solo | low | single-agent | no | owner |
-| A one · solo | high | single-agent | no | owner |
-| B same-vendor · solo | low | cross-account | no | auto |
-| B same-vendor · solo | high | cross-account | no | owner |
-| C multi-vendor · solo | low | cross-account | no | auto |
-| C multi-vendor · solo | high | cross-vendor | no | owner |
-| D one · team | low | single-agent | yes | teammate |
-| D one · team | high | single-agent | yes | teammate |
-| E same-vendor · team | low | cross-account | no | auto |
-| E same-vendor · team | high | cross-account | yes | teammate |
-| F multi-vendor · team | low | cross-vendor | no | auto |
-| F multi-vendor · team | high | cross-vendor | yes | teammate |
-`;
-
-const ROWS = DOC_TABLE.trim().split("\n").map((line) => {
-  const [cellCol, tier, needAgent, needTeammate, authority] = line.split("|").slice(1, -1).map((x) => x.trim());
-  const [cell, compute, , people] = cellCol.split(" ");
-  return { cell, compute: compute as P.Compute, people: people as P.People, tier: tier as P.Tier, needAgent, needTeammate: needTeammate === "yes", authority };
-});
-
-const input = (compute: P.Compute, people: P.People, extra: Partial<P.PolicyInput> = {}): P.PolicyInput =>
-  ({ compute, people, accounts: 3, workersPerAccount: 2, maxWorkers: 0, ...extra });
+/** The public example policy, written out: the three keys a profile must carry. */
+const pol = (review: P.Strength = "single-agent", maxWorkers = 2) => `policy = "human-merge"\nrequired_review = "${review}"\nmax_workers = ${maxWorkers}\n`;
+/** A [profile] head: the example policy plus the declared compute and people. */
+const head = (compute: P.Compute, people: P.People, review: P.Strength = "single-agent", extra = "") =>
+  `[profile]\n${pol(review)}compute = "${compute}"\npeople = "${people}"\n${extra}`;
+const AUTO_REASON = "--auto: policy human-merge gives no automatic merge authority; a person performs the merge";
 
 describe("ProfilePolicy", () => {
-  it("all_12_rows_of_the_decision_table", () => {
-    expect(ROWS.length).toBe(12);
-    for (const row of ROWS) {
-      const got = P.policy(input(row.compute, row.people), row.tier);
-      expect({ cell: got.cell, needAgent: got.needAgent, needTeammate: got.needTeammate, authority: got.authority }, `${row.cell} ${row.tier}`)
-        .toEqual({ cell: row.cell, needAgent: row.needAgent, needTeammate: row.needTeammate, authority: row.authority });
+  it("the_example_policy_takes_every_value_from_the_table_as_written", () => {
+    let n = 0;
+    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) for (const review of P.STRENGTHS) for (const tier of P.TIERS) {
+      const needTeammate = people === "team" && tier === "high";
+      expect(P.policyFor(prof(head(compute, people, review)), tier), `${compute} ${people} ${review} ${tier}`)
+        .toEqual({ name: "human-merge", needAgent: review, needTeammate, authority: needTeammate ? "teammate" : "owner", workerCap: 2 });
+      n++;
+    }
+    expect(n).toBe(36);
+  });
+
+  it("no_setup_gives_automatic_authority", () => {
+    // every declared setup, review strength and tier: the authority is a person, and --auto is BLOCKED
+    // even when the review, the teammate approval and every other rule are met
+    const accounts = '[profile.accounts]\na1 = "claude"\na2 = "claude"\nx1 = "codex"\n[profile.agents]\nalice = "a1"\nbob = "x1"\n';
+    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) for (const review of P.STRENGTHS) for (const tier of P.TIERS) {
+      const p = prof(head(compute, people, review, 'teammates = ["carol"]\n') + accounts);
+      expect(["owner", "teammate"]).toContain(P.policyFor(p, tier).authority);
+      const input = { tierFlag: tier, files: [], approvers: ["bob"], authors: ["alice"], githubApproved: ["bob", "carol"] };
+      expect(P.gateProfile(p, input).ok, `${compute} ${people} ${review} ${tier}`).toBe(true); // control: the same input passes without --auto
+      const auto = P.gateProfile(p, { ...input, auto: true });
+      expect([auto.ok, auto.info.reasons], `${compute} ${people} ${review} ${tier}`).toEqual([false, [AUTO_REASON]]);
     }
   });
 
-  it("worker_cap_per_cell_and_override", () => {
-    for (const people of P.PEOPLE) {
-      expect(P.policy(input("one", people), "low").workerCap).toBe(1); // A, D: lead and one worker take turns
-      for (const compute of ["same-vendor", "multi-vendor"] as P.Compute[]) {
-        expect(P.policy(input(compute, people), "high").workerCap).toBe(4); // 2 per account x (3 accounts - lead's)
-        expect(P.policy(input(compute, people, { accounts: 2 }), "high").workerCap).toBe(2);
-        expect(P.policy(input(compute, people, { workersPerAccount: 0 }), "high").workerCap).toBe(1); // at least 1
+  it("the_worker_limit_is_the_written_value_never_derived", () => {
+    // the number of accounts and the declared compute do not change it
+    for (const compute of P.COMPUTES) {
+      for (const accounts of ["", '[profile.accounts]\na1 = "claude"\n', '[profile.accounts]\na1 = "claude"\na2 = "claude"\na3 = "codex"\n']) {
+        for (const n of [1, 3, 7]) {
+          const p = prof(`[profile]\n${pol("single-agent", n)}compute = "${compute}"\npeople = "solo"\n${accounts}`);
+          expect([p.max_workers, P.policyFor(p, "low").workerCap, P.policyFor(p, "high").workerCap]).toEqual([n, n, n]);
+        }
       }
-      for (const compute of P.COMPUTES) expect(P.policy(input(compute, people, { maxWorkers: 7 }), "low").workerCap).toBe(7);
     }
   });
 
   it("an_unknown_tier_is_treated_as_high", () => {
-    for (const row of ROWS.filter((x) => x.tier === "high")) {
-      const want = P.policy(input(row.compute, row.people), "high");
-      for (const t of ["medium", "HIGH", "LOW", "", undefined]) expect(P.policy(input(row.compute, row.people), t as P.Tier), `${row.cell} ${t}`).toEqual(want);
+    for (const people of P.PEOPLE) {
+      const p = prof(head("one", people));
+      const want = P.policyFor(p, "high");
+      for (const t of ["medium", "HIGH", "LOW", "", undefined]) expect(P.policyFor(p, t as P.Tier), `${people} ${t}`).toEqual(want);
+    }
+    expect(P.policyFor(prof(head("one", "team")), "high").needTeammate).toBe(true); // and high is the tier that needs the teammate
+    expect(P.policyFor(prof(head("one", "team")), "low").needTeammate).toBe(false);
+  });
+});
+
+describe("ProfileLegacy", () => {
+  it("a_profile_written_for_the_removed_table_is_refused_with_what_to_set", () => {
+    // each of the six compute x people setups the removed table covered, with and without accounts
+    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) {
+      for (const rest of ["", 'default_tier = "low"\nmax_workers = 3\n[profile.accounts]\na1 = "claude"\na2 = "codex"\n[profile.agents]\nw1 = "a1"\nr1 = "a2"\n']) {
+        const toml = `[profile]\ncompute = "${compute}"\npeople = "${people}"\n${rest}`;
+        expect(() => P.readProfile(parseToml(toml)), toml).toThrow(ConfigError);
+        let msg = "";
+        try {
+          P.readProfile(parseToml(toml));
+        } catch (e: any) {
+          msg = e.message;
+        }
+        expect(msg).toContain("[profile] has no policy key");
+        expect(msg).toContain("No rule is chosen for you and none is applied");
+        for (const want of ['policy = "human-merge"', 'required_review = "single-agent" | "cross-account" | "cross-vendor"', "max_workers = N (N >= 1)",
+          "orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N", "a person performs every merge", "docs/profiles.md"]) {
+          expect(msg, want).toContain(want);
+        }
+        expect(msg).not.toContain("--required-review cross-account --max-workers 2");
+        // placeholders only: outside the two lists of all three strengths and the bound "N >= 1", the message names no strength and gives no number
+        const outside = msg.replace('"single-agent" | "cross-account" | "cross-vendor"', "").replace("single-agent|cross-account|cross-vendor", "").replace("(N >= 1)", "");
+        expect(outside).not.toMatch(/single-agent|cross-account|cross-vendor|\d/);
+        expect(msg).not.toContain("\n"); // one line, like every other config error
+      }
     }
   });
 
-  it("a_degrade_never_gives_auto", () => {
-    for (const row of ROWS) {
-      const got = P.policy(input(row.compute, row.people, { degraded: true }), row.tier);
-      expect(got.authority, `${row.cell} ${row.tier}`).not.toBe("auto");
-      if (row.authority === "auto") expect(got.authority).toBe(row.people === "solo" ? "owner" : "teammate");
-      if (got.authority === "teammate") expect(got.needTeammate).toBe(true);
-      expect(got.needAgent).toBe(row.needAgent);
+  it("the_documented_migration_command_shows_placeholders_and_no_value_to_copy", () => {
+    let msg = "";
+    try {
+      P.readProfile(parseToml('[profile]\ncompute = "one"\npeople = "solo"\n'));
+    } catch (e: any) {
+      msg = e.message;
+    }
+    expect(msg).toContain("[profile] has no policy key");
+    // docs/profiles.md quotes the refusal as it is printed; docs/commands.md repeats its command
+    expect(readFileSync(join(ROOT, "docs/profiles.md"), "utf8")).toContain("```text\n" + msg + "\n```");
+    expect(readFileSync(join(ROOT, "docs/commands.md"), "utf8")).toContain("`orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`");
+    // neither page gives one strength or a number after the two flags
+    for (const file of ["docs/profiles.md", "docs/commands.md"]) {
+      expect(readFileSync(join(ROOT, file), "utf8"), file).not.toMatch(/--required-review (single-agent|cross-account|cross-vendor)(?![|\w-])|--max-workers \d/);
+    }
+  });
+
+  it("removed_worker_keys_and_unknown_policies_are_refused_not_reinterpreted", () => {
+    const bad = [
+      [head("same-vendor", "solo", "single-agent", "workers_per_account = 2\n"), "workers_per_account is not supported: the worker limit is not derived from the number of accounts"],
+      ['[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\ncompute = "same-vendor"\npeople = "solo"\n', "max_workers is required"],
+      ['[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\nmax_workers = 0\ncompute = "same-vendor"\npeople = "solo"\n', "max_workers must be an integer >= 1 (got 0)"],
+      ['[profile]\npolicy = "human-merge"\nmax_workers = 1\ncompute = "one"\npeople = "solo"\n', "required_review is required"],
+      ['[profile]\npolicy = "auto"\nrequired_review = "single-agent"\nmax_workers = 1\ncompute = "one"\npeople = "solo"\n', '[profile] policy must be "human-merge" (got "auto")'],
+      ['[profile]\npolicy = "human-merge"\nrequired_review = "none"\nmax_workers = 1\ncompute = "one"\npeople = "solo"\n', "required_review must be"],
+    ];
+    for (const [toml, msg] of bad) {
+      expect(() => P.readProfile(parseToml(toml)), toml).toThrow(ConfigError);
+      expect(() => P.readProfile(parseToml(toml))).toThrow(msg);
     }
   });
 });
 
 const C_SOLO = `
 [profile]
+policy = "human-merge"
+required_review = "cross-vendor"
+max_workers = 2
 compute = "multi-vendor"
 people = "solo"
 
@@ -91,44 +150,62 @@ rx = "x1"
 x2 = "x1"
 `;
 
-describe("ProfileDegrade", () => {
-  it("one_account_drops_to_the_one_column", () => {
+describe("ProfileDeclaredContext", () => {
+  const rowOf = (p: P.Profile, name: string) => P.capabilityRows(p, { found: [], configured: [], gh: false, repo: "" }).find((r) => r[1] === name);
+  const gate = (p: P.Profile, extra: Partial<P.GateInput> = {}) =>
+    P.gateProfile(p, { files: [], approvers: ["r1"], authors: ["w1"], githubApproved: [], ...extra });
+
+  it("one_account_never_lowers_a_cross_account_requirement", () => {
     for (const people of P.PEOPLE) {
-      const p = prof(`[profile]\ncompute = "same-vendor"\npeople = "${people}"\n[profile.accounts]\na1 = "claude"\n[profile.agents]\nw1 = "a1"\n`);
-      expect(P.effective(p)).toEqual({ compute: "one", degraded: ["one-account"] });
-      const pol = P.policyFor(p, "low");
-      expect([pol.cell, pol.declaredCell, pol.authority]).toEqual([people === "solo" ? "A" : "D", people === "solo" ? "B" : "E", people === "solo" ? "owner" : "teammate"]);
+      const p = prof(head("same-vendor", people, "cross-account") + '[profile.accounts]\na1 = "claude"\n[profile.agents]\nw1 = "a1"\nr1 = "a1"\n');
+      for (const tier of P.TIERS) expect(P.policyFor(p, tier).needAgent).toBe("cross-account");
+      const g = gate(p, { tierFlag: "low" });
+      expect([g.ok, g.info.needed, g.info.reasons]).toEqual([false, "cross-account", ["review strength single-agent is below cross-account"]]);
+      expect(rowOf(p, "profile accounts")).toEqual([false, "profile accounts",
+        "same-vendor declared, but only one account is listed in [profile.accounts]; no review can grade above single-agent until a second account is added"]);
+      expect(rowOf(p, "profile reviewers")).toEqual([false, "profile reviewers",
+        "required_review = cross-account, but every agent in [profile.agents] is on account a1; every PR stays BLOCKED until an agent on another account is added"]);
     }
   });
 
   it("vendor_names_are_trimmed_and_lower_cased", () => {
     const p = prof(C_SOLO.replace('c2 = "claude"', 'c2 = "Claude "').replace('x1 = "codex"', 'x1 = "CODEX"'));
     expect(p.accounts).toEqual({ c1: "claude", c2: "claude", x1: "codex" });
-    expect(P.effective(p)).toEqual({ compute: "multi-vendor", degraded: [] });
     expect(P.grade(p, "lead", ["w1"])).toBe("cross-account");
+    expect(rowOf(p, "profile vendors")).toEqual([true, "profile vendors", "claude, codex"]);
     const same = prof(C_SOLO.replace('x1 = "codex"', 'x1 = "Claude"'));
-    expect(P.effective(same)).toEqual({ compute: "same-vendor", degraded: ["no-second-vendor"] });
     expect(P.grade(same, "rx", ["w1"])).toBe("cross-account");
+    expect(rowOf(same, "profile vendors")![0]).toBe(false);
   });
 
-  it("one_vendor_drops_multi_vendor_to_same_vendor_without_auto", () => {
+  it("one_vendor_never_lowers_a_cross_vendor_requirement", () => {
     const p = prof(C_SOLO.replace('x1 = "codex"', 'x1 = "claude"'));
-    expect(P.effective(p)).toEqual({ compute: "same-vendor", degraded: ["no-second-vendor"] });
-    expect([P.policyFor(p, "high").cell, P.policyFor(p, "high").needAgent, P.policyFor(p, "high").authority]).toEqual(["B", "cross-account", "owner"]);
-    expect(P.policyFor(p, "low").authority).toBe("owner");
+    for (const tier of P.TIERS) expect([P.policyFor(p, tier).needAgent, P.policyFor(p, tier).authority]).toEqual(["cross-vendor", "owner"]);
+    // rx is on another account of the same vendor: cross-account, which stays below what the profile asks for
+    const g = gate(p, { approvers: ["rx"], tierFlag: "high" });
+    expect([g.ok, g.info.achieved, g.info.reasons]).toEqual([false, "cross-account", ["review strength cross-account is below cross-vendor"]]);
+    expect(rowOf(p, "profile vendors")).toEqual([false, "profile vendors",
+      "multi-vendor declared, but every account is on 'claude'; no review can grade as cross-vendor until an account on another vendor is added"]);
+    expect(rowOf(p, "profile reviewers")).toEqual([false, "profile reviewers",
+      "required_review = cross-vendor, but every agent in [profile.agents] is on vendor claude; every PR stays BLOCKED until an agent on another vendor is added"]);
   });
 
-  it("agents_on_one_account_withdraw_auto", () => {
-    const p = prof(`[profile]\ncompute = "same-vendor"\npeople = "team"\nteammates = ["carol"]\n[profile.accounts]\na1 = "codex"\na2 = "codex"\n[profile.agents]\nw1 = "a1"\nr1 = "a1"\n`);
-    expect(P.effective(p)).toEqual({ compute: "same-vendor", degraded: ["one-reviewer-account"] });
-    const low = P.policyFor(p, "low");
-    expect([low.cell, low.authority, low.needTeammate]).toEqual(["E", "teammate", true]);
+  it("agents_on_one_account_keep_the_teammate_rule_and_the_requirement", () => {
+    const p = prof(head("same-vendor", "team", "cross-account", 'teammates = ["carol"]\n') + '[profile.accounts]\na1 = "codex"\na2 = "codex"\n[profile.agents]\nw1 = "a1"\nr1 = "a1"\n');
+    const high = P.policyFor(p, "high");
+    expect([high.needAgent, high.authority, high.needTeammate]).toEqual(["cross-account", "teammate", true]);
+    expect(gate(p, { tierFlag: "high", githubApproved: ["carol"] }).info.reasons).toEqual(["review strength single-agent is below cross-account"]);
+    expect(rowOf(p, "profile reviewers")![0]).toBe(false);
   });
 
-  it("a_fully_backed_profile_has_no_degrade", () => {
+  it("a_fully_backed_profile_has_no_missing_capability_and_still_no_auto", () => {
     const p = prof(C_SOLO);
-    expect(P.effective(p)).toEqual({ compute: "multi-vendor", degraded: [] });
-    expect(P.policyFor(p, "low").authority).toBe("auto");
+    const rows = P.capabilityRows(p, { found: ["claude", "codex"], configured: [], gh: true, repo: "o/n" });
+    expect(rows.map((r) => [r[0], r[1]])).toEqual([[true, "profile"], [true, "profile accounts"], [true, "profile vendors"],
+      [true, "profile vendor claude"], [true, "profile vendor codex"], [true, "profile reviewers"], [true, "profile agents"]]);
+    expect(rows[0][2]).toBe("human-merge (multi-vendor · solo): accounts c1, c2 (claude), x1 (codex)");
+    expect(gate(p, { approvers: ["rx"] }).ok).toBe(true);
+    expect(gate(p, { approvers: ["rx"], auto: true }).info.reasons).toEqual([AUTO_REASON]);
   });
 });
 
@@ -172,7 +249,31 @@ describe("ProfileGrading", () => {
 });
 
 describe("ProfileTier", () => {
-  const withPaths = (extra = "") => prof(`[profile]\ncompute = "one"\npeople = "solo"\nhigh_paths = ["migrations/**", "src/*.ts"]\n${extra}`);
+  const withPaths = (extra = "") => prof(head("one", "solo", "single-agent", `high_paths = ["migrations/**", "src/*.ts"]\n${extra}`));
+
+  it("the_documented_tier_order_and_its_two_exceptions_hold", () => {
+    const lowWithPaths = withPaths('default_tier = "low"\n');
+    const lowNoPaths = prof(head("one", "solo", "single-agent", 'default_tier = "low"\n'));
+    // with path rules, a list that cannot be read is high
+    expect(P.chooseTier(lowWithPaths, null, null)).toEqual({ tier: "high", source: "files unreadable" });
+    // exception 1: --tier low is taken as given, even then
+    expect(P.chooseTier(lowWithPaths, "low", null)).toEqual({ tier: "low", source: "flag" });
+    // exception 2: without path rules the list is not read, so the tier is default_tier
+    expect(P.chooseTier(lowNoPaths, null, null)).toEqual({ tier: "low", source: "default" });
+    // a configured tier outside low/high is a config error, not a silent high
+    expect(() => prof(head("one", "solo", "single-agent", 'default_tier = "medium"\n'))).toThrow(ConfigError);
+    // the public pages state this order, and not the unconditional sentence they carried before
+    const pages: [string, string, string][] = [
+      ["docs/profiles.md", "Any value other than `low` is treated as `high`", "`--tier low` is taken as given even when the list cannot be read, and a profile without `high_paths` does not read the list, so its tier is `default_tier`"],
+      ["README.md", "A missing or unrecognized risk tier is treated as high", "else `high` when the profile has `high_paths` and a changed file matches or the file list cannot be read; else `default_tier`"],
+      ["README.zh.md", "缺失或无法识别的风险档一律按高风险处理", "配置档有 `high_paths` 且变更文件命中规则或文件列表读不全时为 `high`；否则用 `default_tier`"],
+    ];
+    for (const [file, removed, stated] of pages) {
+      const text = readFileSync(join(ROOT, file), "utf8");
+      expect(text, file).not.toContain(removed);
+      expect(text, file).toContain(stated);
+    }
+  });
 
   it("flag_then_path_then_default", () => {
     expect(P.chooseTier(withPaths(), "low", ["migrations/1.sql"])).toEqual({ tier: "low", source: "flag" }); // --tier low beats a path
@@ -181,15 +282,15 @@ describe("ProfileTier", () => {
     expect(P.chooseTier(withPaths('default_tier = "low"'), null, ["README.md"])).toEqual({ tier: "low", source: "default" });
     expect(P.chooseTier(withPaths(), null, ["README.md"])).toEqual({ tier: "high", source: "default" }); // default_tier defaults to high
     expect(P.chooseTier(withPaths('default_tier = "low"'), null, null)).toEqual({ tier: "high", source: "files unreadable" });
-    expect(P.chooseTier(prof('[profile]\ncompute = "one"\npeople = "solo"\ndefault_tier = "low"\n'), null, null)).toEqual({ tier: "low", source: "default" });
+    expect(P.chooseTier(prof(head("one", "solo", "single-agent", 'default_tier = "low"\n')), null, null)).toEqual({ tier: "low", source: "default" });
   });
 
   it("a_leading_slash_in_high_paths_is_dropped", () => {
-    const p = prof('[profile]\ncompute = "one"\npeople = "solo"\ndefault_tier = "low"\nhigh_paths = ["/migrations/**", "//infra/*.tf"]\n');
+    const p = prof(head("one", "solo", "single-agent", 'default_tier = "low"\nhigh_paths = ["/migrations/**", "//infra/*.tf"]\n'));
     expect(p.high_paths).toEqual(["migrations/**", "infra/*.tf"]);
     expect(P.chooseTier(p, null, ["migrations/0042.sql"])).toEqual({ tier: "high", source: "path: migrations/0042.sql" });
     expect(P.chooseTier(p, null, ["infra/dns.tf"]).tier).toBe("high");
-    expect(() => prof('[profile]\ncompute = "one"\npeople = "solo"\nhigh_paths = ["/"]\n')).toThrow("high_paths: '/' matches no file");
+    expect(() => prof(head("one", "solo", "single-agent", 'high_paths = ["/"]\n'))).toThrow("high_paths: '/' matches no file");
   });
 
   it("globs", () => {
@@ -211,6 +312,9 @@ describe("ProfileTier", () => {
 
 const TEAM_E = `
 [profile]
+policy = "human-merge"
+required_review = "cross-account"
+max_workers = 2
 compute = "same-vendor"
 people = "team"
 teammates = ["Carol"]
@@ -229,14 +333,21 @@ describe("ProfileGate", () => {
   const gate = (p: P.Profile, extra: Partial<P.GateInput> = {}) =>
     P.gateProfile(p, { files: [], approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"], ...extra });
 
-  it("auto_passes_only_under_auto_authority", () => {
-    expect(gate(e, { tierFlag: "low", auto: true }).ok).toBe(true);
+  it("auto_never_passes_and_a_person_performs_the_merge", () => {
+    // low tier, review rule met: PASS for a person, BLOCKED for --auto
+    expect([gate(e, { tierFlag: "low" }).ok, gate(e, { tierFlag: "low" }).info.authority]).toEqual([true, "owner"]);
+    const lo = gate(e, { tierFlag: "low", auto: true });
+    expect([lo.ok, lo.info.reasons]).toEqual([false, [AUTO_REASON]]);
+    // high tier with the teammate's approval: the same
+    expect([gate(e, { tierFlag: "high", githubApproved: ["bob", "carol"] }).ok, gate(e, { tierFlag: "high", githubApproved: ["bob", "carol"] }).info.authority]).toEqual([true, "teammate"]);
     const hi = gate(e, { tierFlag: "high", auto: true, githubApproved: ["bob", "carol"] });
-    expect([hi.ok, hi.info.reasons]).toEqual([false, ["--auto: merge authority is teammate, not auto"]]);
+    expect([hi.ok, hi.info.reasons]).toEqual([false, [AUTO_REASON]]);
     const b = prof(TEAM_E.replace('people = "team"', 'people = "solo"'));
-    const own = gate(b, { tierFlag: "high", auto: true });
-    expect([own.ok, own.info.reasons]).toEqual([false, ["--auto: merge authority is owner, not auto"]]);
-    expect(gate(b, { tierFlag: "high" }).ok).toBe(true); // without --auto the owner rule passes
+    for (const tier of P.TIERS) {
+      const own = gate(b, { tierFlag: tier, auto: true });
+      expect([own.ok, own.info.reasons]).toEqual([false, [AUTO_REASON]]);
+      expect(gate(b, { tierFlag: tier }).ok).toBe(true); // without --auto the owner rule passes
+    }
   });
 
   it("teammate_approval_at_head_listed_not_author", () => {
@@ -258,54 +369,62 @@ describe("ProfileGate", () => {
     expect(gate(p, { tierFlag: "low" }).ok).toBe(true);
   });
 
-  it("strength_and_verdict_lines_match_the_design_examples", () => {
+  it("strength_and_verdict_lines_match_the_documented_examples", () => {
     const c = prof(C_SOLO.replace("[profile.agents]", '[profile.agents]\nalice = "c2"\nbob = "c1"').replace('people = "solo"', 'people = "solo"\nhigh_paths = ["infra/**"]'));
     const g1 = P.gateProfile(c, { files: ["infra/dns.tf"], approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"] });
     expect([P.strengthLine(g1.info), P.verdictLine(g1.ok, g1.info)]).toEqual([
-      "profile=C tier=high(path: infra/dns.tf) review=cross-account needed=cross-vendor teammate=n/a authority=owner",
+      "profile=human-merge tier=high(path: infra/dns.tf) review=cross-account needed=cross-vendor teammate=n/a authority=owner",
       "=> BLOCKED (review strength cross-account is below cross-vendor)"]);
     const b = prof(TEAM_E.replace('people = "team"', 'people = "solo"'));
     const g2 = P.gateProfile(b, { tierFlag: "low", files: null, approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"] });
     expect([P.strengthLine(g2.info), P.verdictLine(g2.ok, g2.info)]).toEqual([
-      "profile=B tier=low(flag) review=cross-account needed=cross-account teammate=n/a authority=auto", "=> PASS"]);
-    const a = prof('[profile]\ncompute = "one"\npeople = "solo"\n[profile.accounts]\nmain = "claude"\n[profile.agents]\nw1 = "main"\nr1 = "main"\n');
+      "profile=human-merge tier=low(flag) review=cross-account needed=cross-account teammate=n/a authority=owner", "=> PASS (the owner decides the merge)"]);
+    const a = prof(head("one", "solo") + '[profile.accounts]\nmain = "claude"\n[profile.agents]\nw1 = "main"\nr1 = "main"\n');
     const g3 = P.gateProfile(a, { files: null, approvers: ["r1"], authors: ["w1"], githubApproved: [] });
     expect([P.strengthLine(g3.info), P.verdictLine(g3.ok, g3.info)]).toEqual([
-      "profile=A tier=high(default) review=single-agent needed=single-agent teammate=n/a authority=owner",
+      "profile=human-merge tier=high(default) review=single-agent needed=single-agent teammate=n/a authority=owner",
       "=> PASS (single-agent review only; the owner decides the merge)"]);
+    const g4 = P.gateProfile(e, { tierFlag: "high", files: null, approvers: ["bob"], authors: ["alice"], githubApproved: ["bob", "carol"] });
+    expect([P.strengthLine(g4.info), P.verdictLine(g4.ok, g4.info)]).toEqual([
+      "profile=human-merge tier=high(flag) review=cross-account needed=cross-account teammate=approved authority=teammate",
+      "=> PASS (the teammate who approved, or the owner, performs the merge)"]);
+    expect(Object.keys(g4.info)).toEqual(["policy", "tier", "tier_source", "achieved", "needed", "teammate", "need_teammate", "authority", "worker_cap", "reasons"]);
   });
 
-  it("a_degraded_verdict_names_the_missing_capability", () => {
-    const p = prof('[profile]\ncompute = "same-vendor"\npeople = "solo"\n[profile.accounts]\na1 = "claude"\n');
-    const g = P.gateProfile(p, { tierFlag: "low", auto: true, files: null, approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"] });
-    expect(P.strengthLine(g.info)).toBe("profile=A tier=low(flag) review=single-agent (unmapped) needed=single-agent teammate=n/a authority=owner degraded=one-account");
-    expect(P.verdictLine(g.ok, g.info)).toBe("=> BLOCKED (--auto: merge authority is owner, not auto; missing: fewer than two accounts in [profile.accounts])");
+  it("a_requirement_the_setup_cannot_meet_blocks_and_names_the_shortfall", () => {
+    // same-vendor declared with one account and unmapped agents: the removed table lowered this to a single-agent rule; now it blocks
+    const p = prof(head("same-vendor", "solo", "cross-account") + '[profile.accounts]\na1 = "claude"\n');
+    const g = P.gateProfile(p, { tierFlag: "low", files: null, approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"] });
+    expect(P.strengthLine(g.info)).toBe("profile=human-merge tier=low(flag) review=single-agent (unmapped) needed=cross-account teammate=n/a authority=owner");
+    expect(P.verdictLine(g.ok, g.info)).toBe("=> BLOCKED (review strength single-agent (unmapped) is below cross-account)");
+    const auto = P.gateProfile(p, { tierFlag: "low", auto: true, files: null, approvers: ["bob"], authors: ["alice"], githubApproved: ["bob"] });
+    expect(P.verdictLine(auto.ok, auto.info)).toBe(`=> BLOCKED (review strength single-agent (unmapped) is below cross-account; ${AUTO_REASON})`);
   });
 });
 
 describe("ProfileConfig", () => {
   it("validation_errors_are_config_errors", () => {
     const bad = [
-      ['[profile]\npeople = "solo"\n', "compute is required"],
-      ['[profile]\ncompute = "two"\npeople = "solo"\n', 'compute must be "one" or "same-vendor" or "multi-vendor"'],
-      ['[profile]\ncompute = "one"\npeople = "crowd"\n', "people must be"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\ndefault_tier = "medium"\n', "default_tier must be"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\nmax_workers = -1\n', "max_workers must be an integer >= 0"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\nworkers_per_account = 1.5\n', "workers_per_account must be an integer >= 0"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\nhigh_path = []\n', "unknown key 'high_path'"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\nteammates = "carol"\n', "teammates must be an array"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\n[profile.agents]\nr1 = "nope"\n', "'nope' is not an account"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\nlead_account = "x"\n', "lead_account must be an account"],
-      ['[profile]\ncompute = "one"\npeople = "solo"\n[profile.accounts]\na1 = 3\n', "a1 must be a vendor name"],
+      [`[profile]\n${pol()}people = "solo"\n`, "compute is required"],
+      [`[profile]\n${pol()}compute = "two"\npeople = "solo"\n`, 'compute must be "one" or "same-vendor" or "multi-vendor"'],
+      [head("one", "crowd" as P.People), "people must be"],
+      [head("one", "solo", "single-agent", 'default_tier = "medium"\n'), "default_tier must be"],
+      [`[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\nmax_workers = -1\ncompute = "one"\npeople = "solo"\n`, "max_workers must be an integer >= 1"],
+      [`[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\nmax_workers = 1.5\ncompute = "one"\npeople = "solo"\n`, "max_workers must be an integer >= 1"],
+      [head("one", "solo", "single-agent", "high_path = []\n"), "unknown key 'high_path'"],
+      [head("one", "solo", "single-agent", 'teammates = "carol"\n'), "teammates must be an array"],
+      [head("one", "solo") + '[profile.agents]\nr1 = "nope"\n', "'nope' is not an account"],
+      [head("one", "solo", "single-agent", 'lead_account = "x"\n'), "lead_account must be an account"],
+      [head("one", "solo") + "[profile.accounts]\na1 = 3\n", "a1 must be a vendor name"],
     ];
     for (const [toml, msg] of bad) {
       expect(() => P.readProfile(parseToml(toml)), toml).toThrow(ConfigError);
       expect(() => P.readProfile(parseToml(toml))).toThrow(msg);
     }
     expect(P.readProfile(parseToml('[orch]\nteam = "x"\n'))).toBeNull();
-    // declared compute the accounts do not back is not a config error (a degrade instead)
-    expect(P.readProfile(parseToml('[profile]\ncompute = "multi-vendor"\npeople = "team"\n'))!.compute).toBe("multi-vendor");
-    expect(prof('[profile]\ncompute = "one"\npeople = "solo"\n[profile.accounts]\nonly = "claude"\n').lead_account).toBe("only");
+    // declared compute the accounts do not back is not a config error (a missing capability instead)
+    expect(prof(head("multi-vendor", "team")).compute).toBe("multi-vendor");
+    expect(prof(head("one", "solo") + '[profile.accounts]\nonly = "claude"\n').lead_account).toBe("only");
   });
 
   const TEXT = `# top comment
@@ -375,10 +494,20 @@ nice = 5
     expect(replaceTables(arr, (n) => n[0] === "profile", "")).toBe('[w]\nx = [\n [1],\n]\n');
   });
 
-  it("initial_profile_uses_the_detected_clis", () => {
-    expect(P.initialProfile("one", "solo", ["codex", "claude"])).toEqual({ compute: "one", people: "solo", lead_account: "acct1", accounts: { acct1: "codex" }, agents: {} });
-    expect(P.initialProfile("same-vendor", "team", ["claude"]).accounts).toEqual({ acct1: "claude", acct2: "claude" });
-    expect(P.initialProfile("multi-vendor", "solo", ["claude", "codex"]).accounts).toEqual({ acct1: "claude", acct2: "codex" });
-    expect(P.initialProfile("multi-vendor", "solo", [])).toEqual({ compute: "multi-vendor", people: "solo", accounts: {}, agents: {} });
+  it("initial_profile_writes_the_given_selection_and_the_detected_clis", () => {
+    const example = { policy: "human-merge", required_review: "single-agent", max_workers: 1 } as const;
+    expect(P.initialProfile("one", "solo", ["codex", "claude"], example)).toEqual({ ...example, compute: "one", people: "solo", lead_account: "acct1", accounts: { acct1: "codex" }, agents: {} });
+    expect(P.initialProfile("same-vendor", "team", ["claude"], example).accounts).toEqual({ acct1: "claude", acct2: "claude" });
+    expect(P.initialProfile("multi-vendor", "solo", ["claude", "codex"], example).accounts).toEqual({ acct1: "claude", acct2: "codex" });
+    expect(P.initialProfile("multi-vendor", "solo", [], example)).toEqual({ ...example, compute: "multi-vendor", people: "solo", accounts: {}, agents: {} });
+    // the selection is written as given for every setup: the number of accounts or vendors found changes no policy value
+    for (const compute of P.COMPUTES) for (const people of P.PEOPLE) for (const review of P.STRENGTHS) for (const max of [1, 6]) {
+      const raw = P.initialProfile(compute, people, ["claude", "codex"], { policy: "human-merge", required_review: review, max_workers: max });
+      expect([raw.policy, raw.required_review, raw.max_workers]).toEqual(["human-merge", review, max]);
+      expect(P.readProfile(parseToml(P.renderProfile(raw)))!.max_workers).toBe(max); // what init writes reads back
+    }
+    // there is no default selection to fall back on
+    expect((P as any).EXAMPLE_POLICY).toBeUndefined();
+    expect(() => P.readProfile(parseToml(P.renderProfile((P.initialProfile as any)("one", "solo", ["claude"], {}))))).toThrow(ConfigError);
   });
 });
