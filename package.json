@@ -36,10 +36,10 @@
     "linux"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && vitest run",
-    "prepack": "tsc -p tsconfig.json",
-    "prepare": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "test": "npm run build && vitest run",
+    "prepack": "npm run build",
+    "prepare": "npm run build"
   },
   "keywords": [
     "agents",

@@ -58,7 +58,8 @@ describe("NoProfileUnchanged", () => {
     expect(norm(readCfg(d.home))).toBe(snap.config_toml);
     const [, dout] = await run("doctor");
     const rows = dout.split("\n").filter((l) => /^(PASS|FAIL|SKIP) {2}/.test(l)).map((l) => l.slice(6).split(/\s{2,}/)[0].trim());
-    expect(rows).toEqual(snap.doctor_rows);
+    expect(rows.filter((r) => !r.startsWith("schedule "))).toEqual(snap.doctor_rows);
+    expect(rows.filter((r) => r.startsWith("schedule "))).toEqual(["schedule lease-renew", "schedule load-sample"]);
     expect(dout).not.toContain("profile");
     const t = new Tasks(join(d.home, "tasks"));
     t.claim("t-w1", "w1");

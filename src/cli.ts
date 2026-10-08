@@ -18,6 +18,7 @@ import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js"
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
+import * as S from "./schedule.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
@@ -111,6 +112,32 @@ function mem(cfg: Record<string, any>): Mem {
 
 function handbookDir(cfg: Record<string, any>): string {
   return C.expand((cfg.handbook ?? {}).dir ?? join(C.orchHome(), "handbook"));
+}
+
+function scheduleContext(host: S.Host): S.RunContext {
+  return {
+    home: host.home,
+    nodeBin: process.execPath,
+    orchBin: S.resolveOrchBin(process.argv[1] ?? "orch", host),
+    orchHome: process.env.ORCH_HOME ? C.orchHome() : undefined,
+    logDir: C.expand(join(C.orchHome(), "schedule", "logs")),
+  };
+}
+
+type ScheduleInventoryRow = S.StatusRow & { unavailable: boolean };
+
+function scheduleInventory(backend: S.BackendName, tree: ReturnType<typeof buildTree>,
+                           ctx: S.RunContext, host: S.Host): ScheduleInventoryRow[] {
+  const available = new Set(S.available(tree).map((job) => job.id));
+  const jobs = new Map(S.CANDIDATES.map((job) => [job.id, job]));
+  return S.status(backend, S.CANDIDATES, ctx, host).map((row) => {
+    if (available.has(row.id)) return { ...row, unavailable: false };
+    const job = jobs.get(row.id)!;
+    const absentCommand = `no \`orch ${job.argv.join(" ")}\` subcommand in this build`;
+    const installed = row.written || row.loaded || row.degraded;
+    return { ...row, unavailable: true, loaded: false, degraded: installed,
+      detail: installed ? `ERROR: ${absentCommand}; ${row.detail}` : `${absentCommand} - not scheduled` };
+  });
 }
 
 function session(a: Args): string {
@@ -445,6 +472,18 @@ const cmdDoctor: Run = (_a, io) => {
     // review watch rows only with [review.agents] or a watch state directory: otherwise none
     check("review watch", () => {
       for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
+    });
+    check("schedule", () => {
+      const host = S.realHost();
+      if (host.platform !== "darwin" && host.platform !== "linux") {
+        add(false, "schedule", "no backend for this platform - `orch schedule` unavailable", true);
+        return;
+      }
+      const backend = S.detectBackend(host);
+      const ctx = scheduleContext(host);
+      for (const r of scheduleInventory(backend, buildTree(), ctx, host)) {
+        add(r.loaded, `schedule ${r.id}`, `${r.label}: ${r.detail} (${backend})`, !r.degraded);
+      }
     });
   }
   const w = Math.max(...rows.map((r) => r[1].length));
@@ -1024,6 +1063,81 @@ const cmdProfile: Run = (a, io) => {
   return showProfile(io, parseToml(next), false);
 };
 
+const cmdSchedule: Run = (a, io) => {
+  const action = a._path[2]; // "install" | "status" | "remove"
+  const tree = buildTree();
+  const avail = S.available(tree);
+  const missing = S.unavailable(tree);
+  const host = S.realHost();
+  let backend: S.BackendName;
+  let ctx: S.RunContext;
+  try {
+    backend = (a.backend as S.BackendName | null) || S.detectBackend(host);
+    ctx = scheduleContext(host);
+  } catch (e: any) {
+    eprintln(io, `schedule: ${e.message}`);
+    return 2;
+  }
+  if (action === "install" && avail.some((j) => j.id === "lease-renew")) {
+    const requested = session(a);
+    const [code, result] = lease(C.loadOrDefault()).run("status");
+    const current = result.state ?? {};
+    if (code !== 0 || result.status !== "HELD" || current.state !== "ACTIVE"
+        || current.session_id !== requested || !Number.isSafeInteger(current.epoch) || current.epoch < 1) {
+      eprintln(io, `schedule: current lease holder must match session '${requested}'; acquire the lease first`);
+      return 2;
+    }
+    ctx.leaseSession = requested;
+    ctx.leaseEpoch = current.epoch;
+  }
+  try {
+    if (action === "install") {
+      for (const j of missing) println(io, `schedule: skipping '${j.id}' (${j.label}) - no \`orch ${j.argv.join(" ")}\` subcommand in this build`);
+      if (!avail.length) {
+        println(io, "schedule: no candidate job has a CLI subcommand in this build; nothing to install");
+        return 0;
+      }
+      if (a.dry_run) {
+        for (const f of S.render(backend, avail, ctx)) {
+          println(io, `--- ${f.path} ---`);
+          io.out(f.contents.endsWith("\n") ? f.contents : f.contents + "\n");
+        }
+        return 0;
+      }
+      const installed = S.installedBackend(host);
+      if (installed && installed !== backend) {
+        eprintln(io, `schedule: ${installed} jobs already installed; run orch schedule remove --backend ${installed} before switching to ${backend}`);
+        return 2;
+      }
+      const rows = S.install(backend, avail, ctx, host);
+      for (const r of rows) println(io, `installed ${r.id} -> ${r.path} (${r.activated ? "activated" : "written; " + r.detail})`);
+      const exitCode = S.installExitCode(rows);
+      println(io, `schedule: ${exitCode ? "activation failed for one or more of" : "installed"} ${rows.length} job(s) via ${backend}`);
+      return exitCode;
+    }
+    if (action === "status") {
+      const rows = scheduleInventory(backend, tree, ctx, host);
+      if (a.json) {
+        println(io, dumps({ backend, jobs: rows, missing: missing.map((j) => j.id) }));
+        return rows.every((r) => r.loaded || r.unavailable && !r.degraded) ? 0 : 1;
+      }
+      for (const r of rows) println(io, `${padEnd(r.degraded ? "ERROR" : r.unavailable ? "N/A" : r.loaded ? "LOADED" : "MISSING", 8)} ${padEnd(r.id, 16)} ${r.label} (${backend}): ${r.detail}`);
+      return rows.every((r) => r.loaded || r.unavailable && !r.degraded) ? 0 : 1;
+    }
+    // remove
+    const rows = S.remove(backend, S.CANDIDATES, ctx, host);
+    for (const r of rows) println(io, `${r.removed ? "removed" : "skip"} ${r.id}: ${r.detail}`);
+    println(io, `schedule: removed ${rows.filter((r) => r.removed).length}/${rows.length} job(s) via ${backend}`);
+    return 0;
+  } catch (e: any) {
+    if (e instanceof S.ScheduleError) {
+      eprintln(io, `schedule: ${e.message}`);
+      return 2;
+    }
+    throw e;
+  }
+};
+
 // ---- the command tree -------------------------------------------------------------------------
 
 const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
@@ -1229,6 +1343,27 @@ export function buildTree(): CmdSpec<Run> {
       {
         name: "load", help: "take one load sample and print the tier", run: cmdLoad,
         opts: [opt("read", ["--read"], "bool", "print the last state without sampling"), JSON_OPT],
+      },
+      {
+        name: "schedule", help: "install/check/remove the background jobs this build supports (launchd, systemd --user, or cron; never sudo)",
+        sub: [
+          {
+            name: "install", help: "install lease renewal + load sampling as background jobs (skips any job with no subcommand in this build)", run: cmdSchedule,
+            opts: [
+              opt("dry_run", ["--dry-run"], "bool", "print the unit files instead of installing them"),
+              opt("session", ["--session"], "str", "current lead lease holder to renew (default $ORCH_SESSION_ID, then user@host)"),
+              opt("backend", ["--backend"], "str", "force a backend instead of auto-detecting", { choices: S.BACKEND_NAMES }),
+            ],
+          },
+          {
+            name: "status", help: "which jobs are loaded and which are missing", run: cmdSchedule,
+            opts: [JSON_OPT, opt("backend", ["--backend"], "str", "force a backend instead of auto-detecting", { choices: S.BACKEND_NAMES })],
+          },
+          {
+            name: "remove", help: "uninstall every job `orch schedule install` installed", run: cmdSchedule,
+            opts: [opt("backend", ["--backend"], "str", "force a backend instead of auto-detecting", { choices: S.BACKEND_NAMES })],
+          },
+        ],
       },
       {
         name: "mem", help: "long-lived notes: one file per entry, a capped index, retire instead of delete",
