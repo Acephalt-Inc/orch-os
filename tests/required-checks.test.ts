@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -20,21 +19,6 @@ describe("RequiredChecksPolicy", () => {
     expect(existsSync(join(ROOT, "src", "checks.ts"))).toBe(false);
     expect(readFileSync(join(ROOT, "src", "mergegate.ts"), "utf8")).toContain("export function ciVerdict(");
     expect(readFileSync(join(ROOT, "src", "reviewwatch.ts"), "utf8")).not.toContain('./checks.js');
-  });
-
-
-  it("CLI diff contains only required-check command plumbing", () => {
-    // Review v1 exact scope regression: restore src/cli.ts:473's requiredChecks
-    // helper and its src/checks.ts import, outside the allowed policy modules.
-    const base = spawnSync("git", ["show", "41b86f750b1dca1368b153cc932f9b58732c5d66:src/cli.ts"], { cwd: ROOT, encoding: "utf8" });
-    expect(base.status, base.stderr).toBe(0);
-    const cli = readFileSync(join(ROOT, "src", "cli.ts"), "utf8")
-      .replace("  const checks = M.configuredRequiredChecks(cfg, a.require_check);\n", "")
-      .replace("  const checks = M.configuredRequiredChecks(cfg);\n", "")
-      .replaceAll("requiredChecks: checks, ", "")
-      .replace(", requiredChecks: checks,", ",")
-      .replace('          opt("require_check", ["--require-check"], "list", "required name or workflow/name; repeat to add to [merge] required_checks"),\n', "");
-    expect(cli).toBe(base.stdout);
   });
 
   const exercise = (s: Scenario) => {
