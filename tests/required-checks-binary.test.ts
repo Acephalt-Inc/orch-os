@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 // Pack the distributable, then use its CLI and real gh adapter against deterministic API fixtures.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,15 @@ import { ROOT } from "./_helpers.js";
 import { HEAD, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
 let base: string, cli: string, home: string, data: string, log: string;
+let registryLog: string, npmConfig: Record<string, any>, packArgs: string[];
+
+// Build from a scrubbed environment: npm must not load developer config or auth tokens.
+function packEnvironment(): NodeJS.ProcessEnv {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^npm_config_/i.test(key) && !/^(NPM_TOKEN|NODE_AUTH_TOKEN)$/i.test(key)));
+  return { ...env, HOME: join(base, "npm-home") };
+}
+
 const invoke = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], {
   cwd: ROOT, encoding: "utf8", timeout: 15_000,
   env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}:${process.env.PATH}`, OS2_FIXTURE: data, OS2_GH_LOG: log },
@@ -27,14 +36,67 @@ function fixture(s: Scenario) {
   writeFileSync(join(home, "pr.json"), JSON.stringify(info));
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   base = mkdtempSync(join(ROOT, ".os2-packed-"));
-  const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", base, "--cache", join(base, "cache")], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
-  expect(packed.status, packed.stderr).toBe(0);
-  const filename = JSON.parse(packed.stdout)[0].filename;
-  const extracted = spawnSync("tar", ["-xzf", join(base, filename), "-C", base], { encoding: "utf8" });
-  expect(extracted.status, extracted.stderr).toBe(0);
-  cli = join(base, "package", "dist", "cli.js");
+  registryLog = join(base, "registry.log");
+  writeFileSync(registryLog, "");
+  // A separate observer process keeps serving while synchronous npm packing runs.
+  const observer = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { createServer } from "node:http";
+    import { appendFileSync } from "node:fs";
+    const server = createServer((req, res) => {
+      appendFileSync(process.argv[1], req.method + " " + req.url + "\\n");
+      res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
+    });
+    server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+  `, registryLog], { stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    const port = await new Promise<string>((resolve, reject) => {
+      observer.stdout.once("data", chunk => resolve(String(chunk).trim()));
+      observer.once("error", reject);
+      observer.once("exit", code => reject(new Error(`registry observer exited ${code}`)));
+    });
+    const registry = `http://127.0.0.1:${port}`;
+    const userconfig = join(base, "empty-user.npmrc"), globalconfig = join(base, "empty-global.npmrc");
+    writeFileSync(userconfig, ""); writeFileSync(globalconfig, "");
+    mkdirSync(join(base, "npm-home"));
+    const developerConfig = join(base, "developer-user.npmrc"), developerGlobal = join(base, "developer-global.npmrc");
+    writeFileSync(developerGlobal, `registry=${registry}\n`);
+    writeFileSync(developerConfig, `registry=${registry}\n//127.0.0.1:${port}/:_authToken=fixture-credential\n`);
+    const poison = { npm_config_registry: registry, npm_config_userconfig: developerConfig,
+      npm_config_globalconfig: developerGlobal, NPM_TOKEN: "fixture-credential", NODE_AUTH_TOKEN: "fixture-credential" };
+    const saved = Object.fromEntries(Object.keys(poison).map(key => [key, process.env[key]]));
+    let packed: ReturnType<typeof spawnSync>;
+    try {
+      Object.assign(process.env, poison);
+      // Isolated cwd also prevents loading the checkout's project .npmrc.
+      packArgs = ["pack", ROOT, "--json", "--pack-destination", base, "--cache", join(base, "cache"),
+        "--offline", "--update-notifier=false", "--userconfig", userconfig, "--globalconfig", globalconfig,
+        "--registry", registry];
+      const env = packEnvironment();
+      // Read npm's resolved config under the SAME argv policy used by npm pack.
+      const resolved = spawnSync("npm", ["config", "list", "--json", ...packArgs.slice(7)],
+        { cwd: base, env, encoding: "utf8", timeout: 15_000 });
+      expect(resolved.status, resolved.stderr).toBe(0);
+      npmConfig = JSON.parse(resolved.stdout);
+      packed = spawnSync("npm", packArgs, { cwd: base, env, encoding: "utf8", timeout: 60_000 });
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+    expect(packed.status, packed.stderr).toBe(0);
+    const filename = JSON.parse(String(packed.stdout))[0].filename;
+    cli = join(base, "package", "dist", "cli.js");
+    const extracted = spawnSync("tar", ["-xzf", join(base, filename), "-C", base], { encoding: "utf8" });
+    expect(extracted.status, extracted.stderr).toBe(0);
+  } finally {
+    if (observer.exitCode === null && observer.signalCode === null) {
+      const stopped = new Promise<void>(resolve => observer.once("exit", () => resolve()));
+      observer.kill();
+      await stopped;
+    }
+  }
   mkdirSync(join(base, "bin"));
   // This gh double returns the requested jq projection of raw REST shapes, not injected hosts.
   writeFileSync(join(base, "bin", "gh"), `#!${process.execPath}\n` + String.raw`
@@ -63,6 +125,28 @@ beforeEach(() => {
 });
 
 describe("RequiredChecksPackedBinary", () => {
+  it("npm pack is offline, disables the notifier, and isolates developer credentials", () => {
+    // Review v1 exact mutation: replace the guarded pack call with the original:
+    // spawnSync("npm", ["pack", "--json", "--pack-destination", base, "--cache", join(base, "cache")], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+    // The observer changes only registry/config, never forces the update notifier on.
+    expect(readFileSync(registryLog, "utf8")).toBe("");
+    expect(npmConfig.offline).toBe(true);
+    expect(npmConfig["update-notifier"]).toBe(false);
+    expect(npmConfig.userconfig).toBe(join(base, "empty-user.npmrc"));
+    expect(npmConfig.globalconfig).toBe(join(base, "empty-global.npmrc"));
+    expect(readFileSync(npmConfig.userconfig, "utf8")).toBe("");
+    expect(readFileSync(npmConfig.globalconfig, "utf8")).toBe("");
+    expect(packEnvironment()).not.toHaveProperty("NPM_TOKEN");
+    expect(packEnvironment()).not.toHaveProperty("NODE_AUTH_TOKEN");
+  });
+
+  it("packed policy stays in mergegate without an out-of-scope checks module", () => {
+    // Review v1 scope mutation: restore src/checks.ts's shared evaluator and imports.
+    expect(existsSync(join(base, "package", "dist", "checks.js"))).toBe(false);
+    expect(readFileSync(join(base, "package", "dist", "mergegate.js"), "utf8")).toContain("export function ciVerdict(");
+    expect(readFileSync(join(base, "package", "dist", "reviewwatch.js"), "utf8")).not.toContain('./checks.js');
+  });
+
   it.each(scenarios)("$title: packed merge-gate and review watch", (s) => {
     config(s.required ?? ["CI/test"], false);
     fixture(s);

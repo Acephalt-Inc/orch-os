@@ -13,7 +13,6 @@ import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
 import * as M from "./mergegate.js";
-import { requiredCheckNames } from "./checks.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
@@ -469,19 +468,10 @@ function taskAuthors(cfg: Record<string, any>, id: string): string[] {
   return tasks(cfg).holders(id);
 }
 
-/** Both commands read the same required list; flags can only add requirements. */
-function requiredChecks(cfg: Record<string, any>, extra: string[] = []): string[] {
-  try {
-    return requiredCheckNames([...requiredCheckNames((cfg.merge ?? {}).required_checks), ...requiredCheckNames(extra)]);
-  } catch (e: any) {
-    throw new ConfigError(`[merge] required_checks / --require-check: ${e.message}`);
-  }
-}
-
 const cmdMergeGate: Run = (a, io) => {
   const cfg = C.loadOrDefault();
   const mc = cfg.merge ?? {};
-  const checks = requiredChecks(cfg, a.require_check);
+  const checks = M.configuredRequiredChecks(cfg, a.require_check);
   const source = reviewSource(cfg, a);
   const prof = P.readProfile(cfg);
   if (!prof && (a.tier || a.auto)) {
@@ -591,7 +581,7 @@ const cmdReviewWatch: Run = async (a, io) => {
   }
   const agents = RW.readAgents(cfg);
   const settings = RW.readSettings(cfg);
-  const checks = requiredChecks(cfg);
+  const checks = M.configuredRequiredChecks(cfg);
   if (!a.task) {
     println(io, `#${a.pr} => BLOCKED (review watch needs --task ID: the task whose holder authored this PR, so the author is never its reviewer)`);
     return 1;

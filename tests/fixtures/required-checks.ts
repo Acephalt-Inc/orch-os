@@ -36,15 +36,18 @@ export const scenarios: Scenario[] = [
   { title: "another app test success cannot supply CI/test", runs: [check("SUCCESS", 11, "")], workflows: [], gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "WORKFLOW_UNKNOWN" },
   { title: "CI lint listed plus Other test unlisted cannot supply CI/test", runs: [check("SUCCESS", 11, "CI", "lint"), check("SUCCESS", 12, "Other")], workflows: [[11, "CI"]], gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "WORKFLOW_UNKNOWN" },
   { title: "required workflow job missing alongside unrelated success", runs: [check("SUCCESS", 11, "CI", "lint")], workflows: [[11, "CI"]], gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "ABSENT" },
+  // Review v1 mutation (b): "replace explicit row SHA handling with const sha = head".
   { title: "only stale required success alongside head lint", runs: [check("SUCCESS", 11, "CI", "test", OLD_HEAD), check("SUCCESS", 12, "CI", "lint")], workflows: known, gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "ABSENT" },
   { title: "short sha cannot supply exact-head required success", runs: [check("SUCCESS", 11, "CI", "test", HEAD.slice(0, 9)), check("SUCCESS", 12, "CI", "lint")], workflows: known, gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "ABSENT" },
   { title: "stale skipped duplicate cannot poison head success", runs: [check("SUCCESS"), check("SKIPPED", 12, "CI", "test", OLD_HEAD)], workflows: known, gateGreen: true, watchGreen: true },
   { title: "required check absent in an empty rollup", runs: [], workflows: [], gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "ABSENT" },
   { title: "all required duplicates passed", runs: [check("SUCCESS"), check("success", 12)], workflows: known, gateGreen: true, watchGreen: true },
+  // Review v1 mutation (a): "map SKIPPED rows to SUCCESS before calling ciVerdict".
   ...["SKIPPED", "NEUTRAL", "CANCELLED", "FAILURE", "PENDING", "QUEUED", "IN_PROGRESS", "", " SUCCESS "].map((state): Scenario => ({
     title: `required check ${JSON.stringify(state)} alongside unrelated success`, runs: [check(state), check("SUCCESS", 12, "CI", "lint")], workflows: known,
     gateGreen: false, watchGreen: false, gateReason: state || "PENDING", watchReason: state || "PENDING",
   })),
+  // Review v1 mutation (d): "discard a non-SUCCESS row if a same-head row with the same workflow/name reports SUCCESS".
   ...["SKIPPED", "NEUTRAL", "CANCELLED", "FAILURE", "IN_PROGRESS"].flatMap((state) => [false, true].map((reverse): Scenario => ({
     title: `ambiguous required duplicate SUCCESS plus ${state}, reverse=${reverse}`,
     runs: reverse ? [check(state, 12), check("SUCCESS")] : [check("SUCCESS"), check(state, 12)], workflows: known,
@@ -58,6 +61,14 @@ export const scenarios: Scenario[] = [
   { title: "case sensitive qualified name", runs: [check("SUCCESS")], workflows: known, required: ["ci/test"], gateGreen: false, watchGreen: false, gateReason: "ABSENT", watchReason: "ABSENT" },
   { title: "nested workflow name with unknown job", runs: [check("SKIPPED", 11, "a/b")], workflows: [], required: ["a/b/test"], gateGreen: false, watchGreen: false, gateReason: "SKIPPED", watchReason: "WORKFLOW_UNKNOWN" },
   { title: "blank workflow name is unknown with a skipped duplicate", runs: [check("SUCCESS"), check("SKIPPED", 12)], workflows: [[11, "CI"], [12, ""]], gateGreen: false, watchGreen: false, gateReason: "SKIPPED", watchReason: "WORKFLOW_UNKNOWN" },
+  // Review v1 exact mutation of src/reviewwatch.ts:516 (must fail the dispatch witnesses):
+  // const ci = ciAtHead(head, rows, (inp.requiredChecks ?? []).slice(0, rows.filter(r => r.workflow != null && r.workflow !== "").length || undefined));
+  ...[false, true].map((reverse): Scenario => ({
+    title: `review v1 two required names with one listed workflow, reverse=${reverse}`,
+    runs: [check("SUCCESS", 11, "CI", "test"), check("SKIPPED", 12, "Lint", "lint")],
+    workflows: [[11, "CI"]], required: reverse ? ["Lint/lint", "CI/test"] : ["CI/test", "Lint/lint"],
+    gateGreen: false, watchGreen: false, gateReason: "SKIPPED", watchReason: "Lint/lint=WORKFLOW_UNKNOWN",
+  })),
 ];
 
 export function prData(s: Scenario) {

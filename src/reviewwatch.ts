@@ -23,7 +23,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ciVerdict, type CheckRow } from "./checks.js";
+import { ciVerdict, type CheckRow } from "./mergegate.js";
 import { ConfigError, configNumber, expand, orchHome } from "./config.js";
 import { withLock } from "./lock.js";
 import * as M from "./mergegate.js";
@@ -31,7 +31,7 @@ import * as P from "./profile.js";
 import { dumps } from "./pyjson.js";
 import { atomicWrite, isPlainObject, sleep, validName, which } from "./util.js";
 
-export type { CheckRow } from "./checks.js";
+export type { CheckRow } from "./mergegate.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -513,6 +513,7 @@ export function watchOnce(inp: WatchInput, host: Host): WatchResult {
   } catch (e: any) {
     return done("ERROR", `reading CI failed: ${e.message ?? e}`);
   }
+  // Evaluate the full requirement list even when fewer workflows could be joined.
   const ci = ciAtHead(head, rows, inp.requiredChecks ?? []);
   res.ci = ci.state;
   if (ci.state === "pending") return done("WAITING", `CI pending at the head: ${ci.bad.join(", ")}`);

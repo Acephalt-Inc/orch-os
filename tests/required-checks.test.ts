@@ -1,19 +1,43 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ciVerdict, requiredCheckNames } from "../src/checks.js";
+import { ciVerdict, requiredCheckNames } from "../src/mergegate.js";
 import * as M from "../src/mergegate.js";
 import * as RW from "../src/reviewwatch.js";
 import { ROOT } from "./_helpers.js";
-import { HEAD, prData, scenarios } from "./fixtures/required-checks.js";
+import { HEAD, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
 let dir: string;
 beforeAll(() => { dir = mkdtempSync(join(ROOT, ".os2-policy-")); });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("RequiredChecksPolicy", () => {
-  it.each(scenarios)("$title: gate and actual dispatch", (s) => {
+  it("shared CI evaluator stays in the allowed mergegate module", () => {
+    // Review v1 scope mutation: restore the new src/checks.ts shared evaluator
+    // and its imports (src/checks.ts:30 was outside the production allowlist).
+    expect(existsSync(join(ROOT, "src", "checks.ts"))).toBe(false);
+    expect(readFileSync(join(ROOT, "src", "mergegate.ts"), "utf8")).toContain("export function ciVerdict(");
+    expect(readFileSync(join(ROOT, "src", "reviewwatch.ts"), "utf8")).not.toContain('./checks.js');
+  });
+
+
+  it("CLI diff contains only required-check command plumbing", () => {
+    // Review v1 exact scope regression: restore src/cli.ts:473's requiredChecks
+    // helper and its src/checks.ts import, outside the allowed policy modules.
+    const base = spawnSync("git", ["show", "41b86f750b1dca1368b153cc932f9b58732c5d66:src/cli.ts"], { cwd: ROOT, encoding: "utf8" });
+    expect(base.status, base.stderr).toBe(0);
+    const cli = readFileSync(join(ROOT, "src", "cli.ts"), "utf8")
+      .replace("  const checks = M.configuredRequiredChecks(cfg, a.require_check);\n", "")
+      .replace("  const checks = M.configuredRequiredChecks(cfg);\n", "")
+      .replaceAll("requiredChecks: checks, ", "")
+      .replace(", requiredChecks: checks,", ",")
+      .replace('          opt("require_check", ["--require-check"], "list", "required name or workflow/name; repeat to add to [merge] required_checks"),\n', "");
+    expect(cli).toBe(base.stdout);
+  });
+
+  const exercise = (s: Scenario) => {
     const requiredChecks = s.required ?? ["CI/test"];
     const info = prData(s);
     const gate = M.evaluate(info, { requiredChecks });
@@ -40,9 +64,26 @@ describe("RequiredChecksPolicy", () => {
     expect(existsSync(RW.statePath(state, "acme/widgets", 7))).toBe(s.watchGreen);
     if (s.watchReason) expect(result.detail).toContain(s.watchReason);
     if (!gate.ci_ok) expect(dispatch).toEqual([]);
+  };
+  it.each(scenarios)("$title: gate and actual dispatch", exercise);
+
+  it("generated two required names block one listed workflow in both requirement orders", () => {
+    // Review v1 exact replacement of src/reviewwatch.ts:516:
+    // const ci = ciAtHead(head, rows, (inp.requiredChecks ?? []).slice(0, rows.filter(r => r.workflow != null && r.workflow !== "").length || undefined));
+    for (const state of ["SKIPPED", "NEUTRAL"]) for (const reverse of [false, true]) {
+      exercise({
+        title: `generated ${state}, reverse=${reverse}`, required: reverse ? ["Lint/lint", "CI/test"] : ["CI/test", "Lint/lint"],
+        runs: [
+          { sha: HEAD, name: "test", state: "SUCCESS", suite: 11, workflow: "CI" },
+          { sha: HEAD, name: "lint", state, suite: 12, workflow: "Lint" },
+        ],
+        workflows: [[11, "CI"]], gateGreen: false, watchGreen: false,
+        gateReason: state, watchReason: "Lint/lint=WORKFLOW_UNKNOWN",
+      });
+    }
   });
 
-  it("no watch-green gate-red result across 26200 partial-list combinations", () => {
+  it("no watch-green gate-red result across 52400 partial-list combinations with multiple requirements", () => {
     const choices: { workflow: string; state: string; listed: boolean }[] = [];
     for (const workflow of ["CI", "Other", ""]) for (const state of ["SUCCESS", "SKIPPED", "NEUTRAL", "PENDING", "FAILURE"]) {
       for (const listed of workflow ? [true, false] : [false]) choices.push({ workflow, state, listed });
@@ -55,7 +96,7 @@ describe("RequiredChecksPolicy", () => {
       for (const readable of [true, false]) {
         const workflows = readable ? rows.filter(r => r.listed).map(r => [r.suite, r.workflow]) : null;
         const watchRows = RW.checkRows(rows.map(r => [r.sha, r.name, r.state, r.suite]), [], workflows);
-        for (const requiredChecks of [[], ["test"], ["CI/test"], ["Other/test"]]) {
+        for (const requiredChecks of [[], ["test"], ["CI/test"], ["Other/test"], ["CI/test", "Other/test"], ["Other/test", "CI/test"], ["CI/test", "Lint/lint"], ["Lint/lint", "CI/test"]]) {
           const gate = M.evaluate(info, { requiredChecks });
           const watch = RW.ciAtHead(HEAD, watchRows, requiredChecks);
           if (watch.state === "green" && !gate.ci_ok) unsafe.push({ rows, readable, requiredChecks, gate, watch });
@@ -70,7 +111,7 @@ describe("RequiredChecksPolicy", () => {
         for (let c = b; c < choices.length; c++) visit([a, b, c]);
       }
     }
-    expect(cases).toBe(26200);
+    expect(cases).toBe(52400);
     expect(unsafe).toEqual([]);
   });
 
