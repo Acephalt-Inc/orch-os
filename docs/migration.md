@@ -1,6 +1,6 @@
 # Moving from v1.1 (Python) to v2 (TypeScript)
 
-v2 is a rewrite of the same tool in TypeScript for Node.js ≥ 20. The five v1.1 building blocks (lease, mailbox, merge gate, workers, load governor), the CLI and the doctor behave the same: same commands and flags, same output lines, same exit codes, same status and error names (`BUSY`, `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH`, `UNVERIFIED`, `PID_REUSED`, `head moved`), compatible file formats and the same fail-closed defaults. Every v1.1 test has a v2 counterpart ([tests-map.md](tests-map.md)).
+v2 is a rewrite of the same tool in TypeScript for Node.js ≥ 22. The five v1.1 building blocks (lease, mailbox, merge gate, workers, load governor), the CLI and the doctor behave the same: same commands and flags, same output lines, same exit codes, same status and error names (`BUSY`, `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH`, `UNVERIFIED`, `PID_REUSED`, `head moved`), compatible file formats and the same fail-closed defaults. Every v1.1 test has a v2 counterpart ([tests-map.md](tests-map.md)).
 
 ## Steps
 
@@ -15,12 +15,12 @@ v2 is a rewrite of the same tool in TypeScript for Node.js ≥ 20. The five v1.1
 
 | Area | v1.1 | v2 |
 |---|---|---|
-| Runtime | Python ≥ 3.11, standard library only | Node.js ≥ 20, no runtime dependencies |
+| Runtime | Python ≥ 3.11, standard library only | Node.js ≥ 22, no runtime dependencies |
 | Install | `pipx install`, `install.sh` | `npx orch-os init`, `npm i -g orch-os`, `install.sh` |
 | Lock | `fcntl.flock` on `<file>.lock` | atomic `mkdir` of `<file>.lock.d`, with stale-lock breaking and a 30 s timeout ([architecture.md](architecture.md#the-lock)) |
 | Lock wait | blocks until free | gives up after 30 s: exit 2 |
 | `lease release` | no epoch check | optional `--expected-epoch` |
-| `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=20`, `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |
+| `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=22`, `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |
 | `worker start` | runs in `--workdir` | also `--worktree`, `--branch`, `--base` |
 | `worker stop` | stops the process group | also removes a clean worktree it created; `--keep-worktree` |
 | `init` | config, mailbox | also the handbook: `--dir`, `--layout`, `--force-handbook`, `--no-handbook` |

@@ -146,18 +146,22 @@ orch task claim first-task --as w1
 orch init                                   # 创建配置、信箱和角色手册
 orch agents                                 # 查看已发现和已配置的代理 CLI
 orch doctor                                 # 检查运行前提
+orch load                                   # 记录一次新的负载采样（就绪检查要求采样不超过 120 秒）
+orch doctor --ready --agent claude          # 打印 worker start 必须通过的检查；有一行不是 OK 即 NOT READY（退出码 1）
 orch lease status                           # 查看负责人租约
 orch lease acquire --session lead           # 获取负责人租约
 orch mailbox read                           # 读取共享信箱
 orch msg send QUESTION --as w1 --to lead -m "需要决定"  # 发送定向问题
 orch msg read --as lead                     # 读取负责人的待处理消息
 orch task claim first-task --as w1          # 独占认领任务
-orch worker start w1 --agent claude --worktree --task task.md  # 启动后台工作进程
+orch worker start w1 --agent claude --worktree --task task.md  # 启动后台工作进程；就绪检查为 NOT READY 时拒绝（退出码 2）
 orch worker list                            # 查看工作进程
 orch merge-gate 101 --fixture approved      # 使用离线样例试运行闸门
 orch load                                   # 采样机器负载
-orch mem search review                      # 搜索长期笔记
+orch mem search review                      # 搜索长期笔记（没有匹配时退出码为 1）
 ```
+
+不带 `--force` 的每一次 `orch worker start`，无论是否在终端中，都会先运行就绪检查。刚执行完 `orch init` 时，上面的启动命令会被拒绝，输出 `worker: readiness failed: ...`（退出码 2）。`orch doctor --ready --agent claude` 输出 `ready-for-live: READY` 后，此命令可以通过准入，但工作进程名称重复或档案工作进程上限仍可拒绝启动。就绪检查要求：工作进程和 `[review.agents.NAME]` 评审者的可执行文件名为 `claude` 或 `codex` 且已登录，已设置 `[merge] repo = "owner/name"`，工作目录是带 `origin` 的 Git 仓库，`gh` 已登录，已安装 `timeout` 或 `gtimeout`，并且 `orch load` 在 120 秒内运行过。其他代理 CLI 或包装命令显示为 `UNVERIFIED` 并被拒绝；在终端中加 `--force` 可以带警告启动。
 
 完整参数和退出码见[命令参考](docs/commands.md)。
 

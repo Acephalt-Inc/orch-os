@@ -8,6 +8,7 @@ import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./arg
 import * as C from "./config.js";
 import * as D from "./detect.js";
 import { Lease } from "./lease.js";
+import * as RD from "./readiness.js";
 import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
@@ -21,7 +22,7 @@ import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
-import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
+import { WorkerError, WorkerLimitError, Workers, type StartOptions } from "./workers.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -345,13 +346,20 @@ function dirUsable(p: string): boolean {
   }
 }
 
-const cmdDoctor: Run = (_a, io) => {
+const cmdDoctor: Run = (a, io) => {
+  if (a.ready) {
+    let cfg: Record<string, any>;
+    try { cfg = C.load(); } catch (e: any) { eprintln(io, `FAIL config (${e.message})`); return 1; }
+    const checks = RD.readiness(cfg, loadPath(cfg), { agent: a.agent, reviewer: a.reviewer, minutes: a.minutes, workdir: a.workdir });
+    for (const line of RD.render(checks)) println(io, line);
+    return checks.every((c) => c.ok && !c.unverified) ? 0 : 1;
+  }
   const rows: [string, string, string][] = [];
   const add = (ok: boolean, name: string, detail: string, optional = false) => {
     rows.push([ok ? "PASS" : optional ? "SKIP" : "FAIL", name, detail]);
   };
   const major = Number(process.versions.node.split(".")[0]);
-  add(major >= 20, "node>=20", process.versions.node);
+  add(major >= 22, "node>=22", process.versions.node);
   add(process.platform !== "win32", "posix (process groups)", process.platform);
   const p = C.configPath();
   let cfg: Record<string, any> | null = null;
@@ -421,16 +429,18 @@ const cmdDoctor: Run = (_a, io) => {
     add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
-    const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
-    add(Boolean(wcmd) && which(wcmd) !== null, "worker command",
-      wcmd ? which(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
+    const commandRow = (name: string, raw: unknown, missing: string) => {
+      const checks = RD.commandChecks("worker", raw, {});
+      const refused = checks.find((row) => !row.ok);
+      add(!refused, name, refused ? (Array.isArray(raw) && raw.length ? `${refused.unverified ? "UNVERIFIED: " : ""}${refused.detail}` : missing) : checks[0].detail, true);
+    };
+    commandRow("worker command", (cfg.workers ?? {}).command, "none configured - use --agent or pass a command after --");
     const to = which("timeout") ?? which("gtimeout");
-    add(to !== null, "timeout (worker time limit)", to ?? "absent - workers run without a time limit", true);
+    add(to !== null, "timeout (worker time limit)", to ?? "absent - worker start is refused without it (attended --force runs with no time limit)", true);
     const found = D.installed().map((x) => x.name);
     add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
-      const b = (ag.command ?? [""])[0] ?? "";
-      add(Boolean(b) && which(b) !== null, `agent ${name}`, b || "empty command", true);
+      commandRow(`agent ${name}`, ag.command, "empty command");
     }
     const tier = LD.readState(loadPath(cfg)).tier;
     add(true, "load state", tier || "no sample yet (run `orch load`)");
@@ -444,7 +454,15 @@ const cmdDoctor: Run = (_a, io) => {
     if (prof) for (const [ok, name, detail] of P.capabilityRows(prof, profileEnv(cfg))) add(ok, name, detail, true);
     // review watch rows only with [review.agents] or a watch state directory: otherwise none
     check("review watch", () => {
-      for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
+      const reviewRows = RW.doctorRows(cfg!, Date.now() / 1000);
+      const agents = new Map(RW.readAgents(cfg!).map((agent) => [agent.name, agent]));
+      for (const [available, name, detail] of reviewRows) {
+        const agent = agents.get(name.replace(/^review agent /, ""));
+        if (!agent) { add(available, name, detail, true); continue; }
+        const checks = RD.commandChecks("reviewer", agent.argv, {});
+        const refused = checks.find((row) => !row.ok);
+        add(!refused, name, refused ? (agent.argv && refused.name.endsWith(" command") && !checks[0].ok ? detail : `${refused.unverified ? "UNVERIFIED: " : ""}${refused.detail}`) : detail, true);
+      }
     });
   }
   const w = Math.max(...rows.map((r) => r[1].length));
@@ -657,6 +675,7 @@ const cmdReviewWatch: Run = async (a, io) => {
     return 1;
   }
   const host = RW.override.host ?? RW.realHost(reviewStart(cfg, prof));
+  if (!RW.override.host) host.admit = reviewAdmit(cfg, prof);
   const inp: RW.WatchInput = {
     pr: Number(a.pr), repo: a.repo || (cfg.merge ?? {}).repo || "", authors, agents, profile: prof, settings, requiredChecks: checks,
     tierFlag: a.tier, dryRun: a.dry_run, force: a.force,
@@ -678,9 +697,19 @@ const cmdReviewWatch: Run = async (a, io) => {
  */
 export function reviewStart(cfg: Record<string, any>, prof: P.Profile | null): (d: RW.DispatchSpec) => { pid: number | null } {
   return (d) => {
-    const m = workers(cfg).start(d.worker, { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env, limit: prof ? prof.max_workers : null });
+    const m = workers(cfg).start(d.worker, reviewLaunch(d, prof));
     return { pid: typeof m.pid === "number" ? m.pid : null };
   };
+}
+
+/** What a `review watch` dry run checks: the admission `reviewStart` runs, for the same launch, starting nothing. */
+function reviewAdmit(cfg: Record<string, any>, prof: P.Profile | null): (d: RW.DispatchSpec) => void {
+  return (d) => workers(cfg).admit(d.worker, reviewLaunch(d, prof));
+}
+
+/** The worker launch of a review dispatch, built once for the real pass and the dry run. */
+function reviewLaunch(d: RW.DispatchSpec, prof: P.Profile | null): StartOptions {
+  return { command: d.argv, task: d.prompt, minutes: d.minutes, env: d.env, limit: prof ? prof.max_workers : null };
 }
 
 const cmdWorker: Run = async (a, io) => {
@@ -690,24 +719,24 @@ const cmdWorker: Run = async (a, io) => {
     const action = a._path[2];
     if (action === "start") {
       const prof = P.readProfile(cfg);
-      // the limit itself is checked in Workers.start(); --force is the one override, and it says so
-      if (prof && a.force) {
-        const running = w.list().filter((x) => x.state === "RUNNING").length;
-        if (running >= prof.max_workers) {
-          eprintln(io, `worker: warning: --force starts ${a.name} above [profile] max_workers (${running} running, limit ${prof.max_workers})`);
-        }
-      }
+      // the limit itself is checked in Workers.admit(); --force is the one override. Counted before
+      // the start, so the forced worker is not counted against itself.
+      const before = prof && a.force ? w.list().filter((x) => x.state === "RUNNING").length : 0;
       let m: Record<string, any>;
       try {
         m = w.start(a.name, {
           command: a.cmd?.length ? a.cmd : null, task: a.task, workdir: a.workdir, minutes: a.minutes,
-          force: a.force, agent: a.agent, worktree: a.worktree, branch: a.branch, base: a.base,
+          force: a.force, agent: a.agent, reviewer: a.reviewer, worktree: a.worktree, branch: a.branch, base: a.base,
           limit: prof ? prof.max_workers : null,
         });
       } catch (e) {
         if (!(e instanceof WorkerLimitError)) throw e;
         eprintln(io, `worker: ${e.running} worker(s) running and [profile] max_workers is ${e.limit}; stop one, raise max_workers, or pass --force`);
         return 2;
+      }
+      // said only once the forced start has happened: a refused --force prints its refusal alone
+      if (prof && a.force && before >= prof.max_workers) {
+        eprintln(io, `worker: warning: --force starts ${a.name} above [profile] max_workers (${before} running, limit ${prof.max_workers})`);
       }
       println(io, `worker ${m.name} started pid=${m.pid} load=${m.load_tier} dir=${w.dir(m.name)}`);
       if (m.worktree) println(io, `worktree ${m.worktree.path} branch=${m.worktree.branch} (${m.worktree.created ? "created" : "attached"})`);
@@ -1056,7 +1085,13 @@ export function buildTree(): CmdSpec<Run> {
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
-      { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
+      { name: "doctor", help: "PASS/FAIL per prerequisite; --ready prints the checks every worker start without --force must pass", run: cmdDoctor, opts: [
+        opt("ready", ["--ready", "--ready-for-live"], "bool", "require all live readiness checks; exit 1 on any FAIL or UNVERIFIED row"),
+        opt("agent", ["--agent"], "str", "check the selected [agents.NAME] worker"),
+        opt("reviewer", ["--reviewer"], "str", "check this [review.agents.NAME] reviewer"),
+        opt("workdir", ["--workdir"], "str", "repository where the worker will run"),
+        opt("minutes", ["--minutes"], "float", "check this time limit instead of the configured default"),
+      ] },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
       {
         name: "lease", help: "single-holder role lease", run: cmdLease,
@@ -1198,7 +1233,7 @@ export function buildTree(): CmdSpec<Run> {
             opt("repo", ["--repo"], "str", "owner/name (default [merge] repo)"),
             opt("tier", ["--tier"], "str", "profile only: the PR's tier (default: [profile] high_paths, then default_tier)", { choices: P.TIERS }),
             opt("once", ["--once"], "bool", "one pass, then exit (for cron)"),
-            opt("dry_run", ["--dry-run"], "bool", "one pass; print the chosen reviewer and its command; start nothing, write nothing"),
+            opt("dry_run", ["--dry-run"], "bool", "one pass; where a real pass would dispatch, run its admission (readiness checks with login-status probes and gh auth status, then the [profile] max_workers count) and print no reviewer command when it refuses; start no reviewer, write nothing"),
             opt("force", ["--force"], "bool", "start a reviewer even though this head already had one"),
             opt("interval", ["--interval"], "float", "seconds between passes (default [review.watch] poll_seconds)"),
             opt("timeout", ["--timeout"], "float", "stop after this many seconds (default: until reviewed, stale or blocked)"),
@@ -1216,12 +1251,13 @@ export function buildTree(): CmdSpec<Run> {
             opts: [
               opt("task", ["--task"], "str", "file fed to the worker on stdin"),
               opt("workdir", ["--workdir"], "str", "working directory (with --worktree: the repository)"),
-              opt("minutes", ["--minutes"], "float", "time limit (0 = none; default [workers] timeout_minutes)"),
+              opt("minutes", ["--minutes"], "float", "time limit in minutes (default [workers] timeout_minutes); 0 is refused by readiness and means no limit only with --force"),
               opt("agent", ["--agent"], "str", "use the [agents.<name>] command"),
+              opt("reviewer", ["--reviewer"], "str", "selected [review.agents.NAME] reviewer (default: review-watch policy)"),
               opt("worktree", ["--worktree"], "bool", "run in its own git worktree under [workers] worktree_root"),
               opt("branch", ["--branch"], "str", "worktree branch (default <worktree_branch_prefix>NAME)"),
               opt("base", ["--base"], "str", "start point for a new branch (default HEAD)"),
-              opt("force", ["--force"], "bool", "start even when the load tier or [profile] max_workers would refuse it"),
+              opt("force", ["--force"], "bool", "attended override of readiness, load admission and [profile] max_workers; requires terminal stdin and warns"),
             ],
           },
           { name: "list", help: "every worker with RUNNING / STOPPED / UNKNOWN", run: cmdWorker },

@@ -1,3 +1,5 @@
+import { useAttendedTerminal } from "./_attended.js";
+useAttendedTerminal();
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Agent detection, `orch init` / `orch doctor` / `orch agents` with and without agent CLIs. */
 import { appendFileSync, existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -83,8 +85,8 @@ describe("InitDoctorTest", () => {
   });
 
   it("test_init_writes_detected_agents_and_default", async () => {
-    fakeBin(d.bins, "claude");
-    fakeBin(d.bins, "codex");
+    fakeBin(d.bins, "claude", "exit 0");
+    fakeBin(d.bins, "codex", "exit 3");
     let [code, out] = await run("init");
     expect(code, out).toBe(0);
     expect(out).toContain("<- default worker agent");
@@ -94,7 +96,8 @@ describe("InitDoctorTest", () => {
     [code, out] = await run("doctor");
     expect(code, out).toBe(0);
     expect(out).toContain("PASS  agent CLIs");
-    expect(out).toContain("PASS  agent codex");
+    expect(out).toMatch(/PASS {2}agent claude\s/);
+    expect(out).toMatch(/SKIP {2}agent codex\s+\S+ login status: exit 3\n/);
   });
 
   it("test_init_agent_flag_picks_default", async () => {
@@ -147,7 +150,7 @@ describe("InitDoctorTest", () => {
     const prompt = `${d.home}/task.md`;
     writeFileSync(prompt, "fix the parser\n");
     const [code, out, err] = await run("worker", "start", "w1", "--agent", "codex", "--task", prompt,
-      "--workdir", d.home, "--minutes", "0");
+      "--workdir", d.home, "--minutes", "0", "--force");
     expect(code, out + err).toBe(0);
     const target = `${d.home}/exec.out`;
     await waitFor(() => existsSync(target) && readFileSync(target, "utf8") !== "");

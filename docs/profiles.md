@@ -16,7 +16,7 @@ Without a `[profile]` table none of this runs, and the merge gate behaves as des
 | Every PR needs an agent review by a non-author, at the PR's current head, graded at or above `required_review`. | `[profile] required_review`, written by you. The same value applies to both tiers. |
 | In a `team` profile, a `high`-tier PR also needs an `APPROVED` GitHub review at the current head from a login in `teammates`. | `[profile] people`, `teammates`, and the tier (section 4). |
 | A person performs every merge. `orch merge-gate --auto` is always `BLOCKED`. | Fixed. No setting gives automation merge authority. |
-| `orch worker start` and a `review watch` dispatch are refused while `max_workers` workers are already running. `orch worker start --force` overrides the limit and prints a warning. The count and the start are two steps, so two starts at the same instant can both pass. | `[profile] max_workers`, written by you. |
+| `orch worker start` and a `review watch` dispatch are refused while `max_workers` workers are already running. `orch worker start --force` overrides the limit and prints a warning; `--force` needs a terminal on stdin. The count and the start are two steps, so two starts at the same instant can both pass. | `[profile] max_workers`, written by you. |
 
 Nothing is derived from how many accounts or vendors you list. If the setup cannot give the review strength you asked for, the gate reports `BLOCKED` and `orch doctor` names what is missing (section 5). The rule is not lowered.
 
@@ -59,7 +59,7 @@ The profile is one `[profile]` table and two sub-tables, in `$ORCH_HOME/config.t
 |---|---|---|---|
 | `[profile] policy` | string | required | `human-merge`. A profile without this key is refused (section 6). |
 | `[profile] required_review` | string | required | Weakest agent review that passes: `single-agent`, `cross-account` or `cross-vendor` (section 3) |
-| `[profile] max_workers` | integer | required | The limit on running workers, an integer ≥ 1 that you choose. It is checked when `orch worker start` or `review watch` starts a worker; `worker start --force` overrides it with a warning (section 1). |
+| `[profile] max_workers` | integer | required | The limit on running workers, an integer ≥ 1 that you choose. It is checked when `orch worker start` or `review watch` starts a worker; `worker start --force`, which needs a terminal on stdin, overrides it with a warning (section 1). |
 | `[profile] compute` | string | required | Declared context: `one` account, several accounts on the `same-vendor` agent CLI, or `multi-vendor`. Used for the `orch doctor` rows and the starting accounts `orch init` writes. It selects no rule. |
 | `[profile] people` | string | required | `solo`, or `team` (teammates approve on GitHub) |
 | `[profile] lead_account` | string | the only account, if there is one | Account id the lead runs on |

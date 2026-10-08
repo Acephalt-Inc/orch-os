@@ -43,17 +43,22 @@ step orch merge-gate 101 --fixture stale-approval
 step orch merge-gate 101 --fixture self-approval
 step orch merge-gate 101 --fixture approved --head 0000000
 
-echo; echo "# 6. workers in their own worktree + load governor"
+echo; echo "# 6. workers: readiness first, then a worker in its own worktree"
 git -C "$REPO" init -q && git -C "$REPO" -c user.name=demo -c user.email=demo commit -q --allow-empty -m init
 step orch load
+echo; echo "(every worker start without --force runs the readiness checks; this fresh home has no"
+echo " reviewer, no [merge] repo and no verifiable agent login, so the start is refused)"
 step orch worker start w1 --workdir "$REPO" --worktree -- sh -c 'echo worker {name} in $(basename "$PWD"); sleep 60'
-sleep 1
-step orch worker list
-step cat "$ORCH_HOME/workers/w1/stdout.log"
-step orch worker stop w1
-printf '{"tier": "HIGH"}' > "$ORCH_HOME/load.json"
-echo; echo "(simulating a busy machine: load state set to HIGH)"
-step orch worker start w2 -- sleep 5
+if [ -t 0 ]; then
+  echo; echo "(attended override: --force needs a terminal on stdin and prints a warning)"
+  step orch worker start w1 --workdir "$REPO" --worktree --force -- sh -c 'echo worker {name} in $(basename "$PWD"); sleep 60'
+  sleep 1
+  step orch worker list
+  step cat "$ORCH_HOME/workers/w1/stdout.log"
+  step orch worker stop w1
+else
+  echo; echo "(stdin is not a terminal: skipping the attended --force worker)"
+fi
 
 echo; echo "# 7. notes that outlive the session"
 step orch mem add poll-often -t rule -d "Check messages every minute"

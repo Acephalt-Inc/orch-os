@@ -324,6 +324,8 @@ export interface Host {
   /** every check run and status context reported for commit `sha` */
   checks(repo: string, sha: string): CheckRow[];
   which(cmd: string): string | null;
+  /** check the real launch admission without starting anything */
+  admit?(d: DispatchSpec): void;
   /** start the reviewer detached; returns its pid */
   dispatch(d: DispatchSpec): { pid: number | null };
 }
@@ -525,7 +527,13 @@ export function watchOnce(inp: WatchInput, host: Host): WatchResult {
     return done("WAITING", "no CI check reported at the head yet; if this repository has no CI, set [review.watch] require_ci = false");
   }
   const note = prev && prev.head !== head ? `; replaces ${prev.agent} at ${prev.head.slice(0, 9)} (head moved)` : prev && inp.force ? `; --force: replaces ${prev.agent} (${prev.status})` : "";
-  if (inp.dryRun) return done("DISPATCHED", `dry run: would start ${pick.name} (${pick.label}); nothing was run${note}`);
+  // one launch spec: the dry run checks admission for exactly what the real pass starts
+  const spec: DispatchSpec = { worker, argv, env: { ORCH_AGENT: pick.name, ORCH_REVIEW_PR: String(inp.pr), ORCH_REVIEW_HEAD: head, ORCH_REVIEW_REPO: inp.repo, ORCH_REVIEW_PROMPT: prompt }, prompt, minutes: inp.settings.staleMinutes };
+  if (inp.dryRun) {
+    try { host.admit?.(spec); }
+    catch (e: any) { res.command = null; return done("BLOCKED", `starting ${pick.name} failed: ${e.message ?? e}`); }
+    return done("DISPATCHED", `dry run: would start ${pick.name} (${pick.label}); nothing was run${note}`);
+  }
 
   return locked(path, () => {
     // re-read under the lock: another `review watch` may have dispatched this head meanwhile
@@ -533,10 +541,9 @@ export function watchOnce(inp: WatchInput, host: Host): WatchResult {
     if (again && again.head === head && !inp.force) return done("DISPATCHED", `${again.agent} (${again.label}) was started for this head by another watcher`);
     mkdirSync(inp.settings.dir, { recursive: true });
     writeFileSync(prompt, promptText(inp.pr, inp.repo, head, pick, inp.authors));
-    const env = { ORCH_AGENT: pick.name, ORCH_REVIEW_PR: String(inp.pr), ORCH_REVIEW_HEAD: head, ORCH_REVIEW_REPO: inp.repo, ORCH_REVIEW_PROMPT: prompt };
     let pid: number | null;
     try {
-      pid = host.dispatch({ worker, argv, env, prompt, minutes: inp.settings.staleMinutes }).pid;
+      pid = host.dispatch(spec).pid;
     } catch (e: any) {
       return done("BLOCKED", `starting ${pick.name} failed: ${e.message ?? e}`);
     }
