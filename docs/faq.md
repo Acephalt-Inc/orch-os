@@ -10,7 +10,7 @@ Start each interactive session by telling it its role and file, for example: `ex
 The same way: `export ORCH_AGENT=w1`, start `codex`, and say "Read ~/.orch/handbook/worker-boot.md and follow it." To have Codex load the rules on its own, add a line to the repository's `AGENTS.md` that points at the role file, or run `orch init --dir ~/.codex/skills --layout skills` if your Codex version reads skill folders. Workers started with `--agent codex` run `codex exec` with the task on stdin.
 
 **Does `orch doctor` need an agent, GitHub or a network?**
-No. With Node.js ≥ 20 and git on a POSIX system, the doctor passes. Agents, `gh`, `timeout` and the handbook show as SKIP when absent. `merge-gate --fixture` works fully offline.
+No. With Node.js ≥ 22 and git on a POSIX system, the doctor passes. Agents, `gh`, `timeout` and the handbook show as SKIP when absent. `merge-gate --fixture` works fully offline.
 
 **All my agents use one GitHub account. Why does the merge gate never pass?**
 GitHub does not let a PR's author approve it, and the default gate ignores author reviews as well. Use review comments instead: the reviewing agent runs `orch review approve PR --as r1`, which posts a comment whose first line is `ORCH-REVIEW APPROVE <full head sha> by r1`, and you check with `orch merge-gate PR --reviews comments --task ID` (or set `[review] source = "comments"`). A review comment counts only for the PR's current head commit and only when its agent is not the holder of task `ID` in `orch task`; a later `CHANGES` or `REJECT` review comment at the head blocks, and CI must still be green. See the solo flow in the README.

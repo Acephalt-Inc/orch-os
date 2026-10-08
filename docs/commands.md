@@ -51,12 +51,18 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 
 | Check | Required |
 |---|---|
-| Node.js ≥ 20, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
+| Node.js ≥ 22, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
 | handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
 | load state | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid; every other profile row is `PASS` or `SKIP` |
 
 With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; reviews count as single-agent and nothing merges automatically until a second account is added`. The rows are `profile` (the effective cell and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (agents on at least two accounts) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.
+
+For unattended launch, run `orch doctor --ready` (alias `--ready-for-live`). Every live check is `OK` or `FAIL(reason)`; any failure exits 1. `--agent NAME`, `--reviewer NAME`, `--workdir DIR` and `--minutes M` check the same selections accepted by `orch worker start`. Worker overrides after `--` are checked at launch. Without `--reviewer`, readiness uses review-watch's reviewer selection policy, excluding the selected worker's configured identity when known. Review-watch dispatch checks its already-selected reviewer.
+
+Readiness requires both executable commands and no-spend probes, a git workdir with `origin`, a usable `[merge] repo = "owner/name"`, authenticated `gh`, a working `timeout`/`gtimeout`, and a finite positive time limit of at least one second. It checks `claude auth status` and `codex login status`; other executables must pass their own `--version` probe (this establishes availability, not provider login). Supported `env KEY=value ...` prefixes retain their probe environment. Shell strings, shell/SSH wrappers, relative PATH entries and PATH overrides cannot be verified and fail unattended admission. Agent names in later arguments never determine the executable to probe.
+
+Run `orch load` before launch. The load state must have a valid non-blocking tier, a timestamp within `[load] max_age_seconds` (default 120), and finite non-negative values for `load_ratio` and every signal named in configured thresholds. Missing, corrupt, future or stale state fails readiness. Default thresholds require `swap_pct` too. Readiness reports prerequisites; it does not evaluate a PR's required CI checks.
 
 ## orch config
 
@@ -230,15 +236,15 @@ Like the comments gate, this is a process gate between cooperating agents, not a
 ## orch worker
 
 ```text
-orch worker start NAME [--task FILE] [--workdir DIR] [--minutes M] [--agent A]
+orch worker start NAME [--task FILE] [--workdir DIR] [--minutes M] [--agent A] [--reviewer R]
                        [--worktree [--branch B] [--base REF]] [--force] [-- CMD ...]
 orch worker list
 orch worker stop NAME [--keep-worktree]
 ```
 
-With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach the profile's worker cap (see [orch profile](#orch-profile)); `--force` starts one anyway. Without a profile there is no cap.
+With a `[profile]`, `start` also refuses (exit 2) when the running workers already reach the profile's worker cap (see [orch profile](#orch-profile)); `--force` starts one anyway only with terminal stdin and prints an attended-use warning. Without a profile there is no cap.
 
-`start` runs the worker detached and prints its pid, load tier and directory, plus a `worktree PATH branch=B (created|attached)` line with `--worktree`. It refuses (exit 2) when NAME is already running, the load tier blocks it (unless `--force`), the command is not on PATH, `--agent` is unknown, both `--agent` and `-- CMD` are given, or the worktree cannot be created (not a git repository, the branch is checked out elsewhere, the path exists but is not a worktree). `--minutes 0` disables the time limit.
+`start` runs the worker detached and prints its pid, load tier and directory, plus a `worktree PATH branch=B (created|attached)` line with `--worktree`. Before creating a worker directory or worktree, unattended `start` runs the readiness checks above and refuses (exit 2) with their failing names. `--force` bypasses readiness only for attended use, requires terminal stdin, and prints a warning. It refuses (exit 2) when NAME is already running, the load tier blocks it (unless `--force`), the command is not on PATH, `--agent` is unknown, both `--agent` and `-- CMD` are given, or the worktree cannot be created (not a git repository, the branch is checked out elsewhere, the path exists but is not a worktree). `--minutes 0` disables the time limit.
 
 With `--worktree`, `--workdir` names the repository (default: the current directory); the worker runs in `<[workers] worktree_root>/NAME` on branch `<worktree_branch_prefix>NAME` or `--branch`, created from `--base` (default `HEAD`). An existing worktree at that path is attached, not recreated.
 
@@ -312,6 +318,7 @@ A profile records the setup: **compute** (`one` account, several accounts on the
 | `[workers] root`, `command`, `timeout_minutes`, `nice`, `block_tiers` | `~/.orch/workers`, first detected agent, `60`, `5`, `HIGH CRITICAL` | Worker defaults |
 | `[workers] worktree_root`, `worktree_branch_prefix` | `~/.orch/worktrees`, `orch/` | Where `--worktree` puts worktrees; default branch prefix |
 | `[agents.NAME] command` | written by `init` | Command for `worker start --agent NAME` |
+| `[load] max_age_seconds` | `120` | Maximum unattended load sample age in seconds |
 | `[load] state`, `busy`, `high`, `critical` | `~/.orch/load.json`; `load_ratio` 0.75 / 1.0 (+ `swap_pct` 90) / 1.5 | Tier thresholds (`load_ratio`, `swap_pct`, `temp_c`) |
 | `[load] temp_command`, `renice_pattern`, `act` | `""`, `""`, `false` | Optional temperature probe; optional renice under HIGH/CRITICAL |
 | `[profile] compute`, `people` | none (required in a `[profile]`) | `one` / `same-vendor` / `multi-vendor`; `solo` / `team`. No `[profile]` table = no profile |

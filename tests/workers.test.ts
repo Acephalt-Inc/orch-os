@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as C from "../src/config.js";
 import { parseToml } from "../src/toml.js";
-import { groupAlive, WorkerError, Workers } from "../src/workers.js";
+import { groupAlive, WorkerError } from "../src/workers.js";
+import { AttendedWorkers as Workers, useAttendedTerminal } from "./_attended.js";
+import { defaultProbes } from "../src/readiness.js";
 import { sleep } from "../src/util.js";
 import { useTmpHome, waitFor } from "./_helpers.js";
 
 describe("WorkersTest", () => {
+  useAttendedTerminal();
   const ctx = useTmpHome();
   const workers = () => new Workers(parseToml(C.renderDefault(ctx.home)), `${ctx.home}/workers`, `${ctx.home}/load.json`);
 
@@ -27,9 +30,12 @@ describe("WorkersTest", () => {
   });
 
   it("test_high_load_blocks_start_unless_forced", async () => {
-    writeFileSync(`${ctx.home}/load.json`, JSON.stringify({ tier: "HIGH" }));
+    writeFileSync(`${ctx.home}/load.json`, JSON.stringify({ tier: "HIGH", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
     const w = workers();
-    expect(() => w.start("w2", { command: ["sleep", "1"], workdir: ctx.home })).toThrow(WorkerError);
+    const probe = vi.spyOn(defaultProbes, "exitCode").mockReturnValue(0);
+    try {
+      expect(() => w.start("w2", { command: ["sleep", "1"], workdir: ctx.home, force: false })).toThrow(/load tier HIGH/);
+    } finally { probe.mockRestore(); }
     w.start("w2", { command: ["sleep", "1"], workdir: ctx.home, force: true });
     await w.stop("w2");
   });
@@ -63,6 +69,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe("WorktreeV2", () => {
+  useAttendedTerminal();
   const ctx = useTmpHome();
   const setup = () => {
     const repo = `${ctx.home}/repo`;

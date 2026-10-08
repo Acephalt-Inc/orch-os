@@ -27,14 +27,14 @@ LIB="$HOME/.orch/lib"
 say() { printf 'orch-install: %s\n' "$*"; }
 die() { printf 'orch-install: ERROR: %s\n' "$*" >&2; exit 1; }
 
-# 1. a Node.js >= 20
+# 1. a Node.js >= 22
 NODE=""
 for c in "${ORCH_NODE:-node}" node; do
   p=$(command -v "$c" 2>/dev/null || true)
   [ -n "$p" ] || continue
-  if "$p" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null; then NODE="$p"; break; fi
+  if "$p" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' 2>/dev/null; then NODE="$p"; break; fi
 done
-[ -n "$NODE" ] || die "need Node.js >= 20 on PATH (or set ORCH_NODE)"
+[ -n "$NODE" ] || die "need Node.js >= 22 on PATH (or set ORCH_NODE)"
 say "node: $NODE ($("$NODE" -p 'process.versions.node'))"
 
 # 2. the source: this checkout, else a clone

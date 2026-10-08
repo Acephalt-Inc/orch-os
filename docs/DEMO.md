@@ -43,7 +43,7 @@ boot: point each agent session at its role file, e.g. $ORCH_HOME/handbook/lead-b
 next: orch doctor
 
 $ orch doctor
-PASS  node>=20                     <version>
+PASS  node>=22                     <version>
 PASS  posix (process groups)       <platform>
 PASS  config                       $ORCH_HOME/config.toml
 PASS  state dir writable           $ORCH_HOME

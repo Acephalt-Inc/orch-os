@@ -175,7 +175,9 @@ The role files are `~/.orch/handbook/lead-boot.md` and `~/.orch/handbook/worker-
 ```sh
 orch init                                   # Create config, mailbox, and role handbook
 orch agents                                 # See detected and configured agent CLIs
-orch doctor                                 # Check prerequisites
+orch doctor                                 # Check local prerequisites
+orch load                                   # Record a fresh load sample
+orch doctor --ready                         # Require worker/reviewer tools, repo and timeout before unattended launch
 orch lease status                           # Show the lead lease
 orch lease acquire --session lead           # Take the lead lease
 orch mailbox read                           # Read shared mailbox entries

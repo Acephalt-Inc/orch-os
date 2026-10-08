@@ -2,7 +2,7 @@
 
 ## Shape
 
-ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, Node.js ≥ 20) behind one command, `orch`. Every invocation is a short-lived process: load the config, take a lock where needed, change one file atomically, print a result, exit with a meaningful code. There is no daemon, socket or database. Shared state is a handful of plain files under `$ORCH_HOME` (default `~/.orch`) that any agent, script or human can inspect.
+ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, Node.js ≥ 22) behind one command, `orch`. Every invocation is a short-lived process: load the config, take a lock where needed, change one file atomically, print a result, exit with a meaningful code. There is no daemon, socket or database. Shared state is a handful of plain files under `$ORCH_HOME` (default `~/.orch`) that any agent, script or human can inspect.
 
 ```text
                  agents / terminals / cron

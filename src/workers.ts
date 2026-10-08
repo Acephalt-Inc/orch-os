@@ -18,7 +18,8 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
-import { configNumber } from "./config.js";
+import { ConfigError, configNumber } from "./config.js";
+import * as RD from "./readiness.js";
 import * as loadmod from "./load.js";
 import { dumps } from "./pyjson.js";
 import { expandPath, pidAlive, sleep, which } from "./util.js";
@@ -68,6 +69,7 @@ export interface StartOptions {
   minutes?: number | null;
   force?: boolean;
   agent?: string | null;
+  reviewer?: string | null;
   worktree?: boolean;
   branch?: string | null;
   base?: string | null;
@@ -78,7 +80,8 @@ export interface StartOptions {
 export class Workers {
   readonly cfg: Record<string, any>;
   readonly agents: Record<string, any>;
-  constructor(cfg: Record<string, any>, readonly root: string, readonly loadState: string) {
+  constructor(readonly fullConfig: Record<string, any>, readonly root: string, readonly loadState: string) {
+    const cfg = fullConfig;
     this.cfg = cfg.workers ?? {};
     this.agents = cfg.agents ?? {};
   }
@@ -166,26 +169,44 @@ export class Workers {
     if (p && pidAlive(p)) throw new WorkerError(`worker ${name} already running (pid ${p})`);
     if (p && groupAlive(p)) throw new WorkerError(`worker ${name}: processes of its last run are still running (group ${p}); run \`orch worker stop ${name}\` first`);
     // config values first: nothing (directory, worktree, branch) is created if they are bad
-    const minutes = opts.minutes ?? configNumber(this.cfg.timeout_minutes, 60, "[workers] timeout_minutes");
+    let minutes: number;
+    try { minutes = opts.minutes ?? configNumber(this.cfg.timeout_minutes, 60, "[workers] timeout_minutes"); }
+    catch (e: any) { throw new ConfigError(`time limit: ${e.message}`); }
     const nice = Math.trunc(configNumber(this.cfg.nice, 5, "[workers] nice", -20));
     const tier = loadmod.readState(this.loadState).tier ?? "NORMAL";
-    const blockTiers: string[] = this.cfg.block_tiers ?? ["HIGH", "CRITICAL"];
-    if (blockTiers.includes(tier) && !opts.force) throw new WorkerError(`load tier ${tier}: start refused (wait, or --force)`);
     if (opts.agent && opts.command && opts.command.length) throw new WorkerError("pass --agent or a command after --, not both");
     let tmpl: string[];
     if (opts.agent) {
-      if (!(opts.agent in this.agents)) {
+      if (!Object.hasOwn(this.agents, opts.agent)) {
         throw new WorkerError(`no [agents.${opts.agent}] in config (configured: ${Object.keys(this.agents).sort().join(", ") || "none"}; run \`orch init --force\`)`);
       }
       tmpl = this.agents[opts.agent].command ?? [];
     } else {
       tmpl = opts.command && opts.command.length ? opts.command : this.cfg.command ?? [];
     }
+    if (!Array.isArray(tmpl) || tmpl.some((v) => typeof v !== "string")) throw new WorkerError("worker command must be an argv array of strings");
     if (!tmpl.length) throw new WorkerError("no worker command: set [workers] command, use --agent, or pass one after --");
     let wd = realOrResolve(opts.workdir ?? process.cwd());
     if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new WorkerError(`workdir is not a directory: ${wd}`);
-    const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
-    if (!which(probe[0])) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
+    // A command tied to a not-yet-created worktree cannot be verified before admission.
+    const commandDir = opts.worktree ? `${realOrResolve(this.worktreeRoot())}/${name}` : wd;
+    const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", commandDir));
+    if (probe[0].includes("/")) probe[0] = resolve(commandDir, probe[0]);
+    const commandBin = which(probe[0]);
+    if (opts.force && process.stdin.isTTY !== true) throw new WorkerError("--force is for attended use only; requires a terminal on stdin");
+    if (opts.force) {
+      process.stderr.write("WARNING: attended --force bypasses readiness and load admission\n");
+    } else {
+      const checks = RD.readiness(this.fullConfig, this.loadState, {
+        ...opts, command: probe, agent: undefined, workerIdentity: opts.agent ?? Object.keys(this.agents).find((n) => JSON.stringify(this.agents[n].command) === JSON.stringify(tmpl)), workdir: wd, commandWorkdir: commandDir, name,
+        reviewer: opts.reviewer ?? (opts.env?.ORCH_REVIEW_PR ? opts.env.ORCH_AGENT : undefined),
+      });
+      const failing = checks.filter((c) => !c.ok);
+      if (failing.length) throw new WorkerError(`readiness failed: ${failing.map((c) => `${c.name} (${c.detail})`).join("; ")}`);
+    }
+    if (!commandBin) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
+    const to = which("timeout") ?? which("gtimeout");
+    if (!opts.force && (!to || RD.timeLimitProblem(minutes))) throw new WorkerError("readiness failed: timeout or time limit changed before launch");
     mkdirSync(d, { recursive: true });
     let wt: Worktree | null = null;
     if (opts.worktree) {
@@ -195,7 +216,7 @@ export class Workers {
       throw new WorkerError("--branch and --base need --worktree");
     }
     let argv = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
-    const to = which("timeout") ?? which("gtimeout");
+    argv[0] = commandBin; // use the executable resolved for the actual child working directory
     if (minutes > 0 && to) argv = [to, String(Math.trunc(minutes * 60)), ...argv];
     const niceBin = which("nice");
     if (nice > 0 && niceBin) argv = [niceBin, "-n", String(nice), ...argv];

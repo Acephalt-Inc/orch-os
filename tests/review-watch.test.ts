@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as P from "../src/profile.js";
 import * as RW from "../src/reviewwatch.js";
 import { parseToml } from "../src/toml.js";
-import { Workers } from "../src/workers.js";
+import { AttendedWorkers as Workers, useAttendedTerminal } from "./_attended.js";
 import { run, tmp, useTmpHome, waitFor } from "./_helpers.js";
 
 const H1 = "1111111111111111111111111111111111111111";
@@ -452,6 +452,7 @@ describe("ReviewWatchCli", () => {
 });
 
 describe("ReviewWatchDispatch", () => {
+  useAttendedTerminal();
   it("worker_start_passes_the_review_environment_and_the_prompt_on_stdin", async () => {
     const root = tmp("orch-rw-w-");
     const out = join(root, "seen.txt");

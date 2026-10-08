@@ -1,3 +1,5 @@
+import { useAttendedTerminal } from "./_attended.js";
+useAttendedTerminal();
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Agent detection, `orch init` / `orch doctor` / `orch agents` with and without agent CLIs. */
 import { appendFileSync, existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -147,7 +149,7 @@ describe("InitDoctorTest", () => {
     const prompt = `${d.home}/task.md`;
     writeFileSync(prompt, "fix the parser\n");
     const [code, out, err] = await run("worker", "start", "w1", "--agent", "codex", "--task", prompt,
-      "--workdir", d.home, "--minutes", "0");
+      "--workdir", d.home, "--minutes", "0", "--force");
     expect(code, out + err).toBe(0);
     const target = `${d.home}/exec.out`;
     await waitFor(() => existsSync(target) && readFileSync(target, "utf8") !== "");

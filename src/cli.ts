@@ -8,6 +8,7 @@ import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./arg
 import * as C from "./config.js";
 import * as D from "./detect.js";
 import { Lease } from "./lease.js";
+import * as RD from "./readiness.js";
 import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
@@ -282,13 +283,20 @@ function dirUsable(p: string): boolean {
   }
 }
 
-const cmdDoctor: Run = (_a, io) => {
+const cmdDoctor: Run = (a, io) => {
+  if (a.ready) {
+    let cfg: Record<string, any>;
+    try { cfg = C.load(); } catch (e: any) { eprintln(io, `FAIL config (${e.message})`); return 1; }
+    const checks = RD.readiness(cfg, loadPath(cfg), { agent: a.agent, reviewer: a.reviewer, minutes: a.minutes, workdir: a.workdir });
+    for (const line of RD.render(checks)) println(io, line);
+    return checks.every((c) => c.ok) ? 0 : 1;
+  }
   const rows: [string, string, string][] = [];
   const add = (ok: boolean, name: string, detail: string, optional = false) => {
     rows.push([ok ? "PASS" : optional ? "SKIP" : "FAIL", name, detail]);
   };
   const major = Number(process.versions.node.split(".")[0]);
-  add(major >= 20, "node>=20", process.versions.node);
+  add(major >= 22, "node>=22", process.versions.node);
   add(process.platform !== "win32", "posix (process groups)", process.platform);
   const p = C.configPath();
   let cfg: Record<string, any> | null = null;
@@ -627,7 +635,7 @@ const cmdWorker: Run = async (a, io) => {
       }
       const m = w.start(a.name, {
         command: a.cmd?.length ? a.cmd : null, task: a.task, workdir: a.workdir, minutes: a.minutes,
-        force: a.force, agent: a.agent, worktree: a.worktree, branch: a.branch, base: a.base,
+        force: a.force, agent: a.agent, reviewer: a.reviewer, worktree: a.worktree, branch: a.branch, base: a.base,
       });
       println(io, `worker ${m.name} started pid=${m.pid} load=${m.load_tier} dir=${w.dir(m.name)}`);
       if (m.worktree) println(io, `worktree ${m.worktree.path} branch=${m.worktree.branch} (${m.worktree.created ? "created" : "attached"})`);
@@ -962,7 +970,13 @@ export function buildTree(): CmdSpec<Run> {
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
-      { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
+      { name: "doctor", help: "PASS/FAIL per prerequisite; --ready checks unattended launch", run: cmdDoctor, opts: [
+        opt("ready", ["--ready", "--ready-for-live"], "bool", "require all live readiness checks; exit 1 on failure"),
+        opt("agent", ["--agent"], "str", "check the selected [agents.NAME] worker"),
+        opt("reviewer", ["--reviewer"], "str", "check this [review.agents.NAME] reviewer"),
+        opt("workdir", ["--workdir"], "str", "repository where the worker will run"),
+        opt("minutes", ["--minutes"], "float", "check this time limit instead of the configured default"),
+      ] },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
       {
         name: "lease", help: "single-holder role lease", run: cmdLease,
@@ -1121,10 +1135,11 @@ export function buildTree(): CmdSpec<Run> {
               opt("workdir", ["--workdir"], "str", "working directory (with --worktree: the repository)"),
               opt("minutes", ["--minutes"], "float", "time limit (0 = none; default [workers] timeout_minutes)"),
               opt("agent", ["--agent"], "str", "use the [agents.<name>] command"),
+              opt("reviewer", ["--reviewer"], "str", "selected [review.agents.NAME] reviewer (default: review-watch policy)"),
               opt("worktree", ["--worktree"], "bool", "run in its own git worktree under [workers] worktree_root"),
               opt("branch", ["--branch"], "str", "worktree branch (default <worktree_branch_prefix>NAME)"),
               opt("base", ["--base"], "str", "start point for a new branch (default HEAD)"),
-              opt("force", ["--force"], "bool", "start even when the load tier blocks it"),
+              opt("force", ["--force"], "bool", "attended override of readiness and load admission; requires terminal stdin and warns"),
             ],
           },
           { name: "list", help: "every worker with RUNNING / STOPPED / UNKNOWN", run: cmdWorker },

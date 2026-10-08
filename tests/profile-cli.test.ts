@@ -1,7 +1,11 @@
+import { spawnSync } from "node:child_process";
+import { which } from "../src/util.js";
+import { useAttendedTerminal } from "./_attended.js";
+const timeoutTool = which("timeout") ?? which("gtimeout");
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 // Adaptive profiles through the CLI: no [profile] = the output of the release before, byte for byte;
 // init questions and flags, profile show/update, doctor rows, merge-gate strength, worker cap.
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
@@ -495,12 +499,22 @@ describe("ProfileVendorCase", () => {
 });
 
 describe("ProfileWorkers", () => {
+  useAttendedTerminal();
   const d = useBins();
 
   it("worker_start_refuses_at_the_cap_and_force_overrides", async () => {
     await run("init", "--no-handbook");
     await run("profile", "update", "--compute", "one", "--people", "solo");
-    const start = (name: string, ...extra: string[]) => run("worker", "start", name, "--workdir", d.home, "--minutes", "0", ...extra, "--", "sleep", "30");
+    // Supply the prerequisites now required for the first, unattended launch.
+    expect(spawnSync("git", ["init", "-q", d.home]).status).toBe(0);
+    expect(spawnSync("git", ["-C", d.home, "remote", "add", "origin", "https://github.com/example/trial.git"]).status).toBe(0);
+    writeFileSync(cfgPath(d.home), readCfg(d.home).replace('repo = ""', 'repo = "example/trial"') + '\n[review.agents.r1]\ncmd = ["sleep"]\n');
+    fakeBin(d.bins, "sleep", 'if [ "$1" = "--version" ]; then exit 0; fi; exec /bin/sleep "$@"');
+    fakeBin(d.bins, "gh", 'exit 0');
+    expect(timeoutTool).toBeTruthy();
+    symlinkSync(timeoutTool!, join(d.bins, "timeout"));
+    writeFileSync(join(d.home, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
+    const start = (name: string, ...extra: string[]) => run("worker", "start", name, "--reviewer", "r1", "--workdir", d.home, "--minutes", "1", ...extra, "--", "sleep", "30");
     try {
       expect((await start("w1"))[0]).toBe(0);
       expect(await waitFor(() => readFileSync(join(d.home, "workers", "w1", "PID"), "utf8").trim() !== "")).toBe(true);
