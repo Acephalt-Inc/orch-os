@@ -14,7 +14,7 @@ Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `
 ## orch init
 
 ```text
-orch init [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
+orch init [--everyday] [--no-agent-file] [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
           [--compute one|same-vendor|multi-vendor --people solo|team
            [--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N] | --no-profile]
 ```
@@ -23,6 +23,8 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 
 | Flag | Meaning |
 |---|---|
+| `--everyday` | Without questions, write an everyday-mode config, mailbox and only `everyday.md` (or `everyday/SKILL.md` with the skills layout), then maintain a three-line pointer in `CLAUDE.md` |
+| `--no-agent-file` | With `--everyday`, do not write `CLAUDE.md` |
 | `--force` | Rewrite `config.toml` from defaults plus fresh detection (mailbox, messages, tasks and notes are kept) |
 | `--agent NAME` | Make NAME the default worker agent. Exit 2, nothing written, if NAME was not detected |
 | `--dir DIR` | Write the handbook to DIR instead of `[handbook] dir` |
@@ -31,6 +33,8 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 | `--no-handbook` | Do not write the handbook |
 | `--compute V --people V --policy human-merge --required-review S --max-workers N` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. `--compute` and `--people` go together (either alone is exit 2), and the other three need them (exit 2 without). The policy, the review requirement and the worker limit have no default: when any of the three is missing, `init` writes no `[profile]` table and prints `no profile written from the flags: …` with the command that creates one. The detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) as labels to edit |
 | `--no-profile` | On a terminal, skip the two profile questions and write no `[profile]` |
+
+Everyday setup refuses `--force`, `--no-handbook` and the profile selection flags. It also refuses a config that is not already in everyday mode, a non-regular `CLAUDE.md`, an unfinished everyday block, or a handbook path containing a line break. These checks happen before any file is written.
 
 **Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`). These two answers are declared context: they select no rule. It then asks three questions that have no default: whether to select the `human-merge` policy (`yes`/`no`), the weakest agent review that passes (`1`/`2`/`3` for `single-agent`/`cross-account`/`cross-vendor`), and the most workers running at once (a whole number, 1 or more). Three unusable answers to any question, `no` to the policy, or end of input write no profile, and `init` prints `no profile written: …` with the command that creates one. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless a complete set of the five profile flags replaces it). If the kept profile cannot be used, for example because it was written for the removed built-in table, `init --force` still keeps it byte for byte, prints the refusal with what to set on stderr, does not print `next: orch doctor`, and exits 2. When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
 
@@ -49,6 +53,8 @@ orch doctor
 ```
 
 One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when no required check fails, else 1.
+
+In everyday mode, missing `git`, `gh` and merge-repository settings say `not needed in everyday mode` and are skipped. The everyday handbook passes when present and otherwise points to `orch init --everyday`; any other `[orch] mode` value is a `FAIL mode` row.
 
 | Check | Required |
 |---|---|

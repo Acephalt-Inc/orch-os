@@ -38,6 +38,7 @@ ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, No
 | `load.ts` | Portable sampling, tier state machine with hysteresis, optional renice | `load.json` |
 | `mem.ts` | One file per entry, frontmatter, generated capped index, retire | `mem/*.md`, `mem/INDEX.md` |
 | `handbook.ts` | Writes `templates/handbook/*` to the target dir (flat or skills layout) | `handbook/` |
+| `everyday.ts` | Sets up everyday mode and interprets its doctor rows | `config.toml`, mailbox, handbook, `CLAUDE.md` |
 | `pyjson.ts` | JSON text in the exact layout v1.1 wrote | none |
 
 ## The lock

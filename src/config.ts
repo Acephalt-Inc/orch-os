@@ -27,7 +27,7 @@ function tomlList(items: string[]): string {
 }
 
 /** The default config. `agents` = detect.installed() rows; none => no worker command. */
-export function renderDefault(home: string, agents: Agent[] = [], defaultAgent?: string | null): string {
+export function renderDefault(home: string, agents: Agent[] = [], defaultAgent?: string | null, mode?: "everyday"): string {
   const chosen = agents.find((a) => a.name === defaultAgent) ?? agents[0];
   let block = "";
   if (agents.length) {
@@ -43,7 +43,7 @@ export function renderDefault(home: string, agents: Agent[] = [], defaultAgent?:
 
 [orch]
 # Free-form label for this team or project.
-team = "my-team"
+team = "my-team"${mode ? '\nmode = "everyday"' : ""}
 
 [mailbox]
 # The shared Markdown mailbox every session and worker posts to (lock-serialized).
