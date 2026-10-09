@@ -2,8 +2,8 @@
 /** Daily unattended workers registered with the current user's operating-system scheduler. */
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync,
-  renameSync, statSync, unlinkSync, writeFileSync,
+  appendFileSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync,
+  renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, posix, resolve } from "node:path";
@@ -17,6 +17,7 @@ export interface Host {
   run(tool: string, args: string[]): Result;
   exists(path: string): boolean; lstat(path: string): { isSymbolicLink(): boolean; isFile(): boolean; isDirectory(): boolean };
   read(path: string): string; write(path: string, text: string): void; append(path: string, text: string): void;
+  readNoFollow?(path: string): string;
   mkdir(path: string): void; remove(path: string): void; list(path: string): string[];
   managerAvailable?: () => boolean;
 }
@@ -27,6 +28,7 @@ export interface Runtime {
   sample(cfg: Record<string, any>): void;
   start(cfg: Record<string, any>, name: string, opts: Record<string, any>): Record<string, any>;
   limit(cfg: Record<string, any>): number | null;
+  isRefusal?(error: unknown): boolean;
 }
 
 function command(r: ScheduleRecord): string[] { return [r.node, r.cli, "schedule", "run", r.name]; }
@@ -56,13 +58,23 @@ function validRecord(v: any): v is ScheduleRecord {
     typeof v.task === "string" && typeof v.workdir === "string" && typeof v.node === "string" && typeof v.cli === "string" &&
     (v.agent === null || typeof v.agent === "string") && (v.orchHome === undefined || typeof v.orchHome === "string");
 }
-function readRecord(h: Host, path: string): ScheduleRecord | null { try { const v = JSON.parse(h.read(path)); return validRecord(v) ? v : null; } catch { return null; } }
-function owned(h: Host, path: string, shape?: string): boolean {
-  try { const st = h.lstat(path); if (st.isSymbolicLink() || !st.isFile()) return false; const t = h.read(path); return t.includes(MARK) && (!shape || t.includes(shape)); } catch { return false; }
+function record(h: Host, path: string): { kind: "missing" | "invalid" | "valid"; value?: ScheduleRecord; text?: string } {
+  if (!h.exists(path)) return { kind: "missing" };
+  try { const text = (h.readNoFollow ?? h.read)(path); const value = JSON.parse(text); return validRecord(value) ? { kind: "valid", value, text } : { kind: "invalid" }; }
+  catch { return { kind: "invalid" }; }
+}
+function readRecord(h: Host, path: string): ScheduleRecord | null { const x = record(h, path); return x.kind === "valid" ? x.value! : null; }
+function owned(h: Host, path: string, exact: string): boolean {
+  try { const st = h.lstat(path); return !st.isSymbolicLink() && st.isFile() && (h.readNoFollow ?? h.read)(path) === exact; } catch { return false; }
 }
 function writeAll(h: Host, files: [string, string][]): void { for (const [p] of files) h.mkdir(dirname(p)); for (const [p, t] of files) h.write(p, t); }
 function fail(io: ScheduleIO, step: string, r: Result): number { io.err(`schedule: ${step} failed${r.err.trim() ? `: ${r.err.trim()}` : ""}\n`); return 1; }
-function stateChanging(tool: string, args: string[]): boolean { return tool === "launchctl" || (tool === "systemctl" && ["daemon-reload", "enable", "disable"].some((x) => args.includes(x))); }
+function registered(h: Host, b: "launchd" | "systemd", p: ReturnType<typeof paths>, name: string): boolean {
+  if (b === "launchd") return h.run("launchctl", ["print", `gui/${h.uid}/com.orch-os.schedule.${name}`]).code === 0;
+  const en = h.run("systemctl", ["--user", "is-enabled", posix.basename(p.timer)]);
+  const ac = h.run("systemctl", ["--user", "is-active", posix.basename(p.timer)]);
+  return en.code === 0 && en.out.trim() === "enabled" && ac.code === 0 && ac.out.trim() === "active";
+}
 
 export function install(h: Host, io: ScheduleIO, a: any, cfg: Record<string, any>): number {
   const b = backend(h); if (!b) { io.err(refusal(h) + "\n"); return 2; }
@@ -76,24 +88,30 @@ export function install(h: Host, io: ScheduleIO, a: any, cfg: Record<string, any
   if (agent ? !(agent in (cfg.agents ?? {})) : !Array.isArray(cfg.workers?.command) || !cfg.workers.command.length) {
     io.err("schedule: agent is not configured and [workers] command is empty; nothing was installed or changed\n"); return 2;
   }
+  const r: ScheduleRecord = { name: a.name, daily: a.daily, task, agent, workdir, node: h.node, cli: h.cli, orchHome: h.orchHome };
+  const p = paths(h, r.name); const units: [string, string][] = b === "launchd" ? [[p.launch, plist(r)]] : [[p.service, service(r)], [p.timer, timer(r)]];
+  const prior = record(h, p.record); const old = prior.kind === "valid" ? prior.value! : null;
+  const oldUnits: [string, string][] = old ? (b === "launchd" ? [[p.launch, plist(old)]] : [[p.service, service(old)], [p.timer, timer(old)]]) : [];
+  for (const [path] of units) if (h.exists(path) && !oldUnits.some(([x, text]) => x === path && owned(h, path, text))) {
+    io.err(`schedule: ${path} is foreign or a symbolic link; nothing was installed or changed\n`); return 2;
+  }
+  if (prior.kind === "invalid") { io.err(`schedule: ${p.record} is unreadable or invalid; nothing was installed or changed\n`); return 2; }
+  const recText = JSON.stringify(r, null, 2) + "\n";
+  if (a.dry_run) { for (const [x, t] of [...units, [p.record, recText] as [string, string]]) io.out(`--- ${x}\n${t}`); io.out(b === "launchd" ? `launchctl bootstrap gui/${h.uid} ${p.launch}\n` : `systemctl --user daemon-reload\nsystemctl --user enable --now ${posix.basename(p.timer)}\n`); return 0; }
   if (b === "systemd" && !(h.managerAvailable ? h.managerAvailable() : h.run("systemctl", ["--user", "show-environment"]).code === 0)) {
     io.err("schedule: systemctl --user did not answer; nothing was installed or changed\n"); return 2;
   }
-  const r: ScheduleRecord = { name: a.name, daily: a.daily, task, agent, workdir, node: h.node, cli: h.cli, ...(h.envOrchHome === undefined ? {} : { orchHome: h.envOrchHome }) };
-  const p = paths(h, r.name); const units: [string, string][] = b === "launchd" ? [[p.launch, plist(r)]] : [[p.service, service(r)], [p.timer, timer(r)]];
-  for (const [path] of units) if (h.exists(path) && !owned(h, path, b === "systemd" && path === p.service ? "ExecStart=" : undefined)) {
-    io.err(`schedule: ${path} is foreign or a symbolic link; nothing was installed or changed\n`); return 2;
-  }
-  const old = readRecord(h, p.record); const recText = JSON.stringify(r, null, 2) + "\n";
-  if (old && h.read(p.record) === recText && units.every(([x, t]) => h.exists(x) && h.read(x) === t)) { io.out(`unchanged ${r.name}\n`); return 0; }
-  if (a.dry_run) { for (const [x, t] of [...units, [p.record, recText] as [string, string]]) io.out(`--- ${x}\n${t}`); io.out(b === "launchd" ? `launchctl bootstrap gui/${h.uid} ${p.launch}\n` : `systemctl --user daemon-reload\nsystemctl --user enable --now ${posix.basename(p.timer)}\n`); return 0; }
+  if (old && prior.text === recText && units.every(([x, t]) => h.exists(x) && owned(h, x, t)) && registered(h, b, p, r.name)) { io.out(`unchanged ${r.name}\n`); return 0; }
   if (old) {
     const q = b === "launchd" ? h.run("launchctl", ["bootout", `gui/${h.uid}/com.orch-os.schedule.${r.name}`]) : h.run("systemctl", ["--user", "disable", "--now", posix.basename(p.timer)]);
     if (q.code !== 0 && !/not loaded|not found|not enabled/i.test(q.err + q.out)) return fail(io, b === "launchd" ? "bootout" : "disable", q);
   }
-  writeAll(h, [...units, [p.record, recText]]);
-  if (b === "launchd") { const q = h.run("launchctl", ["bootstrap", `gui/${h.uid}`, p.launch]); if (q.code) return fail(io, "bootstrap", q); }
-  else { let q = h.run("systemctl", ["--user", "daemon-reload"]); if (q.code) return fail(io, "daemon-reload", q); q = h.run("systemctl", ["--user", "enable", "--now", posix.basename(p.timer)]); if (q.code) return fail(io, "enable --now", q); }
+  const snapshots = [...units, [p.record, recText] as [string, string]].map(([x]) => [x, h.exists(x) ? h.read(x) : null] as const);
+  const rollback = () => { for (const [x, text] of snapshots) { if (text === null) { if (h.exists(x)) h.remove(x); } else h.write(x, text); } };
+  writeAll(h, units);
+  if (b === "launchd") { const q = h.run("launchctl", ["bootstrap", `gui/${h.uid}`, p.launch]); if (q.code) { rollback(); return fail(io, "bootstrap", q); } }
+  else { let q = h.run("systemctl", ["--user", "daemon-reload"]); if (q.code) { rollback(); return fail(io, "daemon-reload", q); } q = h.run("systemctl", ["--user", "enable", "--now", posix.basename(p.timer)]); if (q.code) { rollback(); return fail(io, "enable --now", q); } }
+  h.mkdir(dirname(p.record)); h.write(p.record, recText);
   io.out(`scheduled ${r.name} daily ${r.daily} (${b})\n`); return 0;
 }
 
@@ -103,7 +121,7 @@ export function runScheduled(h: Host, io: ScheduleIO, name: string, rt: Runtime)
   const p = paths(h, name), r = readRecord(h, p.record); if (!r || r.name !== name) { io.err(`schedule: unknown or invalid record ${name}\n`); return 2; }
   const cfg = rt.config(); rt.sample(cfg);
   try { const x = rt.start(cfg, `sched-${name}`, { agent: r.agent, task: r.task, workdir: r.workdir, limit: rt.limit(cfg) }); h.mkdir(dirname(p.log)); h.append(p.log, `${new Date().toISOString()} STARTED pid=${x.pid}\n`); return 0; }
-  catch (e: any) { h.mkdir(dirname(p.log)); h.append(p.log, `${new Date().toISOString()} REFUSED ${e?.message ?? e}\n`); return 1; }
+  catch (e: any) { const refused = rt.isRefusal?.(e) ?? false; const word = refused ? "REFUSED" : "CRASHED"; h.mkdir(dirname(p.log)); h.append(p.log, `${new Date().toISOString()} ${word} ${e?.message ?? e}\n`); io.err(`schedule: run ${refused ? "refused" : "crashed"}: ${e?.message ?? e}\n`); return refused ? 2 : 1; }
 }
 
 function names(h: Host): string[] {
@@ -116,7 +134,8 @@ function names(h: Host): string[] {
 export function status(h: Host, io: ScheduleIO, json = false): number {
   if (!backend(h)) { io.err(refusal(h) + "\n"); return 2; } const ns = names(h); if (!ns.length) { io.out(json ? "[]\n" : "no scheduled jobs\n"); return 0; }
   const rows: any[] = []; for (const name of ns) { const p = paths(h, name), r = readRecord(h, p.record); let state = "ERROR"; let detail = "invalid record";
-    if (!r) { state = "ORPHAN"; detail = "no record"; }
+    const rr = record(h, p.record);
+    if (!r) { state = rr.kind === "missing" ? "ORPHAN" : "ERROR"; detail = rr.kind === "missing" ? "no record" : "invalid record"; }
     else if (!h.exists(r.node) || !h.exists(r.cli)) detail = "node or cli missing";
     else if (h.platform === "darwin") { const q = h.run("launchctl", ["print", `gui/${h.uid}/com.orch-os.schedule.${name}`]); if (q.code && /not found|could not find/i.test(q.err + q.out)) { state = "MISSING"; detail = "not loaded"; } else if (q.code) detail = "launchctl failed"; else if (!/state\s*=|path\s*=|service/i.test(q.out)) detail = "unrecognised launchctl output"; else if (h.exists(p.launch) && h.read(p.launch) === plist(r)) { state = "LOADED"; detail = "loaded"; } else detail = "different command"; }
     else { const en = h.run("systemctl", ["--user", "is-enabled", posix.basename(p.timer)]), ac = h.run("systemctl", ["--user", "is-active", posix.basename(p.timer)]); const enabled = en.code === 0 && en.out.trim() === "enabled", active = ac.code === 0 && ac.out.trim() === "active"; if (!enabled && !active && /disabled|not-found|inactive/.test(en.out + ac.out)) { state = "MISSING"; detail = "not enabled or active"; } else if (enabled && active && h.exists(p.service) && h.exists(p.timer) && h.read(p.service) === service(r) && h.read(p.timer) === timer(r)) { state = "LOADED"; detail = "enabled and active"; } else detail = "manager or unit mismatch"; }
@@ -127,7 +146,9 @@ export function status(h: Host, io: ScheduleIO, json = false): number {
 export function remove(h: Host, io: ScheduleIO, name: string): number {
   if (!backend(h)) { io.err(refusal(h) + "\n"); return 2; } if (!NAME.test(name ?? "")) { io.err("schedule: invalid NAME; nothing was installed or changed\n"); return 2; }
   const p = paths(h, name), present = [p.record, p.launch, p.service, p.timer].some((x) => h.exists(x)); if (!present) { io.out(`not scheduled ${name}\n`); return 0; }
-  const b = backend(h)!; const units = b === "launchd" ? [p.launch] : [p.service, p.timer]; for (const x of units) if (h.exists(x) && !owned(h, x, x === p.service ? "ExecStart=" : undefined)) { io.err(`schedule: ${x} is foreign or state is unknown; nothing was removed\n`); return 1; }
+  const b = backend(h)!; const rr = record(h, p.record); if (rr.kind !== "valid") { io.err(`schedule: record is ${rr.kind === "missing" ? "missing" : "unreadable or invalid"}; nothing was removed\n`); return 1; }
+  const expected = b === "launchd" ? [[p.launch, plist(rr.value!)]] as [string, string][] : [[p.service, service(rr.value!)], [p.timer, timer(rr.value!)]] as [string, string][];
+  const units = expected.map(([x]) => x); for (const [x, text] of expected) if (h.exists(x) && !owned(h, x, text)) { io.err(`schedule: ${x} is foreign or state is unknown; nothing was removed\n`); return 1; }
   const q = b === "launchd" ? h.run("launchctl", ["bootout", `gui/${h.uid}/com.orch-os.schedule.${name}`]) : h.run("systemctl", ["--user", "disable", "--now", posix.basename(p.timer)]); if (q.code && !/not loaded|not found|not enabled/i.test(q.err + q.out)) return fail(io, b === "launchd" ? "bootout" : "disable", q);
   if (b === "systemd") { const d = h.run("systemctl", ["--user", "daemon-reload"]); if (d.code) return fail(io, "daemon-reload", d); }
   for (const x of [...units, p.record, p.log]) if (h.exists(x)) h.remove(x); io.out(`removed ${name}\n`); return 0;
@@ -136,6 +157,6 @@ export function remove(h: Host, io: ScheduleIO, name: string): number {
 export function nodeHost(cli: string): Host {
   const run = (tool: string, args: string[]): Result => { const r = spawnSync(tool, args, { encoding: "utf8", timeout: 15_000 }); return { code: r.status ?? 1, out: r.stdout ?? "", err: r.error?.message ?? r.stderr ?? "" }; };
   return { platform: process.platform, home: process.env.HOME || homedir(), uid: process.getuid?.() ?? -1, node: process.execPath, cli: resolve(cli), orchHome: resolve(process.env.ORCH_HOME || posix.join(process.env.HOME || homedir(), ".orch")), envOrchHome: process.env.ORCH_HOME,
-    run, exists: existsSync, lstat: lstatSync, read: (p) => readFileSync(p, "utf8"), write: (p, t) => { const tmp = `${p}.tmp-${process.pid}`; writeFileSync(tmp, t, { mode: 0o600 }); renameSync(tmp, p); }, append: appendFileSync,
+    run, exists: existsSync, lstat: lstatSync, read: (p) => readFileSync(p, "utf8"), readNoFollow: (p) => { const fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW); try { const size = fstatSync(fd).size; const buf = Buffer.alloc(size); readSync(fd, buf, 0, size, 0); return buf.toString("utf8"); } finally { closeSync(fd); } }, write: (p, t) => { const tmp = `${p}.tmp-${process.pid}`; writeFileSync(tmp, t, { mode: 0o600 }); renameSync(tmp, p); }, append: appendFileSync,
     mkdir: (p) => mkdirSync(p, { recursive: true }), remove: unlinkSync, list: (p) => { try { return readdirSync(p); } catch { return []; } } };
 }

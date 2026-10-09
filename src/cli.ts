@@ -1038,6 +1038,7 @@ const cmdSchedule: Run = (a, io) => {
     sample: (cfg) => { LD.step(cfg, loadPath(cfg)); },
     start: (cfg, name, opts) => workers(cfg).start(name, opts),
     limit: (cfg) => P.readProfile(cfg)?.max_workers ?? null,
+    isRefusal: (error) => error instanceof WorkerError,
   });
 };
 
