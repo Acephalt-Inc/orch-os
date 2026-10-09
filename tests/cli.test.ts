@@ -1,3 +1,5 @@
+import { useAttendedTerminal } from "./_attended.js";
+useAttendedTerminal();
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -49,7 +51,7 @@ describe("CliTest", () => {
     writeFileSync(prompt, "from stdin\n");
     const outFile = `${ctx.home}/got.txt`;
     const [code, out, err] = await run("worker", "start", "w9", "--task", prompt, "--workdir", ctx.home,
-      "--minutes", "0", "--", "sh", "-c", `cat > ${outFile}`);
+      "--minutes", "0", "--force", "--", "sh", "-c", `cat > ${outFile}`);
     expect(code, out + err).toBe(0);
     await waitFor(() => existsSync(outFile) && readFileSync(outFile, "utf8") !== "");
     expect(readFileSync(outFile, "utf8")).toBe("from stdin\n");

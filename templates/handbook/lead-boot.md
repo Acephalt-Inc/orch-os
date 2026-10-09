@@ -71,6 +71,7 @@ one owner each, write each task brief, and start workers:
 
 ```sh
 orch mailbox post LEAD -m "w1: task parser-fix (brief: briefs/parser-fix.md)"
+orch doctor --ready --agent <agent>            # continue only when this prints ready-for-live: READY
 orch worker start w1 --agent <agent> --worktree --task briefs/parser-fix.md
 ```
 
