@@ -43,7 +43,7 @@ describe("CliTest", () => {
     expect(out).toContain("BLOCKED");
   });
 
-  it("test_worker_options_after_name_and_command_after_dashdash", async () => {
+  it.skipIf(process.platform === "win32")("test_worker_options_after_name_and_command_after_dashdash", async () => {
     await run("init");
     const prompt = `${ctx.home}/p.txt`;
     writeFileSync(prompt, "from stdin\n");

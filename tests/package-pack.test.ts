@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ROOT } from "./_helpers.js";
-import { candidate as packCandidate, pack, plantRetired, snapshot } from "./_pack.js";
+import { candidate as packCandidate, npmCommand, pack, plantRetired, snapshot } from "./_pack.js";
 
 const temporaryDirs: string[] = [];
 const candidate = () => packCandidate(temporaryDirs);
@@ -14,7 +14,7 @@ afterEach(() => {
 
 it("pack removes retired outputs from a dirty build", () => {
   const copy = candidate();
-  copy.run("npm", ["run", "build"]);
+  copy.run(npmCommand, ["run", "build"]);
   plantRetired(copy.repo);
   const tarball = pack(copy);
   const files = copy.run("tar", ["-tzf", tarball]).trim().split("\n");
@@ -31,14 +31,14 @@ it("pack removes retired outputs from a dirty build", () => {
 it("build removes retired outputs and tolerates missing dist", () => {
   const dirty = candidate();
   plantRetired(dirty.repo);
-  dirty.run("npm", ["run", "build"]);
+  dirty.run(npmCommand, ["run", "build"]);
   expect(existsSync(join(dirty.repo, "dist", "retired.js"))).toBe(false);
   expect(existsSync(join(dirty.repo, "dist", "checks.js"))).toBe(false);
   expect(existsSync(join(dirty.repo, "dist", "cli.js"))).toBe(true);
 
   const fresh = candidate();
   expect(existsSync(join(fresh.repo, "dist"))).toBe(false);
-  fresh.run("npm", ["run", "build"]);
+  fresh.run(npmCommand, ["run", "build"]);
   expect(existsSync(join(fresh.repo, "dist", "cli.js"))).toBe(true);
 });
 

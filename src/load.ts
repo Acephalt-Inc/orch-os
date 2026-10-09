@@ -100,7 +100,10 @@ export function tempC(command: string | undefined | null): number | null {
   }
 }
 
-export function takeSample(cfg: Record<string, any>): Sample {
+export function takeSample(cfg: Record<string, any>, platform: NodeJS.Platform = process.platform): Sample {
+  if (platform === "win32") {
+    return { ts: round(Date.now() / 1000, 1), load_ratio: null, swap_pct: null, temp_c: null };
+  }
   let ratio: number | null = null;
   try {
     ratio = round(loadavg()[0] / (cpus().length || 1), 2);
@@ -111,6 +114,7 @@ export function takeSample(cfg: Record<string, any>): Sample {
 }
 
 export function reniceMatching(pattern: string, target: number): number {
+  if (process.platform === "win32") return 0; // no ps and no nice values; a bare `ps` would also be looked up in the current directory
   const out = spawnSync("ps", ["-Ao", "pid=,uid=,args="], { encoding: "utf8" }).stdout ?? "";
   const me = process.pid;
   const uid = process.getuid ? process.getuid() : -1;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HANDBOOK, TEMPLATE_DIR } from "../src/handbook.js";
 import { parseToml } from "../src/toml.js";
@@ -74,7 +75,7 @@ describe("InitHandbookV2", () => {
     const [code, out] = await run("config");
     expect(code).toBe(0);
     const [head, ...rest] = out.split("\n");
-    expect(head).toBe(`# resolved from ${ctx.home}/config.toml`);
+    expect(head).toBe(`# resolved from ${join(ctx.home, "config.toml")}`);
     expect(JSON.parse(rest.join("\n")).lease.min_seconds).toBe(60);
   });
 });

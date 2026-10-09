@@ -10,7 +10,8 @@ import { ROOT, tmp } from "./_helpers.js";
 const HAVE = Boolean(which("git") && which("sh"));
 const SKIP = new Set(["node_modules", ".git", "coverage"]);
 
-describe.skipIf(!HAVE)("InstallTest", () => {
+// install.sh is the POSIX shell installer; on Windows the package is installed with npm (docs/windows.md)
+describe.skipIf(process.platform === "win32" || !HAVE)("InstallTest", () => {
   let td = "";
   let home = "";
   let stub = "";

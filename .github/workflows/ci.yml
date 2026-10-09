@@ -19,3 +19,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: End-to-end install check
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/e2e-install.ps1
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: End-to-end install check (Windows PowerShell)
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: ./scripts/e2e-install.ps1

@@ -21,12 +21,14 @@ Author: [Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
 ## Install
 
-Requires Node.js 22 or newer (24 LTS recommended) on macOS or Linux. Install the `orch` command globally, or run it once with `npx`:
+Requires Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or Linux. Install the `orch` command globally, or run it once with `npx`:
 
 ```sh
 npm i -g orch-os
 # or: npx orch-os init
 ```
+
+On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 
 ## Why ORCH-os
 

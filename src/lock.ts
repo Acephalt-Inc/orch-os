@@ -13,7 +13,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, write
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { pidAlive, sleepSync } from "./util.js";
+import { pidAlive, renameRetry, sleepSync } from "./util.js";
 
 export class LockTimeoutError extends Error {
   constructor(path: string, ms: number) {
@@ -44,6 +44,9 @@ interface Owner {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STALE_MS = 60_000;
 const BREAK_STALE_MS = 10_000;
+// Windows cannot remove a directory while another process still has a file in it open: retry briefly there.
+const REMOVE = process.platform === "win32"
+  ? { recursive: true, force: true, maxRetries: 10, retryDelay: 10 } : { recursive: true, force: true };
 
 function readOwner(dir: string): Owner | null {
   try {
@@ -108,7 +111,7 @@ function tryBreak(dir: string, mark: string): void {
       const aside = `${dir}.stale.${process.pid}.${randomUUID()}`;
       try {
         renameSync(dir, aside);
-        rmSync(aside, { recursive: true, force: true });
+        rmSync(aside, REMOVE);
       } catch { /* gone already */ }
     }
   } finally {
@@ -159,10 +162,12 @@ export class FileLock {
     if (!token) return;
     const o = readOwner(this.path);
     if (!o || o.token !== token) throw new LockLostError(this.path);
-    // rename aside before deleting, so a waiter never sees a half-removed lock directory
+    // rename aside before deleting, so a waiter never sees a half-removed lock directory.
+    // On Windows the rename is refused while a waiter is reading owner.json; renameRetry waits that out
+    // (the lock is still ours until the rename succeeds).
     const aside = `${this.path}.rel.${process.pid}.${token}`;
-    renameSync(this.path, aside);
-    rmSync(aside, { recursive: true, force: true });
+    renameRetry(this.path, aside);
+    rmSync(aside, REMOVE);
   }
 }
 

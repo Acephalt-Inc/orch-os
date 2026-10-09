@@ -1,0 +1,5 @@
+# Text files are checked out with LF on every system: tests compare docs, fixtures and snapshots byte for byte.
+* text=auto eol=lf
+templates/** text eol=lf
+skills/** text eol=lf
+fixtures/** text eol=lf
