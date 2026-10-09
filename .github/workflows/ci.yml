@@ -19,3 +19,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # Measures the suite on systems that are not supported yet. Not a required check.
+  platform-probe:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
