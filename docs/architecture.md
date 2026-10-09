@@ -36,6 +36,7 @@ ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, No
 | `mergegate.ts` | Review evaluation against the head commit, CI and label rules, shape validation, `gh pr view` fetch, fixtures | none (reads GitHub or a fixture) |
 | `workers.ts` | Detached `spawn` in a new session, `timeout`/`nice` wrapping, per-worker directory, process-group stop, worktrees | `workers/NAME/`, `worktrees/NAME/` |
 | `load.ts` | Portable sampling, tier state machine with hysteresis, optional renice | `load.json` |
+| `schedule.ts` | Daily user launchd agents or systemd user timers; records, status and run log | `schedule/NAME.json`, `schedule/NAME.log`, user scheduler files |
 | `mem.ts` | One file per entry, frontmatter, generated capped index, retire | `mem/*.md`, `mem/INDEX.md` |
 | `handbook.ts` | Writes `templates/handbook/*` to the target dir (flat or skills layout) | `handbook/` |
 | `pyjson.ts` | JSON text in the exact layout v1.1 wrote | none |

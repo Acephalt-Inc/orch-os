@@ -260,6 +260,23 @@ orch load [--read] [--json]
 
 Takes one sample, advances the tier and prints `load tier=... load_ratio=... swap=...% temp=... reniced=N`. `--read` prints the stored state without sampling.
 
+## orch schedule
+
+```text
+orch schedule install NAME --daily HH:MM --task FILE [--agent A] [--workdir DIR] [--dry-run]
+orch schedule status [--json]
+orch schedule remove NAME
+orch schedule run NAME
+```
+
+`install` registers one daily current-user job. On macOS it writes `~/Library/LaunchAgents/com.orch-os.schedule.NAME.plist` and uses launchd. On Linux it writes `~/.config/systemd/user/orch-os-schedule-NAME.service` and `.timer` and uses the systemd user manager. After a failure, repeat the same command or use `orch schedule remove NAME`; either command first asks the scheduler for its current state. `run` samples load and starts the recorded worker `sched-NAME`. It refuses a symbolic-link record or log. The run starts only if `orch worker start` would start it at that moment; a refusal is a `REFUSED` line and an unexpected exception is a `CRASHED` line in the log. The agent runs with exactly the command in `[agents.NAME]`; what it may do with nobody present is decided by the flags you put there.
+
+`status` reports `LOADED` when the files match and the scheduler confirms registration, `MISSING` when matching files exist but registration does not, `ORPHAN` when a job file has no record, and `ERROR` when a path is unsafe, files disagree, or the scheduler cannot give a known answer. With no records or job files it prints `no scheduled jobs`. It lists only names found on disk.
+
+The ownership rule is: a regular plist containing the orch marker and plist element, or a regular unit containing the orch marker and its matching service or timer section, is owned; all other job files are foreign. `install`, `remove`, and `status` use that rule. They refuse symbolic links at the job-file, record, or log path. An invalid regular record is treated as lost and can be replaced or removed. Parent directories may be symbolic links and are followed by the operating system.
+
+The command refuses an invalid name, a daily time outside `00:00` through `23:59`, a path containing a line break or NUL, a missing or non-regular task, a missing workdir, an unavailable agent command, a foreign or symbolic-link job file, and Linux without an answering systemd user manager. The refusal sentence for an unsupported platform is `schedule: no scheduler backend for PLATFORM in this version; nothing was installed or changed`. Windows is refused rather than using Task Scheduler. No backend uses sudo or crontab. Tests use scheduler stand-ins and do not register with real launchd or systemd.
+
 ## orch mem
 
 ```text

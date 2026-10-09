@@ -44,6 +44,10 @@ No. `merge-gate` answers yes or no; you or your automation performs the merge.
 **How do I run the load governor continuously?**
 Run `orch load` once a minute from cron or any other scheduler. Each call takes one sample and updates `load.json`; `orch worker start` reads it.
 
+**How do I run something every morning without opening my editor?**
+
+Put the prompt in a task file, configure its agent, then run `orch schedule install NAME --daily HH:MM --task FILE --agent A`. Use `orch schedule status` to ask the operating-system scheduler whether it is still loaded and read the last result.
+
 **How do I add CPU temperature?**
 Set `[load] temp_command` to any command that prints one number in degrees C, then add `temp_c` thresholds to `busy`, `high` and `critical`.
 
