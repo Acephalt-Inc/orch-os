@@ -2,14 +2,15 @@
 // Pack the distributable from a disposable source copy, then use its CLI and real gh adapter
 // against deterministic API fixtures. The developer checkout is never built, cleaned or packed here.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { which } from "../src/util.js";
 import { ROOT } from "./_helpers.js";
 import { candidate, pack, plantRetired } from "./_pack.js";
 import { HEAD, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
-let base: string, cli: string, home: string, data: string, log: string;
+let base: string, cli: string, home: string, data: string, log: string, workdir: string;
 let registryLog: string, observerRegistry: string, npmConfig: Record<string, any>, copy: ReturnType<typeof candidate>;
 const packDirs: string[] = [];
 
@@ -18,12 +19,12 @@ const packDirs: string[] = [];
 const packEnvironment = (): NodeJS.ProcessEnv => copy.env;
 
 const invoke = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], {
-  cwd: ROOT, encoding: "utf8", timeout: 15_000,
-  env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}:${process.env.PATH}`, FAKE_GH_FIXTURE: data, FAKE_GH_LOG: log },
+  cwd: workdir, encoding: "utf8", timeout: 15_000,
+  env: { ...process.env, ORCH_HOME: home, PATH: join(base, "bin"), FAKE_GH_FIXTURE: data, FAKE_GH_LOG: log },
 });
 function config(required: unknown = ["CI/test"], requireCi = true) {
   const value = JSON.stringify(required);
-  writeFileSync(join(home, "config.toml"), `[merge]\nrepo = "acme/widgets"\nrequired_checks = ${value}\n[review.agents.reviewer]\ncmd = [${JSON.stringify(process.execPath)}, "-e", "process.exit(0)"]\n[review.watch]\nrequire_ci = ${requireCi}\n`);
+  writeFileSync(join(home, "config.toml"), `[merge]\nrepo = "acme/widgets"\nrequired_checks = ${value}\n[review.agents.reviewer]\ncmd = ["codex", "exec", "-"]\n[review.watch]\nrequire_ci = ${requireCi}\n`);
 }
 function fixture(s: Scenario) {
   const info = prData(s);
@@ -99,7 +100,8 @@ const a = process.argv.slice(2), f = JSON.parse(fs.readFileSync(process.env.FAKE
 fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(a) + "\n");
 const lines = rows => process.stdout.write(rows.map(JSON.stringify).join("\n") + (rows.length ? "\n" : ""));
 const jq = a.includes("--jq") ? a[a.indexOf("--jq") + 1] : "";
-if (a[0] === "pr" && a[1] === "view") console.log(JSON.stringify(f.pr));
+if (a[0] === "auth" && a[1] === "status") process.exit(0);
+else if (a[0] === "pr" && a[1] === "view") console.log(JSON.stringify(f.pr));
 else if (a[0] === "api" && a.some(x => x.endsWith("/check-runs"))) {
   if (!a.includes("--paginate") || !a[a.indexOf("--jq") + 1].includes(".check_suite.id")) process.exit(9);
   lines(f.check_runs.map(r => [r.head_sha, r.name, r.conclusion ?? r.status, r.check_suite.id]));
@@ -114,6 +116,18 @@ else if (a[0] === "api" && a.some(x => x.endsWith("/check-runs"))) {
   lines(f.workflow_runs.map(r => [r.check_suite_id, r.name]));
 } else { console.error("unexpected gh call " + JSON.stringify(a)); process.exit(9); }
 `, { mode: 0o755 });
+  // A reviewer the launch admission can verify: its login-status command exits 0. It is never started here.
+  writeFileSync(join(base, "bin", "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  // The CLI runs with this directory as its whole PATH and in its own git repository with an
+  // origin, so a previewed dispatch does not depend on the developer's PATH or checkout.
+  const git = which("git"), limiter = which("timeout") ?? which("gtimeout");
+  expect(git, "git is a test prerequisite").toBeTruthy();
+  expect(limiter, "timeout or gtimeout is a test prerequisite").toBeTruthy();
+  symlinkSync(git!, join(base, "bin", "git"));
+  symlinkSync(limiter!, join(base, "bin", "timeout"));
+  workdir = join(base, "repo");
+  expect(spawnSync(git!, ["init", "-q", workdir]).status).toBe(0);
+  expect(spawnSync(git!, ["-C", workdir, "remote", "add", "origin", "https://github.com/acme/widgets.git"]).status).toBe(0);
 });
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
@@ -122,6 +136,8 @@ afterAll(() => {
 beforeEach(() => {
   home = mkdtempSync(join(base, "home-")); data = join(home, "api.json"); log = join(home, "gh.log");
   config();
+  // Fresh load state: a previewed dispatch runs the same admission as a real one.
+  writeFileSync(join(home, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
   const claimed = invoke("task", "claim", "gating", "--as", "author");
   expect(claimed.status, claimed.stderr).toBe(0);
 });

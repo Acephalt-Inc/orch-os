@@ -77,7 +77,7 @@ orch worker stop w1  →  kill(-pgid, SIGTERM) → wait 5 s → kill(-pgid, SIGK
                      →  git status --porcelain empty? → git worktree remove (branch kept)
 ```
 
-The absolute agent path in the config means a worker started from cron, with its minimal PATH, still finds its binary.
+An absolute agent path lets readiness find that binary under cron's minimal PATH. A cron start still needs every other readiness check, including logged-in `gh`, a usable time-limit tool and fresh load state.
 
 ## Merge-gate data flow
 

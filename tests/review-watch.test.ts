@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 // `orch review watch`: CI at the head, reviewer choice under the profile's selected policy, one dispatch per head.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { reviewStart } from "../src/cli.js";
 import * as P from "../src/profile.js";
 import * as RW from "../src/reviewwatch.js";
 import { parseToml } from "../src/toml.js";
-import { Workers } from "../src/workers.js";
-import { run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { AttendedWorkers as Workers, useAttendedTerminal } from "./_attended.js";
+import { fakeBin, keepEnv, run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { which } from "../src/util.js";
+
+const timeoutTool = which("timeout") ?? which("gtimeout");
 
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";
@@ -459,6 +463,7 @@ describe("ReviewWatchCli", () => {
 });
 
 describe("ReviewWatchDispatch", () => {
+  useAttendedTerminal();
   it("worker_start_passes_the_review_environment_and_the_prompt_on_stdin", async () => {
     const root = tmp("orch-rw-w-");
     const out = join(root, "seen.txt");
@@ -476,14 +481,30 @@ describe("ReviewWatchDispatch", () => {
 
 describe("ReviewWatchWorkerLimit", () => {
   const ctx = useTmpHome();
+  keepEnv(["PATH"]);
 
   it("a_review_dispatch_is_refused_at_the_written_worker_limit", async () => {
     const prof = profile("single-agent", "one", "solo", { a1: "codex" }, { w1: "a1", r1: "a1" }); // max_workers = 2
     const prompt = join(ctx.home, "p.md");
     writeFileSync(prompt, "review this\n");
-    const cfg = { workers: { nice: 0 } };
+    // A dispatch runs the launch admission, so the reviewer is a stand-in `codex` whose login-status
+    // command exits 0 and which otherwise sleeps; gh, a time-limit tool and fresh load state are supplied.
+    const bins = join(ctx.home, "bin");
+    mkdirSync(bins);
+    const codex = fakeBin(bins, "codex", 'if [ "$1" = "login" ]; then exit 0; fi; exec /bin/sleep 30');
+    fakeBin(bins, "gh", "exit 0");
+    expect(timeoutTool).toBeTruthy();
+    symlinkSync(timeoutTool!, join(bins, "timeout"));
+    process.env.PATH = `${bins}:/usr/bin:/bin`;
+    const repo = join(ctx.home, "repo");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    expect(spawnSync("git", ["-C", repo, "remote", "add", "origin", "https://github.com/acme/widgets.git"]).status).toBe(0);
+    const cwd = process.cwd();
+    process.chdir(repo);
+    writeFileSync(join(ctx.home, "load.json"), JSON.stringify({ tier: "NORMAL", ts: Date.now() / 1000, load_ratio: 0, swap_pct: 0 }));
+    const cfg = { workers: { nice: 0 }, merge: { repo: "acme/widgets" }, review: { agents: { r1: { cmd: [codex] } } } };
     const start = reviewStart(cfg, prof);
-    const spec = (worker: string): RW.DispatchSpec => ({ worker, argv: ["/bin/sleep", "30"], env: {}, prompt, minutes: 0 });
+    const spec = (worker: string): RW.DispatchSpec => ({ worker, argv: [codex], env: { ORCH_AGENT: "r1", ORCH_REVIEW_PR: "7" }, prompt, minutes: 1 });
     const running = async () => (await run("worker", "list"))[1].split("\n").filter((l) => l.includes("RUNNING")).length;
     try {
       expect(start(spec("review-7-a")).pid).toBeGreaterThan(0);
@@ -493,12 +514,13 @@ describe("ReviewWatchWorkerLimit", () => {
       expect(() => start(spec("review-7-c"))).toThrow("2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers");
       // through the watch it is a BLOCKED result: nothing is started
       const { host } = fakeHost();
-      const r = RW.watchOnce(input([agent("r1", "codex", "a1")], { profile: prof }), { ...host, dispatch: start });
+      const r = RW.watchOnce(input([{ ...agent("r1", "codex", "a1"), argv: [codex] }], { profile: prof }), { ...host, dispatch: start });
       expect([r.outcome, r.detail]).toEqual(["BLOCKED", "starting r1 failed: 2 worker(s) running and [profile] max_workers is 2; stop one or raise max_workers"]);
       expect(await running()).toBe(2);
       // without a profile there is no limit
       expect(reviewStart(cfg, null)(spec("review-7-d")).pid).toBeGreaterThan(0);
     } finally {
+      process.chdir(cwd);
       for (const n of ["a", "b", "c", "d"]) await run("worker", "stop", `review-7-${n}`);
     }
   });
