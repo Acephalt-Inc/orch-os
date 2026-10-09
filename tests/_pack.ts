@@ -5,9 +5,16 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "vitest";
-import { ROOT } from "./_helpers.js";
+import { runResolved, which } from "../src/util.js";
+import { ROOT, WINDOWS } from "./_helpers.js";
 
-export const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+export const npmCommand = WINDOWS ? "npm.cmd" : "npm";
+
+/** Windows: the full path of the program. tar is the one in System32 (Git's tar reads `C:` as a host name). */
+function windowsProgram(command: string): string {
+  if (command === "tar") return join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  return which(command) ?? command;
+}
 
 /** A disposable copy of the candidate; `track` receives its directory so the caller removes it. */
 export function candidate(track: string[]) {
@@ -24,7 +31,8 @@ export function candidate(track: string[]) {
     cpSync(join(ROOT, path), join(repo, path), { recursive: true });
   }
   // Reuse the installed compiler and types without installing or fetching anything.
-  symlinkSync(join(ROOT, "node_modules"), join(repo, "node_modules"), "dir");
+  // (a junction on Windows: it needs no extra privilege)
+  symlinkSync(join(ROOT, "node_modules"), join(repo, "node_modules"), WINDOWS ? "junction" : "dir");
   const userconfig = join(dir, "user.npmrc");
   const globalconfig = join(dir, "global.npmrc");
   writeFileSync(userconfig, "");
@@ -42,9 +50,13 @@ export function candidate(track: string[]) {
     NPM_CONFIG_IGNORE_SCRIPTS: "false",
   };
   const run = (command: string, args: string[]) => {
-    const result = spawnSync(command, args, { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
+    // Windows: npm is npm.cmd, started the way the product starts a .cmd file; and it is slower there
+    const result = WINDOWS
+      ? runResolved(windowsProgram(command), args, { cwd: repo, env, encoding: "utf8", timeout: 180_000 })
+      : spawnSync(command, args, { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
     expect(result.status, `${command} ${args.join(" ")}\n${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
-    return result.stdout;
+    // Windows programs end lines with CRLF
+    return WINDOWS ? result.stdout.replace(/\r\n/g, "\n") : result.stdout;
   };
   // npm in the copy resolves the isolated config, cache and home, not the developer's.
   expect(run(npmCommand, ["config", "get", "offline"]).trim()).toBe("true");

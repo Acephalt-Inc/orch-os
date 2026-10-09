@@ -28,7 +28,7 @@ npm i -g orch-os
 # 或：npx orch-os init
 ```
 
-在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。
+在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。详见 [docs/windows.md](docs/windows.md)。
 
 ## 为什么选择 ORCH-os
 

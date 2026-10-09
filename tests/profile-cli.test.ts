@@ -9,7 +9,7 @@ import { main } from "../src/cli.js";
 import * as P from "../src/profile.js";
 import { Tasks } from "../src/tasks.js";
 import { parseToml } from "../src/toml.js";
-import { fakeBin, keepEnv, ROOT, run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { fakeBin, keepEnv, ROOT, run, testPath, tmp, useTmpHome, waitFor, WINDOWS } from "./_helpers.js";
 
 /** PATH = a temp dir of fake agent CLIs + /usr/bin:/bin; no fallback dirs. */
 function useBins() {
@@ -18,7 +18,7 @@ function useBins() {
   keepEnv(["PATH", "ORCH_AGENT_DIRS", "ORCH_TEST_OUT", "ORCH_TEST_JSON"]);
   beforeEach(() => {
     d.bins = tmp("orch-pbins-");
-    process.env.PATH = `${d.bins}:/usr/bin:/bin`;
+    process.env.PATH = testPath(d.bins);
     process.env.ORCH_AGENT_DIRS = "";
   });
   afterEach(() => rmSync(d.bins, { recursive: true, force: true }));
@@ -50,9 +50,13 @@ describe("NoProfileUnchanged", () => {
   const d = useBins();
 
   it("merge_gate_init_and_doctor_match_the_pre_profile_snapshot", async () => {
-    process.env.PATH = "/usr/bin:/bin";
+    process.env.PATH = testPath();
     const snap = JSON.parse(readFileSync(join(ROOT, "tests", "snapshots", "merge-gate-pre-profiles.json"), "utf8"));
-    const norm = (s: string) => s.split(d.home).join("$ORCH_HOME");
+    // Windows: the home also appears with doubled backslashes (inside TOML strings) and is followed by either separator
+    const norm = (s: string) => !WINDOWS ? s.split(d.home).join("$ORCH_HOME")
+      : s.split(JSON.stringify(d.home).slice(1, -1)).join("$ORCH_HOME").split(d.home).join("$ORCH_HOME").replace(/\$ORCH_HOME\\{1,2}/g, "$ORCH_HOME/");
+    // Windows: the platform row has its own name
+    if (WINDOWS) snap.doctor_rows = snap.doctor_rows.map((r: string) => (r === "posix (process groups)" ? "windows (no process groups)" : r));
     const [code, out, err] = await run("init", "--no-handbook");
     expect({ out: norm(out), err: norm(err), code }).toEqual(snap.cases["init --no-handbook"]);
     expect(norm(readCfg(d.home))).toBe(snap.config_toml);
@@ -107,13 +111,13 @@ describe("ProfileInit", () => {
 
   it("flags_write_a_profile_from_detected_clis", async () => {
     fakeBin(d.bins, "claude");
-    fakeBin(d.bins, "codex");
+    const codex = fakeBin(d.bins, "codex");
     const [code, out] = await run("init", "--no-handbook", "--compute", "multi-vendor", "--people", "solo", "--policy", "human-merge", "--required-review", "single-agent", "--max-workers", "1");
     expect(code).toBe(0);
     expect(out).toContain("profile: human-merge (multi-vendor · solo), required_review = single-agent, max_workers = 1 (`orch profile show`");
     const cfg = parseToml(readCfg(d.home));
     expect(cfg.profile).toEqual({ ...EXAMPLE, compute: "multi-vendor", people: "solo", lead_account: "acct1", accounts: { acct1: "claude", acct2: "codex" }, agents: {} });
-    expect(cfg.agents.codex.command[0]).toBe(`${d.bins}/codex`); // the rest of the config is the default one
+    expect(cfg.agents.codex.command[0]).toBe(codex); // the rest of the config is the default one
   });
 
   it("flags_without_all_three_selected_values_write_no_profile_and_say_how_to_create_one", async () => {
@@ -654,8 +658,10 @@ describe("ProfileLegacy", () => {
     new Tasks(join(d.home, "tasks")).claim("t1", "w1");
     const gate = ["merge-gate", "101", "--fixture", "comment-approved", "--reviews", "comments", "--task", "t1"];
     // no verdict at all: not PASS, not BLOCKED. --tier low --auto was the automatic-merge path of the removed table.
-    for (const argv of [gate, [...gate, "--tier", "low", "--auto"], ["profile", "show"], ["worker", "start", "w9", "--workdir", d.home, "--", "sleep", "30"],
-      ["review", "watch", "7", "--task", "t1", "--repo", "o/n", "--once"]]) {
+    // Windows: `worker start` and `review watch` are refused before the profile is read, so those two are left out there (docs/windows.md)
+    const posixOnly = WINDOWS ? [] : [["worker", "start", "w9", "--workdir", d.home, "--", "sleep", "30"],
+      ["review", "watch", "7", "--task", "t1", "--repo", "o/n", "--once"]];
+    for (const argv of [gate, [...gate, "--tier", "low", "--auto"], ["profile", "show"], ...posixOnly]) {
       const [code, out, err] = await run(...argv);
       expect([code, out], argv.join(" ")).toEqual([2, ""]);
       expect(err, argv.join(" ")).toContain(NO_POLICY);

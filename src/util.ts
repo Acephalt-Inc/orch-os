@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Small shared helpers: names, PATH lookup, synchronous sleep, atomic writes, process checks. */
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
 import {
   accessSync, closeSync, constants, fsyncSync, openSync, renameSync, statSync, writeSync, chmodSync,
 } from "node:fs";
 import { hostname, userInfo } from "node:os";
-import { delimiter, extname, join, resolve } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 
 /** Names (authors, workers, readers, task ids, note names): letters, digits, `_ . @ -`. */
 export const NAME_RE = /^[\p{L}\p{N}_.@-]+$/u;
@@ -33,35 +33,98 @@ function isCommandFile(p: string, platform: NodeJS.Platform): boolean {
   try { return statSync(p).isFile(); } catch { return false; }
 }
 
-/** Like Python's shutil.which, including PATHEXT resolution on Windows. */
+/** The file types `which` accepts on Windows. PATHEXT only orders them: its default also lists script types. */
+export const WINDOWS_PROGRAM_EXTENSIONS = [".com", ".exe", ".bat", ".cmd"];
+
+/** A Windows path with a drive and a root (`C:\x`), or a UNC path. `\x` and `C:x` depend on the current drive or folder. */
+export function isFullyQualifiedWindowsPath(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]+[\\/]+[^\\/]/.test(p);
+}
+
+/**
+ * May Windows lookup take programs from this directory? Only from a fully qualified one: a
+ * relative entry would make the current folder a place programs are taken from. (When the
+ * Windows rules are selected on another host, as tests do, that host's absolute paths count.)
+ */
+export function isWindowsSearchDir(dir: string): boolean {
+  return process.platform === "win32" ? isFullyQualifiedWindowsPath(dir) : isAbsolute(dir);
+}
+
+/**
+ * Like Python's shutil.which. On Windows: PATHEXT resolution limited to program files
+ * (.com .exe .bat .cmd), and PATH entries that are not fully qualified are skipped. The current
+ * directory is never searched. On other systems the lookup is the one it always was.
+ */
 export function which(cmd: string | undefined | null, envPath?: string, platform: NodeJS.Platform = process.platform,
   pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD"): string | null {
   if (!cmd) return null;
-  const extensions = platform === "win32"
-    ? (extname(cmd) ? [""] : pathExt.split(";").filter(Boolean)).map((x) => x.toLowerCase())
-    : [""];
+  const win = platform === "win32";
+  let extensions = [""];
+  if (win && !WINDOWS_PROGRAM_EXTENSIONS.includes(extname(cmd).toLowerCase())) {
+    const listed = pathExt.split(";").map((x) => x.toLowerCase()).filter((x) => WINDOWS_PROGRAM_EXTENSIONS.includes(x));
+    extensions = listed.length ? listed : WINDOWS_PROGRAM_EXTENSIONS;
+  }
   const candidates = (base: string) => extensions.map((x) => base + x);
   if (cmd.includes("/") || cmd.includes("\\")) {
     return candidates(cmd).find((p) => isCommandFile(p, platform)) ?? null;
   }
   const path = envPath ?? process.env.PATH ?? "";
-  const sep = platform === "win32" ? ";" : delimiter;
-  for (const d of path.split(sep)) {
-    if (!d) continue;
+  const sep = win ? ";" : delimiter;
+  for (let d of path.split(sep)) {
+    if (win) d = d.replace(/^"(.*)"$/, "$1");
+    if (!d || (win && !isWindowsSearchDir(d))) continue;
     const p = candidates(join(d, cmd)).find((candidate) => isCommandFile(candidate, platform));
     if (p) return p;
   }
   return null;
 }
 
-/** Quote one argument for cmd.exe without allowing metacharacters or percent expansion. */
-export function quoteCmdArg(arg: string): string {
-  return `"${arg.replace(/%/g, "%%").replace(/([&|<>^])/g, "^$1").replace(/"/g, '""')}"`;
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/**
+ * Quote one argument for a .bat or .cmd file started through cmd.exe. First the quoting the
+ * final program's argument parser expects; then a caret before every cmd.exe metacharacter, the
+ * quotes included, so cmd.exe never sees a quoted region and expands nothing. `parses` is how
+ * many times cmd.exe reads the text: 2 for a batch file that forwards its arguments with %*
+ * (once on the command line, once inside the file).
+ */
+export function quoteCmdArg(arg: string, parses = 2): string {
+  let s = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
+  for (let i = 0; i < parses; i++) s = s.replace(CMD_META, "^$1");
+  return s;
 }
 
-/** A fixed cmd.exe invocation for an already-resolved .cmd or .bat command. */
+/** cmd.exe by full path: %ComSpec% when it is fully qualified, else the one in the Windows folder. Never a bare name. */
+export function cmdExe(env: NodeJS.ProcessEnv = process.env): string {
+  const comspec = env.ComSpec ?? env.COMSPEC ?? "";
+  return isFullyQualifiedWindowsPath(comspec) ? comspec : `${env.SystemRoot || env.windir || "C:\\Windows"}\\System32\\cmd.exe`;
+}
+
+/**
+ * The fixed cmd.exe invocation for an already-resolved .cmd or .bat file. The command line is
+ * built only here, from quoted arguments; start it with windowsVerbatimArguments (runResolved does).
+ * cmd.exe ends a command at a line break, so an argument that contains one is refused.
+ */
 export function cmdInvocation(command: string, args: string[]): [string, string[]] {
-  return [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", [command, ...args].map(quoteCmdArg).join(" ")]];
+  if ([command, ...args].some((a) => /[\r\n\0]/.test(a))) {
+    throw new Error(`${command} is a .cmd or .bat file, and cmd.exe cannot pass it an argument that contains a line break`);
+  }
+  const line = [command.replace(CMD_META, "^$1"), ...args.map((a) => quoteCmdArg(a))].join(" ");
+  return [cmdExe(), ["/d", "/s", "/c", `"${line}"`]];
+}
+
+/**
+ * Start an already-resolved program (a `which` result) and wait for it. A .bat or .cmd file
+ * goes through cmdInvocation; nothing else reaches a shell, and no shell string is built from
+ * the caller's input anywhere else.
+ */
+export function runResolved(file: string, args: string[], options: SpawnSyncOptionsWithStringEncoding,
+  platform: NodeJS.Platform = process.platform): SpawnSyncReturns<string> {
+  if (platform === "win32" && /\.(bat|cmd)$/i.test(file)) {
+    const [exe, cmdArgs] = cmdInvocation(file, args);
+    return spawnSync(exe, cmdArgs, { ...options, argv0: "cmd.exe", windowsVerbatimArguments: true });
+  }
+  return spawnSync(file, args, options);
 }
 
 const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
@@ -75,6 +138,24 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * renameSync. Windows refuses a rename while another process has the file, or a file inside the
+ * directory, open (a reader of the same state, a virus scanner). There the refusal is retried
+ * for up to about two seconds; other systems rename once, as before.
+ */
+export function renameRetry(from: string, to: string): void {
+  for (let i = 0; ; i++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (e: any) {
+      const busy = e?.code === "EPERM" || e?.code === "EACCES" || e?.code === "EBUSY";
+      if (process.platform !== "win32" || !busy || i >= 60) throw e;
+      sleepSync(Math.min(2 + i * 2, 40));
+    }
+  }
+}
+
 /** Write `data` to a temp file beside `path`, optionally fsync it, then rename it into place. */
 export function atomicWrite(path: string, data: string, opts: { fsync?: boolean; mode?: number; tmpSuffix?: string } = {}): void {
   const tmp = path + (opts.tmpSuffix ?? `.tmp${process.pid}`);
@@ -85,7 +166,7 @@ export function atomicWrite(path: string, data: string, opts: { fsync?: boolean;
   } finally {
     closeSync(fd);
   }
-  renameSync(tmp, path);
+  renameRetry(tmp, path);
   if (opts.mode !== undefined) chmodSync(path, opts.mode);
 }
 
@@ -98,7 +179,7 @@ export function pidAlive(pid: number, checkZombie = true): boolean {
     if (e && e.code === "EPERM") return true;
     return false;
   }
-  if (!checkZombie) return true;
+  if (!checkZombie || process.platform === "win32") return true; // Windows has no zombies and no ps
   // A zombie still answers kill(0); ask ps for its state.
   const r = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", timeout: 5000 });
   if (r.status === 0 && r.stdout.trim().startsWith("Z")) return false;

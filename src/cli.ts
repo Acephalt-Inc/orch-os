@@ -419,7 +419,9 @@ const cmdDoctor: Run = (a, io) => {
     const have = HANDBOOK.filter((n) => existsSync(targetFile(pb, n, "flat")) || existsSync(targetFile(pb, n, "skills")));
     add(have.length === HANDBOOK.length, "handbook", have.length === HANDBOOK.length ? pb : `${have.length}/${HANDBOOK.length} files in ${pb} - run \`orch init\``, true);
     const git = findCommand("git");
-    add(git !== null, "git", git ?? "not on PATH");
+    // git is used for worker worktrees only; workers do not run on Windows, so there it is optional
+    if (a._platform === "win32") add(git !== null, "git", git ?? "absent - only worker worktrees use it, and workers are not available on Windows", true);
+    else add(git !== null, "git", git ?? "not on PATH");
     const gh = findCommand("gh");
     add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
@@ -427,8 +429,9 @@ const cmdDoctor: Run = (a, io) => {
     const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
     add(Boolean(wcmd) && findCommand(wcmd) !== null, "worker command",
       wcmd ? findCommand(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
-    const to = findCommand("timeout") ?? findCommand("gtimeout");
-    add(to !== null, "timeout (worker time limit)", to ?? "absent - workers run without a time limit", true);
+    // Windows has a timeout.exe that only waits for a key press; it is not the worker time limit
+    const to = a._platform === "win32" ? null : findCommand("timeout") ?? findCommand("gtimeout");
+    add(to !== null, "timeout (worker time limit)", to ?? (a._platform === "win32" ? "not used - workers are not available on Windows" : "absent - workers run without a time limit"), true);
     const found = D.installed().map((x) => x.name);
     add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {

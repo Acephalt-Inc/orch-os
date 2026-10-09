@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Agent detection, `orch init` / `orch doctor` / `orch agents` with and without agent CLIs. */
 import { appendFileSync, existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { delimiter } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/detect.js";
 import { parseToml } from "../src/toml.js";
-import { fakeBin, keepEnv, run, tmp, useTmpHome, waitFor } from "./_helpers.js";
+import { fakeBin, keepEnv, run, testPath, tmp, useTmpHome, waitFor } from "./_helpers.js";
 
 /** PATH = one temp dir of fake agents (+ /bin:/usr/bin for sh/git); fallback dirs = one other temp dir. */
 function useDetectBase() {
@@ -15,7 +14,7 @@ function useDetectBase() {
   beforeEach(() => {
     d.bins = tmp("orch-bins-");
     d.off = tmp("orch-off-");
-    process.env.PATH = [d.bins, "/usr/bin", "/bin"].join(delimiter);
+    process.env.PATH = testPath(d.bins);
     process.env.ORCH_AGENT_DIRS = d.off;
   });
   afterEach(() => {

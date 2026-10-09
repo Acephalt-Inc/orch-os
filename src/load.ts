@@ -114,6 +114,7 @@ export function takeSample(cfg: Record<string, any>, platform: NodeJS.Platform =
 }
 
 export function reniceMatching(pattern: string, target: number): number {
+  if (process.platform === "win32") return 0; // no ps and no nice values; a bare `ps` would also be looked up in the current directory
   const out = spawnSync("ps", ["-Ao", "pid=,uid=,args="], { encoding: "utf8" }).stdout ?? "";
   const me = process.pid;
   const uid = process.getuid ? process.getuid() : -1;

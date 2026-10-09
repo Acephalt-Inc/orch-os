@@ -39,7 +39,8 @@ describe("LoadTest", () => {
     expect(L.tempC("echo no-number")).toBeNull();
   });
 
-  it("test_real_sample_is_portable", () => {
+  // Windows has no load average: `orch load` reports n/a there (docs/windows.md)
+  it.skipIf(process.platform === "win32")("test_real_sample_is_portable", () => {
     const s = L.takeSample(cfg());
     expect(typeof s.load_ratio).toBe("number");
     expect(s.temp_c).toBeNull(); // no temp_command by default

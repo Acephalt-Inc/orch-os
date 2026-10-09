@@ -323,7 +323,7 @@ describe("ReviewWatchState", () => {
     expect(r.command).toEqual(["r1-cli", "--pr", "7", "--head", H1, "--prompt", join(inp.settings.dir, `review-7-${H1.slice(0, 12)}.prompt.md`)]);
     expect(RW.renderResult(r).split("\n").slice(1)).toEqual([
       "reviewer: r1 single-agent (unmapped) vendor=codex",
-      `command: ["r1-cli", "--pr", "7", "--head", "${H1}", "--prompt", "${join(inp.settings.dir, `review-7-${H1.slice(0, 12)}.prompt.md`)}"]`,
+      `command: ["r1-cli", "--pr", "7", "--head", "${H1}", "--prompt", ${JSON.stringify(join(inp.settings.dir, `review-7-${H1.slice(0, 12)}.prompt.md`))}]`,
     ]);
     // CI pending: still shows the reviewer and the command
     f.st.rows = [row(H1, "QUEUED")];
@@ -365,7 +365,8 @@ describe("ReviewWatchConfig", () => {
   });
 });
 
-describe("ReviewWatchCli", () => {
+// `orch review watch` is refused on Windows (docs/windows.md)
+describe.skipIf(process.platform === "win32")("ReviewWatchCli", () => {
   const ctx = useTmpHome();
   afterEach(() => {
     RW.override.host = null;
