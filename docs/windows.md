@@ -18,7 +18,7 @@ orch doctor
 
 `orch --version`, `init`, `doctor`, `config`, `agents`, `lease`, `mailbox`, `msg`, `task`, `mem`, `profile`, `merge-gate` (fixtures, and live mode with the GitHub CLI) and `review approve|changes|reject`.
 
-The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/e2e-install.ps1` in Windows PowerShell: `npm pack`, `npm install -g` of that tarball, and `orch --version`, `init`, `doctor`, `load`, `mem add` and `mem search`, `task claim` and `release`, `msg send` and `msg read`, `lease acquire`, `status` and `release`, each with its exit code checked. On Windows the check also requires `load` to print `load_ratio=n/a`, `swap=n/a` and `temp=n/a`. The package and temporary folder are removed whether a check passes or fails.
+The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/e2e-install.ps1` in Windows PowerShell: `npm pack`, `npm install -g` of that tarball, and `orch --version`, `init`, `doctor`, `load`, `mem add` and `mem search`, `task claim` and `release`, `msg send` and `msg read`, `lease acquire`, `status` and `release`, each with its exit code checked. On Windows the check also requires `load` to print `load_ratio=n/a`, `swap=n/a` and `temp=n/a`. Cleanup runs after normal completion and caught failures: failure to remove the package fails the check, and temporary-folder removal is attempted.
 
 ## What is not available
 
@@ -30,7 +30,7 @@ The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/
 
 - **`orch doctor`.** The platform row reads `windows (no process groups)`. `git` is a `SKIP` row when it is absent, not a `FAIL`: only worker worktrees use git. The `timeout (worker time limit)` row is always `SKIP`: the `timeout.exe` that Windows ships waits for a key press and is not a time limit.
 - **Paths in output.** Paths under `ORCH_HOME` are printed with the home as Windows writes it and a `/` before the last part, for example `C:\Users\me\.orch/mailbox.md`. Windows accepts both separators.
-- **Files in use.** Windows refuses to rename a file, or a directory with a file in it, while another process has it open. `orch` renames its state files and its lock directory into place, and other `orch` processes (or a virus scanner) may be reading them at that instant, so on Windows such a rename is retried for up to about two seconds before the error is reported.
+- **Files in use.** Some Windows sharing modes can refuse a rename while another process has the file, or a file inside the directory, open. `orch` retries Windows `EPERM`, `EACCES` and `EBUSY` rename errors for up to about two seconds before reporting the error. Tests inject these errors to verify the retry policy on every host; the native held-open-file tests record the behavior actually observed by the Windows CI runner.
 - **Agent discovery.** `orch init` and `orch agents` look for agent CLIs on `PATH` and then in per-user folders only: `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.claude\local` and `%APPDATA%\npm`. `ORCH_AGENT_DIRS` is separated with `;`.
 
 ## How programs are found and started

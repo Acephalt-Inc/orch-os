@@ -5,13 +5,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { main, WINDOWS_WORKERS_UNAVAILABLE } from "../src/cli.js";
 import * as D from "../src/detect.js";
 import { HANDBOOK, writeHandbook } from "../src/handbook.js";
 import { FileLock } from "../src/lock.js";
 import * as M from "../src/mergegate.js";
-import { atomicWrite, cmdExe, cmdInvocation, isFullyQualifiedWindowsPath, quoteCmdArg, runResolved, which } from "../src/util.js";
+import { atomicWrite, cmdExe, cmdInvocation, isFullyQualifiedWindowsPath, quoteCmdArg, renameRetry, runResolved, which } from "../src/util.js";
 import { fakeBin, fakeNodeBin, keepEnv, ROOT, run, testPath, tmp, useTmpHome } from "./_helpers.js";
 
 const ON_WINDOWS = process.platform === "win32";
@@ -95,18 +95,82 @@ describe("Windows portability", () => {
 
   it("Windows lookup accepts slash-bearing names only when fully qualified; POSIX lookup is unchanged", () => {
     const dir = tmp();
-    mkdirSync(join(dir, "sub"));
-    for (const name of ["gh.cmd", join("sub", "gh.cmd"), ".\\gh.cmd", "sub\\gh.cmd", "C:gh.cmd", "\\gh.cmd", "C:\\tools\\gh.cmd"]) {
-      writeFileSync(join(dir, name), "@echo off\r\n");
+    try {
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "gh.cmd"), "@echo off\r\n");
+      writeFileSync(join(dir, "sub", "gh.cmd"), "@echo off\r\n");
+      writeFileSync(join(dir, "sub", "tool"), "#!/bin/sh\n");
+      chmodSync(join(dir, "sub", "tool"), 0o755);
+      inDir(dir, () => {
+        for (const name of [
+          "./gh", ".\\gh", "sub/gh", "sub\\gh",
+          "C:sub/gh", "C:sub\\gh", "\\gh", "/gh",
+        ]) {
+          expect(which(name, "", "win32", ".CMD"), name).toBeNull();
+        }
+        expect(which("sub/tool", "", "linux")).toBe("sub/tool");
+        if (ON_WINDOWS) {
+          const full = join(dir, "gh");
+          expect(isFullyQualifiedWindowsPath(full)).toBe(true);
+          expect(which(full, "", "win32", ".CMD")).toBe(`${full}.cmd`);
+        } else {
+          // A POSIX absolute path is not a fully qualified Windows path.
+          expect(which(join(dir, "gh"), "", "win32", ".CMD")).toBeNull();
+        }
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    writeFileSync(join(dir, "sub", "tool"), "#!/bin/sh\n");
-    chmodSync(join(dir, "sub", "tool"), 0o755);
-    inDir(dir, () => {
-      for (const name of ["./gh", ".\\gh", "sub/gh", "sub\\gh", "C:gh", "\\gh"]) {
-        expect(which(name, "", "win32"), name).toBeNull();
-      }
-      expect(which("C:\\tools\\gh", "", "win32")).toBe("C:\\tools\\gh.cmd");
-      expect(which("sub/tool", "", "linux")).toBe("sub/tool");
+  });
+
+  describe("rename retry policy", () => {
+    it.each(["EPERM", "EACCES", "EBUSY"])(
+      "retries a transient Windows %s before returning", (code) => {
+        const error = Object.assign(new Error(code), { code });
+        let completed = false;
+        const rename = vi.fn((_from: string, _to: string) => {
+          completed = true;
+        }).mockImplementationOnce(() => { throw error; });
+        const sleep = vi.fn();
+        renameRetry("from", "to", { platform: "win32", rename, sleep });
+        expect(completed).toBe(true);
+        expect(rename.mock.calls).toEqual([["from", "to"], ["from", "to"]]);
+        expect(sleep.mock.calls).toEqual([[2]]);
+      },
+    );
+
+    it.each(["EPERM", "EACCES", "EBUSY"])(
+      "bounds a persistent Windows %s and propagates its error", (code) => {
+        const error = Object.assign(new Error(code), { code });
+        const rename = vi.fn(() => { throw error; });
+        const sleep = vi.fn();
+        let caught: unknown;
+        try {
+          renameRetry("from", "to", { platform: "win32", rename, sleep });
+        } catch (e) { caught = e; }
+        expect(caught).toBe(error);
+        expect(rename).toHaveBeenCalledTimes(61);
+        expect(sleep.mock.calls).toEqual(
+          Array.from({ length: 60 }, (_, i) => [Math.min(2 + i * 2, 40)]),
+        );
+      },
+    );
+
+    it.each([
+      ["win32", "ENOENT"], ["win32", "EXDEV"],
+      ["linux", "EPERM"], ["linux", "EACCES"], ["linux", "EBUSY"],
+      ["darwin", "EPERM"], ["darwin", "EACCES"], ["darwin", "EBUSY"],
+    ] as const)("does not retry %s %s", (platform, code) => {
+      const error = Object.assign(new Error(code), { code });
+      const rename = vi.fn(() => { throw error; });
+      const sleep = vi.fn();
+      let caught: unknown;
+      try {
+        renameRetry("from", "to", { platform, rename, sleep });
+      } catch (e) { caught = e; }
+      expect(caught).toBe(error);
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
     });
   });
 

@@ -144,15 +144,24 @@ export function sleep(ms: number): Promise<void> {
  * directory, open (a reader of the same state, a virus scanner). There the refusal is retried
  * for up to about two seconds; other systems rename once, as before.
  */
-export function renameRetry(from: string, to: string): void {
+export function renameRetry(from: string, to: string, opts: {
+  platform?: NodeJS.Platform;
+  rename?: (from: string, to: string) => void;
+  sleep?: (ms: number) => void;
+} = {}): void {
+  const {
+    platform = process.platform,
+    rename = renameSync,
+    sleep = sleepSync,
+  } = opts;
   for (let i = 0; ; i++) {
     try {
-      renameSync(from, to);
+      rename(from, to);
       return;
     } catch (e: any) {
       const busy = e?.code === "EPERM" || e?.code === "EACCES" || e?.code === "EBUSY";
-      if (process.platform !== "win32" || !busy || i >= 60) throw e;
-      sleepSync(Math.min(2 + i * 2, 40));
+      if (platform !== "win32" || !busy || i >= 60) throw e;
+      sleep(Math.min(2 + i * 2, 40));
     }
   }
 }
