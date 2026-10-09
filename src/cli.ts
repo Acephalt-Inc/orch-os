@@ -17,6 +17,7 @@ import { KINDS, MessageError, Messages, renderMessage, visible } from "./message
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
+import * as S from "./schedule.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
@@ -1026,6 +1027,20 @@ const cmdProfile: Run = (a, io) => {
   return showProfile(io, parseToml(next), false);
 };
 
+const cmdSchedule: Run = (a, io) => {
+  const host = S.nodeHost(fileURLToPath(import.meta.url));
+  const action = a._path[2];
+  if (action === "install") return S.install(host, io, a, C.loadOrDefault());
+  if (action === "status") return S.status(host, io, a.json);
+  if (action === "remove") return S.remove(host, io, a.name);
+  return S.runScheduled(host, io, a.name, {
+    config: C.loadOrDefault,
+    sample: (cfg) => { LD.step(cfg, loadPath(cfg)); },
+    start: (cfg, name, opts) => workers(cfg).start(name, opts),
+    limit: (cfg) => P.readProfile(cfg)?.max_workers ?? null,
+  });
+};
+
 // ---- the command tree -------------------------------------------------------------------------
 
 const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
@@ -1232,6 +1247,18 @@ export function buildTree(): CmdSpec<Run> {
       {
         name: "load", help: "take one load sample and print the tier", run: cmdLoad,
         opts: [opt("read", ["--read"], "bool", "print the last state without sampling"), JSON_OPT],
+      },
+      {
+        name: "schedule", help: "one daily unattended worker per name",
+        sub: [
+          { name: "install", help: "register a daily worker", run: cmdSchedule, pos: [{ dest: "name" }],
+            opts: [opt("daily", ["--daily"], "str", "daily time (HH:MM)"), opt("task", ["--task"], "str", "file fed to the worker on stdin"),
+              opt("agent", ["--agent"], "str", "use the [agents.<name>] command"), opt("workdir", ["--workdir"], "str", "worker working directory"),
+              opt("dry_run", ["--dry-run"], "bool", "print files and manager commands only")] },
+          { name: "status", help: "compare records with the operating-system scheduler", run: cmdSchedule, opts: [JSON_OPT] },
+          { name: "remove", help: "deregister a daily worker", run: cmdSchedule, pos: [{ dest: "name" }] },
+          { name: "run", help: "sample load and start the recorded worker", run: cmdSchedule, pos: [{ dest: "name" }] },
+        ],
       },
       {
         name: "mem", help: "long-lived notes: one file per entry, a capped index, retire instead of delete",

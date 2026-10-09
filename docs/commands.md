@@ -260,6 +260,21 @@ orch load [--read] [--json]
 
 Takes one sample, advances the tier and prints `load tier=... load_ratio=... swap=...% temp=... reniced=N`. `--read` prints the stored state without sampling.
 
+## orch schedule
+
+```text
+orch schedule install NAME --daily HH:MM --task FILE [--agent A] [--workdir DIR] [--dry-run]
+orch schedule status [--json]
+orch schedule remove NAME
+orch schedule run NAME
+```
+
+`install` registers one daily current-user job. On macOS it writes `~/Library/LaunchAgents/com.orch-os.schedule.NAME.plist` and uses launchd. On Linux it writes `~/.config/systemd/user/orch-os-schedule-NAME.service` and `.timer` and uses the systemd user manager. `run` samples load and starts the recorded worker `sched-NAME`. The run starts only if `orch worker start` would start it at that moment; a refusal is one `REFUSED` line in the log. The agent runs with exactly the command in `[agents.NAME]`; what it may do with nobody present is decided by the flags you put there.
+
+`status` reports `LOADED`, `MISSING`, `ORPHAN`, or `ERROR` from the record, unit files, executable paths, and scheduler manager. With no records or unit files it prints `no scheduled jobs`.
+
+The command refuses an invalid name, a daily time outside `00:00` through `23:59`, a missing or non-regular task, a missing workdir, an unavailable agent command, a foreign or symbolic-link unit file, and Linux without an answering systemd user manager. The refusal sentence for an unsupported platform is `schedule: no scheduler backend for PLATFORM in this version; nothing was installed or changed`. Windows is refused rather than using Task Scheduler because worker process handling is POSIX-only and Task Scheduler could only be tested here against stand-ins. No backend uses sudo or crontab.
+
 ## orch mem
 
 ```text

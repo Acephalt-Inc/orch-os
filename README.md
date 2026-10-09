@@ -76,6 +76,14 @@ The comment-based option is a process gate between cooperating agents, not a sec
 |---|---|
 | Worker output and process records | `orch worker`, `~/.orch/workers/` |
 
+### Scheduled runs
+
+| Need | Command |
+|---|---|
+| Install one daily unattended agent run | `orch schedule install NAME --daily HH:MM --task FILE --agent A` |
+| Ask the operating-system scheduler and see the last result | `orch schedule status` |
+| Remove the daily registration | `orch schedule remove NAME` |
+
 ### Agent communication
 
 | Feature | Command or file |
@@ -156,6 +164,7 @@ orch worker start w1 --agent claude --worktree --task task.md  # Start a detache
 orch worker list                            # Show workers
 orch merge-gate 101 --fixture approved      # Try the gate with an offline fixture
 orch load                                   # Sample machine load
+orch schedule install brief --daily 07:30 --task prompt.md --agent claude  # Schedule a daily worker
 orch mem search review                      # Search durable notes
 ```
 
