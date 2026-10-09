@@ -38,10 +38,12 @@ function plist(r: ScheduleRecord): string {
   const env = r.orchHome === undefined ? "" : `\n  <key>EnvironmentVariables</key><dict><key>ORCH_HOME</key><string>${xml(r.orchHome)}</string></dict>`;
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- ${MARK} -->\n<plist version="1.0"><dict>\n  <key>Label</key><string>com.orch-os.schedule.${xml(r.name)}</string>\n  <key>ProgramArguments</key><array>${command(r).map((x) => `<string>${xml(x)}</string>`).join("")}</array>${env}\n  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>\n</dict></plist>\n`;
 }
-function sq(s: string): string { return `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`; }
+// systemd.syntax(7), Quoting: specifier expansion and $ expansion are separate.
+function execQuote(s: string): string { return `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("$", "$$")}"`; }
+function envQuote(s: string): string { return `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`; }
 function service(r: ScheduleRecord): string {
-  const env = r.orchHome === undefined ? "" : `Environment=${sq(`ORCH_HOME=${r.orchHome}`)}\n`;
-  return `# ${MARK}\n[Unit]\nDescription=orch scheduled worker ${r.name}\n[Service]\nType=oneshot\n${env}ExecStart=${command(r).map(sq).join(" ")}\n`;
+  const env = r.orchHome === undefined ? "" : `Environment=${envQuote(`ORCH_HOME=${r.orchHome}`)}\n`;
+  return `# ${MARK}\n[Unit]\nDescription=orch scheduled worker ${r.name}\n[Service]\nType=oneshot\n${env}ExecStart=${command(r).map(execQuote).join(" ")}\n`;
 }
 function timer(r: ScheduleRecord): string { return `# ${MARK}\n[Unit]\nDescription=Daily orch worker ${r.name}\n[Timer]\nOnCalendar=*-*-* ${r.daily}:00\nPersistent=true\n[Install]\nWantedBy=timers.target\n`; }
 function paths(h: Host, name: string) {
@@ -69,12 +71,20 @@ function owned(h: Host, path: string, exact: string): boolean {
 }
 function writeAll(h: Host, files: [string, string][]): void { for (const [p] of files) h.mkdir(dirname(p)); for (const [p, t] of files) h.write(p, t); }
 function fail(io: ScheduleIO, step: string, r: Result): number { io.err(`schedule: ${step} failed${r.err.trim() ? `: ${r.err.trim()}` : ""}\n`); return 1; }
-function registered(h: Host, b: "launchd" | "systemd", p: ReturnType<typeof paths>, name: string): boolean {
-  if (b === "launchd") return h.run("launchctl", ["print", `gui/${h.uid}/com.orch-os.schedule.${name}`]).code === 0;
+type Registration = "registered" | "not-registered" | "unknown";
+function registered(h: Host, b: "launchd" | "systemd", p: ReturnType<typeof paths>, name: string): Registration {
+  if (b === "launchd") { const q = h.run("launchctl", ["print", `gui/${h.uid}/com.orch-os.schedule.${name}`]); return q.code === 0 ? "registered" : q.code === 113 ? "not-registered" : "unknown"; }
   const en = h.run("systemctl", ["--user", "is-enabled", posix.basename(p.timer)]);
   const ac = h.run("systemctl", ["--user", "is-active", posix.basename(p.timer)]);
-  return en.code === 0 && en.out.trim() === "enabled" && ac.code === 0 && ac.out.trim() === "active";
+  const enabled = en.code === 0 && en.out.trim() === "enabled", active = ac.code === 0 && ac.out.trim() === "active";
+  const disabled = en.code === 1 && ["disabled", "not-found"].includes(en.out.trim());
+  const inactive = [3, 4].includes(ac.code) && ["inactive", "unknown"].includes(ac.out.trim());
+  return enabled && active ? "registered" : disabled && inactive ? "not-registered" : "unknown";
 }
+function isLink(h: Host, path: string): boolean { try { return h.lstat(path).isSymbolicLink(); } catch { return false; } }
+function hasMark(h: Host, path: string): boolean { try { const text = (h.readNoFollow ?? h.read)(path); return !isLink(h, path) && h.lstat(path).isFile() && text.includes(MARK) && (path.endsWith(".plist") ? text.includes("<plist") : path.endsWith(".timer") ? text.includes("[Timer]") : text.includes("[Service]")); } catch { return false; } }
+function unsafePath(h: Host, path: string, jobFile = false): boolean { return isLink(h, path) || (jobFile && h.exists(path) && !hasMark(h, path)); }
+function badLineValue(s: string): boolean { return /[\r\n\0]/.test(s); }
 
 export function install(h: Host, io: ScheduleIO, a: any, cfg: Record<string, any>): number {
   const b = backend(h); if (!b) { io.err(refusal(h) + "\n"); return 2; }
@@ -89,28 +99,33 @@ export function install(h: Host, io: ScheduleIO, a: any, cfg: Record<string, any
     io.err("schedule: agent is not configured and [workers] command is empty; nothing was installed or changed\n"); return 2;
   }
   const r: ScheduleRecord = { name: a.name, daily: a.daily, task, agent, workdir, node: h.node, cli: h.cli, orchHome: h.orchHome };
+  if ([r.node, r.cli, r.orchHome ?? ""].some(badLineValue)) { io.err("schedule: a scheduler path contains a line break or NUL; nothing was installed or changed\n"); return 2; }
   const p = paths(h, r.name); const units: [string, string][] = b === "launchd" ? [[p.launch, plist(r)]] : [[p.service, service(r)], [p.timer, timer(r)]];
   const prior = record(h, p.record); const old = prior.kind === "valid" ? prior.value! : null;
   const oldUnits: [string, string][] = old ? (b === "launchd" ? [[p.launch, plist(old)]] : [[p.service, service(old)], [p.timer, timer(old)]]) : [];
-  for (const [path] of units) if (h.exists(path) && !oldUnits.some(([x, text]) => x === path && owned(h, path, text))) {
+  for (const path of [p.record, p.log]) if (unsafePath(h, path)) { io.err(`schedule: ${path} is a symbolic link; nothing was installed or changed\n`); return 2; }
+  for (const [path] of units) if (unsafePath(h, path, true)) {
     io.err(`schedule: ${path} is foreign or a symbolic link; nothing was installed or changed\n`); return 2;
   }
-  if (prior.kind === "invalid") { io.err(`schedule: ${p.record} is unreadable or invalid; nothing was installed or changed\n`); return 2; }
   const recText = JSON.stringify(r, null, 2) + "\n";
-  if (a.dry_run) { for (const [x, t] of [...units, [p.record, recText] as [string, string]]) io.out(`--- ${x}\n${t}`); io.out(b === "launchd" ? `launchctl bootstrap gui/${h.uid} ${p.launch}\n` : `systemctl --user daemon-reload\nsystemctl --user enable --now ${posix.basename(p.timer)}\n`); return 0; }
+  if (a.dry_run) { for (const [x, t] of [...units, [p.record, recText] as [string, string]]) io.out(`--- ${x}\n${t}`); io.out("scheduler was not asked (dry run)\n"); return 0; }
   if (b === "systemd" && !(h.managerAvailable ? h.managerAvailable() : h.run("systemctl", ["--user", "show-environment"]).code === 0)) {
     io.err("schedule: systemctl --user did not answer; nothing was installed or changed\n"); return 2;
   }
-  if (old && prior.text === recText && units.every(([x, t]) => h.exists(x) && owned(h, x, t)) && registered(h, b, p, r.name)) { io.out(`unchanged ${r.name}\n`); return 0; }
-  if (old) {
+  const diskPresent = [p.record, ...units.map(([x]) => x)].some((x) => h.exists(x));
+  const before = diskPresent ? registered(h, b, p, r.name) : "not-registered";
+  if (before === "unknown") { io.err("schedule: query failed: scheduler state could not be determined\n"); return 1; }
+  if (old && prior.text === recText && units.every(([x, t]) => h.exists(x) && owned(h, x, t)) && before === "registered") { io.out(`unchanged ${r.name}\n`); return 0; }
+  if (before === "registered") {
     const q = b === "launchd" ? h.run("launchctl", ["bootout", `gui/${h.uid}/com.orch-os.schedule.${r.name}`]) : h.run("systemctl", ["--user", "disable", "--now", posix.basename(p.timer)]);
-    if (q.code !== 0 && !/not loaded|not found|not enabled/i.test(q.err + q.out)) return fail(io, b === "launchd" ? "bootout" : "disable", q);
+    if (q.code !== 0) return fail(io, b === "launchd" ? "bootout" : "disable", q);
   }
   const snapshots = [...units, [p.record, recText] as [string, string]].map(([x]) => [x, h.exists(x) ? h.read(x) : null] as const);
   const rollback = () => { for (const [x, text] of snapshots) { if (text === null) { if (h.exists(x)) h.remove(x); } else h.write(x, text); } };
   writeAll(h, units);
-  if (b === "launchd") { const q = h.run("launchctl", ["bootstrap", `gui/${h.uid}`, p.launch]); if (q.code) { rollback(); return fail(io, "bootstrap", q); } }
-  else { let q = h.run("systemctl", ["--user", "daemon-reload"]); if (q.code) { rollback(); return fail(io, "daemon-reload", q); } q = h.run("systemctl", ["--user", "enable", "--now", posix.basename(p.timer)]); if (q.code) { rollback(); return fail(io, "enable --now", q); } }
+  const restore = () => { rollback(); if (before === "registered" && oldUnits.length) { if (b === "launchd") h.run("launchctl", ["bootstrap", `gui/${h.uid}`, p.launch]); else { h.run("systemctl", ["--user", "daemon-reload"]); h.run("systemctl", ["--user", "enable", "--now", posix.basename(p.timer)]); } } };
+  if (b === "launchd") { const q = h.run("launchctl", ["bootstrap", `gui/${h.uid}`, p.launch]); if (q.code) { restore(); return fail(io, "bootstrap", q); } }
+  else { let q = h.run("systemctl", ["--user", "daemon-reload"]); if (q.code) { restore(); return fail(io, "daemon-reload", q); } q = h.run("systemctl", ["--user", "enable", "--now", posix.basename(p.timer)]); if (q.code) { restore(); return fail(io, "enable --now", q); } }
   h.mkdir(dirname(p.record)); h.write(p.record, recText);
   io.out(`scheduled ${r.name} daily ${r.daily} (${b})\n`); return 0;
 }
@@ -118,7 +133,8 @@ export function install(h: Host, io: ScheduleIO, a: any, cfg: Record<string, any
 export function runScheduled(h: Host, io: ScheduleIO, name: string, rt: Runtime): number {
   if (!backend(h)) { io.err(refusal(h) + "\n"); return 2; }
   if (!NAME.test(name ?? "")) { io.err("schedule: invalid NAME\n"); return 2; }
-  const p = paths(h, name), r = readRecord(h, p.record); if (!r || r.name !== name) { io.err(`schedule: unknown or invalid record ${name}\n`); return 2; }
+  const p = paths(h, name); if (isLink(h, p.record) || isLink(h, p.log)) { io.err(`schedule: symbolic link at ${isLink(h, p.record) ? p.record : p.log}; nothing was written\n`); return 2; }
+  const r = readRecord(h, p.record); if (!r || r.name !== name) { io.err(`schedule: unknown or invalid record ${name}\n`); return 2; }
   const cfg = rt.config(); rt.sample(cfg);
   try { const x = rt.start(cfg, `sched-${name}`, { agent: r.agent, task: r.task, workdir: r.workdir, limit: rt.limit(cfg) }); h.mkdir(dirname(p.log)); h.append(p.log, `${new Date().toISOString()} STARTED pid=${x.pid}\n`); return 0; }
   catch (e: any) { const refused = rt.isRefusal?.(e) ?? false; const word = refused ? "REFUSED" : "CRASHED"; h.mkdir(dirname(p.log)); h.append(p.log, `${new Date().toISOString()} ${word} ${e?.message ?? e}\n`); io.err(`schedule: run ${refused ? "refused" : "crashed"}: ${e?.message ?? e}\n`); return refused ? 2 : 1; }
@@ -132,26 +148,50 @@ function names(h: Host): string[] {
   return [...found].sort();
 }
 export function status(h: Host, io: ScheduleIO, json = false): number {
-  if (!backend(h)) { io.err(refusal(h) + "\n"); return 2; } const ns = names(h); if (!ns.length) { io.out(json ? "[]\n" : "no scheduled jobs\n"); return 0; }
-  const rows: any[] = []; for (const name of ns) { const p = paths(h, name), r = readRecord(h, p.record); let state = "ERROR"; let detail = "invalid record";
-    const rr = record(h, p.record);
-    if (!r) { state = rr.kind === "missing" ? "ORPHAN" : "ERROR"; detail = rr.kind === "missing" ? "no record" : "invalid record"; }
-    else if (!h.exists(r.node) || !h.exists(r.cli)) detail = "node or cli missing";
-    else if (h.platform === "darwin") { const q = h.run("launchctl", ["print", `gui/${h.uid}/com.orch-os.schedule.${name}`]); if (q.code && /not found|could not find/i.test(q.err + q.out)) { state = "MISSING"; detail = "not loaded"; } else if (q.code) detail = "launchctl failed"; else if (!/state\s*=|path\s*=|service/i.test(q.out)) detail = "unrecognised launchctl output"; else if (h.exists(p.launch) && h.read(p.launch) === plist(r)) { state = "LOADED"; detail = "loaded"; } else detail = "different command"; }
-    else { const en = h.run("systemctl", ["--user", "is-enabled", posix.basename(p.timer)]), ac = h.run("systemctl", ["--user", "is-active", posix.basename(p.timer)]); const enabled = en.code === 0 && en.out.trim() === "enabled", active = ac.code === 0 && ac.out.trim() === "active"; if (!enabled && !active && /disabled|not-found|inactive/.test(en.out + ac.out)) { state = "MISSING"; detail = "not enabled or active"; } else if (enabled && active && h.exists(p.service) && h.exists(p.timer) && h.read(p.service) === service(r) && h.read(p.timer) === timer(r)) { state = "LOADED"; detail = "enabled and active"; } else detail = "manager or unit mismatch"; }
-    let last = "never ran"; try { last = h.read(p.log).trim().split("\n").at(-1) || last; } catch {} rows.push({ name, state, detail, last }); }
-  if (json) io.out(JSON.stringify(rows) + "\n"); else for (const r of rows) io.out(`${r.name} ${r.state} ${r.last}\n`); return rows.every((r) => r.state === "LOADED") ? 0 : 1;
+  const b = backend(h); if (!b) { io.err(refusal(h) + "\n"); return 2; }
+  const ns = names(h); if (!ns.length) { io.out(json ? "[]\n" : "no scheduled jobs\n"); return 0; }
+  const rows: any[] = [];
+  for (const name of ns) {
+    const p = paths(h, name), jobPaths = b === "launchd" ? [p.launch] : [p.service, p.timer];
+    const recordExists = h.exists(p.record), jobFileExists = jobPaths.some((x) => h.exists(x));
+    let state = "ERROR", detail = "unsafe or invalid file", last = "never ran";
+    if (![p.record, p.log].some((x) => unsafePath(h, x)) && !jobPaths.some((x) => unsafePath(h, x, true))) {
+      const rr = record(h, p.record), reg = registered(h, b, p, name);
+      if (reg === "unknown") detail = "scheduler state could not be determined";
+      else if (rr.kind !== "valid") { state = rr.kind === "missing" ? "ORPHAN" : "ERROR"; detail = rr.kind === "missing" ? (reg === "registered" ? "registered; no record" : "not registered; no record") : "invalid record"; }
+      else {
+        const expected = b === "launchd" ? [[p.launch, plist(rr.value!)]] : [[p.service, service(rr.value!)], [p.timer, timer(rr.value!)]];
+        const exact = expected.every(([x, text]) => h.exists(x) && owned(h, x, text));
+        if (!h.exists(rr.value!.node) || !h.exists(rr.value!.cli)) detail = "node or cli missing";
+        else if (reg === "registered" && exact) { state = "LOADED"; detail = "registered"; }
+        else if (reg === "not-registered" && exact) { state = "MISSING"; detail = "not registered"; }
+        else detail = "registration or job file mismatch";
+      }
+      if (!isLink(h, p.log)) try { last = h.read(p.log).trim().split("\n").at(-1) || last; } catch {}
+    }
+    rows.push({ name, state, detail, record: recordExists, jobFile: jobFileExists, last });
+  }
+  if (json) io.out(JSON.stringify(rows) + "\n"); else for (const r of rows) io.out(`${r.name} ${r.state} ${r.last}\n`);
+  return rows.every((r) => r.state === "LOADED") ? 0 : 1;
 }
 
 export function remove(h: Host, io: ScheduleIO, name: string): number {
-  if (!backend(h)) { io.err(refusal(h) + "\n"); return 2; } if (!NAME.test(name ?? "")) { io.err("schedule: invalid NAME; nothing was installed or changed\n"); return 2; }
-  const p = paths(h, name), present = [p.record, p.launch, p.service, p.timer].some((x) => h.exists(x)); if (!present) { io.out(`not scheduled ${name}\n`); return 0; }
-  const b = backend(h)!; const rr = record(h, p.record); if (rr.kind !== "valid") { io.err(`schedule: record is ${rr.kind === "missing" ? "missing" : "unreadable or invalid"}; nothing was removed\n`); return 1; }
-  const expected = b === "launchd" ? [[p.launch, plist(rr.value!)]] as [string, string][] : [[p.service, service(rr.value!)], [p.timer, timer(rr.value!)]] as [string, string][];
-  const units = expected.map(([x]) => x); for (const [x, text] of expected) if (h.exists(x) && !owned(h, x, text)) { io.err(`schedule: ${x} is foreign or state is unknown; nothing was removed\n`); return 1; }
-  const q = b === "launchd" ? h.run("launchctl", ["bootout", `gui/${h.uid}/com.orch-os.schedule.${name}`]) : h.run("systemctl", ["--user", "disable", "--now", posix.basename(p.timer)]); if (q.code && !/not loaded|not found|not enabled/i.test(q.err + q.out)) return fail(io, b === "launchd" ? "bootout" : "disable", q);
+  const b = backend(h); if (!b) { io.err(refusal(h) + "\n"); return 2; }
+  if (!NAME.test(name ?? "")) { io.err("schedule: invalid NAME; nothing was installed or changed\n"); return 2; }
+  const p = paths(h, name), jobPaths = b === "launchd" ? [p.launch] : [p.service, p.timer];
+  for (const x of [p.record, p.log]) if (unsafePath(h, x)) { io.err(`schedule: ${x} is a symbolic link; nothing was removed\n`); return 1; }
+  for (const x of jobPaths) if (unsafePath(h, x, true)) { io.err(`schedule: ${x} is foreign or a symbolic link; nothing was removed\n`); return 1; }
+  const before = registered(h, b, p, name);
+  if (before === "unknown") { io.err("schedule: query failed: scheduler state could not be determined\n"); return 1; }
+  if (before === "registered") {
+    const q = b === "launchd" ? h.run("launchctl", ["bootout", `gui/${h.uid}/com.orch-os.schedule.${name}`]) : h.run("systemctl", ["--user", "disable", "--now", posix.basename(p.timer)]);
+    if (q.code) return fail(io, b === "launchd" ? "bootout" : "disable", q);
+  }
+  const after = registered(h, b, p, name);
+  if (after !== "not-registered") { io.err("schedule: confirmation failed: scheduler did not confirm removal\n"); return 1; }
+  for (const x of [...jobPaths, p.record, p.log]) if (h.exists(x)) h.remove(x);
   if (b === "systemd") { const d = h.run("systemctl", ["--user", "daemon-reload"]); if (d.code) return fail(io, "daemon-reload", d); }
-  for (const x of [...units, p.record, p.log]) if (h.exists(x)) h.remove(x); io.out(`removed ${name}\n`); return 0;
+  io.out(`removed ${name}\n`); return 0;
 }
 
 export function nodeHost(cli: string): Host {

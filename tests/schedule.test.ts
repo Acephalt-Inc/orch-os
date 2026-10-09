@@ -11,10 +11,13 @@ import { parse } from "../src/args.js";
 function fixture(platform = "darwin") {
   const root = mkdtempSync(join(tmpdir(), "orch-schedule-")), home = join(root, "home"), oh = join(root, "orch"), task = join(root, "task.txt");
   mkdirSync(home); writeFileSync(task, "morning brief\n");
-  const files = new Map<string, string>(), calls: [string, string[]][] = [], results: S.Result[] = [];
+  const files = new Map<string, string>(), calls: [string, string[]][] = [], results: S.Result[] = []; let registered = false;
   const host: S.Host = {
     platform, home, orchHome: oh, uid: 501, node: "/node", cli: "/dist/cli.js", managerAvailable: () => true,
-    run(tool, args) { calls.push([tool, args]); return results.shift() ?? { code: 0, out: tool === "launchctl" ? "state = running" : args.includes("is-enabled") ? "enabled\n" : args.includes("is-active") ? "active\n" : "", err: "" }; },
+    run(tool, args) { calls.push([tool, args]); const queued = results.shift(); if (queued) return queued;
+      if (tool === "launchctl") { if (args[0] === "print") return registered ? { code: 0, out: "state = running", err: "" } : { code: 113, out: "", err: "arbitrary" }; if (args[0] === "bootstrap") registered = true; if (args[0] === "bootout") registered = false; }
+      if (tool === "systemctl") { if (args.includes("is-enabled")) return registered ? { code: 0, out: "enabled\n", err: "" } : { code: 1, out: "disabled\n", err: "" }; if (args.includes("is-active")) return registered ? { code: 0, out: "active\n", err: "" } : { code: 3, out: "inactive\n", err: "" }; if (args.includes("enable")) registered = true; if (args.includes("disable")) registered = false; }
+      return { code: 0, out: "", err: "" }; },
     exists: (p) => files.has(p) || p === "/node" || p === "/dist/cli.js",
     lstat: (p) => { if (p === task) return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false }; if (p === root) return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false }; if (!files.has(p)) throw Error("missing"); return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false }; },
     read: (p) => { const x = files.get(p); if (x === undefined) throw Error("missing"); return x; }, write: (p, t) => { files.set(p, t); }, append: (p, t) => files.set(p, (files.get(p) ?? "") + t), mkdir() {}, remove: (p) => { files.delete(p); },
@@ -49,8 +52,8 @@ describe("schedule", () => {
 
   it("changed install replaces the one registration", () => {
     const f = fixture(); S.install(f.host, f.io, f.args, f.cfg); f.calls.length = 0; f.args.daily = "08:00";
-    expect(S.install(f.host, f.io, f.args, f.cfg)).toBe(0); expect(f.calls[0]).toEqual(["launchctl", ["bootout", "gui/501/com.orch-os.schedule.brief"]]); expect(f.calls[1][1][0]).toBe("bootstrap");
-    const g = fixture(); S.install(g.host, g.io, g.args, g.cfg); g.args.daily = "08:00"; g.calls.length = 0; g.results.push({ code: 1, out: "", err: "denied" }); expect(S.install(g.host, g.io, g.args, g.cfg)).toBe(1); expect(g.calls).toHaveLength(1);
+    expect(S.install(f.host, f.io, f.args, f.cfg)).toBe(0); expect(f.calls[0][1][0]).toBe("print"); expect(f.calls[1]).toEqual(["launchctl", ["bootout", "gui/501/com.orch-os.schedule.brief"]]); expect(f.calls[2][1][0]).toBe("bootstrap");
+    const g = fixture(); S.install(g.host, g.io, g.args, g.cfg); g.args.daily = "08:00"; g.calls.length = 0; g.results.push({ code: 0, out: "state = running", err: "" }, { code: 1, out: "", err: "denied" }); expect(S.install(g.host, g.io, g.args, g.cfg)).toBe(1); expect(g.calls).toHaveLength(2);
   });
 
   it("run samples load then starts the worker with the task on stdin", () => {
@@ -65,7 +68,7 @@ describe("schedule", () => {
 
   it.each(["LOADED", "MISSING", "ORPHAN", "ERROR"])("status reports what the operating system says: %s", (wanted) => {
     const f = fixture(); S.install(f.host, f.io, f.args, f.cfg); f.output.out = ""; f.calls.length = 0;
-    if (wanted === "MISSING") f.results.push({ code: 1, out: "", err: "not found" });
+    if (wanted === "MISSING") f.results.push({ code: 113, out: "", err: "arbitrary" });
     if (wanted === "ORPHAN") for (const p of [...f.files.keys()]) if (p.endsWith(".json")) f.files.delete(p);
     if (wanted === "ERROR") { f.host.exists = (p) => p !== "/node" && (f.files.has(p) || p === "/dist/cli.js"); }
     const code = S.status(f.host, f.io); expect(f.output.out).toContain(wanted); expect(code).toBe(wanted === "LOADED" ? 0 : 1);
@@ -108,7 +111,7 @@ describe("schedule", () => {
   });
 
   it("reports unrecognised manager output and an invalid record as errors", () => {
-    const f = fixture(); S.install(f.host, f.io, f.args, f.cfg); f.output.out = ""; f.results.push({ code: 0, out: "surprise", err: "" });
+    const f = fixture(); S.install(f.host, f.io, f.args, f.cfg); f.output.out = ""; f.results.push({ code: 9, out: "surprise", err: "" });
     expect(S.status(f.host, f.io)).toBe(1); expect(f.output.out).toContain("ERROR");
     const record = [...f.files.keys()].find((p) => p.endsWith(".json"))!; f.files.set(record, "{"); f.output.out = "";
     expect(S.status(f.host, f.io)).toBe(1); expect(f.output.out).toContain("ERROR");
@@ -116,7 +119,7 @@ describe("schedule", () => {
 
   it("removes the named registration and status then has no job", () => {
     const f = fixture(); S.install(f.host, f.io, f.args, f.cfg); f.calls.length = 0;
-    expect(S.remove(f.host, f.io, "brief")).toBe(0); expect(f.calls[0]).toEqual(["launchctl", ["bootout", "gui/501/com.orch-os.schedule.brief"]]);
+    expect(S.remove(f.host, f.io, "brief")).toBe(0); expect(f.calls.some((x) => x[1][0] === "bootout")).toBe(true);
     f.output.out = ""; expect(S.status(f.host, f.io)).toBe(0); expect(f.output.out).toBe("no scheduled jobs\n");
   });
 
