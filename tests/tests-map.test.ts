@@ -17,7 +17,7 @@ describe("TestsMapV2", () => {
       expect(tsFile).toBe(`tests/${pyFile.replace(/^test_/, "")}.test.ts`);
       const src = readFileSync(join(ROOT, tsFile), "utf8");
       expect(src, `${tsFile}: describe ${tsDescribe}`).toMatch(new RegExp(`describe(?:\\.skipIf\\([^)]*\\))?\\("${tsDescribe}"`));
-      expect(src, `${tsFile}: it ${tsTest}`).toContain(`it("${tsTest}"`);
+      expect(src, `${tsFile}: it ${tsTest}`).toMatch(new RegExp(`it(?:\\.skipIf\\([^)]*\\))?\\("${tsTest}"`));
     }
   });
 });

@@ -33,7 +33,7 @@ describe("LoadTest", () => {
     expect(st.tier).toBe("NORMAL");
   });
 
-  it("test_temp_command_is_optional_and_parsed", () => {
+  it.skipIf(process.platform === "win32")("test_temp_command_is_optional_and_parsed", () => {
     expect(L.tempC("")).toBeNull();
     expect(L.tempC("echo 71.5")).toBe(71.5);
     expect(L.tempC("echo no-number")).toBeNull();

@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { expect } from "vitest";
 import { ROOT } from "./_helpers.js";
 
+export const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+
 /** A disposable copy of the candidate; `track` receives its directory so the caller removes it. */
 export function candidate(track: string[]) {
   const dir = mkdtempSync(join(tmpdir(), "orch-pack-"));
@@ -45,10 +47,10 @@ export function candidate(track: string[]) {
     return result.stdout;
   };
   // npm in the copy resolves the isolated config, cache and home, not the developer's.
-  expect(run("npm", ["config", "get", "offline"]).trim()).toBe("true");
-  expect(run("npm", ["config", "get", "userconfig"]).trim()).toBe(userconfig);
-  expect(run("npm", ["config", "get", "globalconfig"]).trim()).toBe(globalconfig);
-  expect(run("npm", ["config", "get", "cache"]).trim()).toBe(join(dir, "cache"));
+  expect(run(npmCommand, ["config", "get", "offline"]).trim()).toBe("true");
+  expect(run(npmCommand, ["config", "get", "userconfig"]).trim()).toBe(userconfig);
+  expect(run(npmCommand, ["config", "get", "globalconfig"]).trim()).toBe(globalconfig);
+  expect(run(npmCommand, ["config", "get", "cache"]).trim()).toBe(join(dir, "cache"));
   expect(run(process.execPath, ["-e", "process.stdout.write(JSON.stringify([process.env.HOME, process.env.XDG_CONFIG_HOME]))"])).toBe(
     JSON.stringify([home, home]),
   );
@@ -66,7 +68,7 @@ export function plantRetired(repo: string) {
 
 /** Real `npm pack --offline` (prepack builds) in the copy; `args` may only add npm flags. */
 export function pack(copy: ReturnType<typeof candidate>, args: string[] = []) {
-  copy.run("npm", ["pack", "--offline", ...args]);
+  copy.run(npmCommand, ["pack", "--offline", ...args]);
   const tarballs = readdirSync(copy.repo).filter((name) => name.endsWith(".tgz"));
   expect(tarballs).toHaveLength(1);
   return join(copy.repo, tarballs[0]);

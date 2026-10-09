@@ -73,6 +73,7 @@ type Run = (a: Args, io: IO) => number | Promise<number>;
 
 const num = C.configNumber;
 const ConfigError = C.ConfigError;
+export const WINDOWS_WORKERS_UNAVAILABLE = "Windows support for workers and review watch is not available yet.";
 
 function lease(cfg: Record<string, any>): Lease {
   const l = cfg.lease ?? {};
@@ -345,14 +346,16 @@ function dirUsable(p: string): boolean {
   }
 }
 
-const cmdDoctor: Run = (_a, io) => {
+const cmdDoctor: Run = (a, io) => {
   const rows: [string, string, string][] = [];
   const add = (ok: boolean, name: string, detail: string, optional = false) => {
     rows.push([ok ? "PASS" : optional ? "SKIP" : "FAIL", name, detail]);
   };
+  const findCommand = (name: string) => which(name, undefined, a._platform);
   const major = Number(process.versions.node.split(".")[0]);
   add(major >= 20, "node>=20", process.versions.node);
-  add(process.platform !== "win32", "posix (process groups)", process.platform);
+  if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
+  else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
   let cfg: Record<string, any> | null = null;
   try {
@@ -415,22 +418,22 @@ const cmdDoctor: Run = (_a, io) => {
     const pb = handbookDir(cfg);
     const have = HANDBOOK.filter((n) => existsSync(targetFile(pb, n, "flat")) || existsSync(targetFile(pb, n, "skills")));
     add(have.length === HANDBOOK.length, "handbook", have.length === HANDBOOK.length ? pb : `${have.length}/${HANDBOOK.length} files in ${pb} - run \`orch init\``, true);
-    const git = which("git");
+    const git = findCommand("git");
     add(git !== null, "git", git ?? "not on PATH");
-    const gh = which("gh");
+    const gh = findCommand("gh");
     add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
     const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
-    add(Boolean(wcmd) && which(wcmd) !== null, "worker command",
-      wcmd ? which(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
-    const to = which("timeout") ?? which("gtimeout");
+    add(Boolean(wcmd) && findCommand(wcmd) !== null, "worker command",
+      wcmd ? findCommand(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
+    const to = findCommand("timeout") ?? findCommand("gtimeout");
     add(to !== null, "timeout (worker time limit)", to ?? "absent - workers run without a time limit", true);
     const found = D.installed().map((x) => x.name);
     add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
       const b = (ag.command ?? [""])[0] ?? "";
-      add(Boolean(b) && which(b) !== null, `agent ${name}`, b || "empty command", true);
+      add(Boolean(b) && findCommand(b) !== null, `agent ${name}`, b || "empty command", true);
     }
     const tier = LD.readState(loadPath(cfg)).tier;
     add(true, "load state", tier || "no sample yet (run `orch load`)");
@@ -632,6 +635,10 @@ const cmdReview: Run = (a, io) => {
 
 /** `orch review watch`: 0 = reviewed, or (with --once / --dry-run) still waiting or dispatched; 1 = blocked, stale, error, timeout. */
 const cmdReviewWatch: Run = async (a, io) => {
+  if (a._platform === "win32") {
+    eprintln(io, WINDOWS_WORKERS_UNAVAILABLE);
+    return 2;
+  }
   const cfg = C.loadOrDefault();
   const prof = P.readProfile(cfg);
   if (!prof && a.tier) {
@@ -684,6 +691,10 @@ export function reviewStart(cfg: Record<string, any>, prof: P.Profile | null): (
 }
 
 const cmdWorker: Run = async (a, io) => {
+  if (a._platform === "win32" && (a._path[2] === "start" || a._path[2] === "stop")) {
+    eprintln(io, WINDOWS_WORKERS_UNAVAILABLE);
+    return 2;
+  }
   const cfg = C.loadOrDefault();
   const w = workers(cfg);
   try {
@@ -735,7 +746,7 @@ const cmdLoad: Run = (a, io) => {
   const path = loadPath(cfg);
   let st: Record<string, any>;
   try {
-    st = a.read ? LD.readState(path) : LD.step(cfg, path);
+    st = a.read ? LD.readState(path) : LD.step(cfg, path, LD.takeSample(cfg, a._platform));
   } catch (e: any) {
     if (e instanceof SyntaxError) throw new ConfigError(`[load] renice_pattern is not a valid regular expression (${e.message})`);
     throw e;
@@ -1253,7 +1264,8 @@ export function buildTree(): CmdSpec<Run> {
 }
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
-export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO): Promise<number> {
+export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
+  runtime: { platform?: NodeJS.Platform } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1282,6 +1294,7 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     throw e;
   }
   const { args, cmd } = parsed;
+  args._platform = runtime.platform ?? process.platform;
   args.cmd = rest;
   if (cmd.name === "add" && args._path[1] === "mem" && (args.description === null || args.description === undefined)) {
     eprintln(io, `usage: ${cmd.usage}\norch: error: the following arguments are required: --description`);

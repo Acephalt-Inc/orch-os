@@ -12,8 +12,8 @@
  * Each template follows the CLI's documented non-interactive mode and is written to
  * config.toml, where you can edit it (for example to add permission or model flags).
  */
-import { resolve } from "node:path";
-import { expandPath, isExecutableFile, which } from "./util.js";
+import { delimiter, resolve } from "node:path";
+import { expandPath, which } from "./util.js";
 
 /** name, binary, worker command template ({bin} {workdir} {name}), label */
 export const KNOWN: [string, string, string[], string][] = [
@@ -37,7 +37,7 @@ export interface Agent {
 
 export function searchDirs(): string[] {
   const raw = process.env.ORCH_AGENT_DIRS;
-  const dirs = raw === undefined ? DEFAULT_DIRS : raw.split(":").filter((d) => d);
+  const dirs = raw === undefined ? DEFAULT_DIRS : raw.split(delimiter).filter((d) => d);
   return dirs.map((d) => expandPath(d));
 }
 
@@ -46,8 +46,8 @@ export function find(binary: string): [string | null, boolean] {
   const p = which(binary);
   if (p) return [resolve(p), true];
   for (const d of searchDirs()) {
-    const c = d.replace(/\/+$/, "") + "/" + binary;
-    if (isExecutableFile(c)) return [resolve(c), false];
+    const c = which(binary, d);
+    if (c) return [resolve(c), false];
   }
   return [null, false];
 }

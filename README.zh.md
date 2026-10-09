@@ -21,12 +21,14 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 ## 安装
 
-需要 Node.js 22 或更高版本（推荐 24 LTS），以及 macOS 或 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
+需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 
 ```sh
 npm i -g orch-os
 # 或：npx orch-os init
 ```
+
+在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。
 
 ## 为什么选择 ORCH-os
 

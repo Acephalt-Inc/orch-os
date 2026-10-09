@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /** Agent detection, `orch init` / `orch doctor` / `orch agents` with and without agent CLIs. */
 import { appendFileSync, existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { delimiter } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/detect.js";
 import { parseToml } from "../src/toml.js";
@@ -14,7 +15,7 @@ function useDetectBase() {
   beforeEach(() => {
     d.bins = tmp("orch-bins-");
     d.off = tmp("orch-off-");
-    process.env.PATH = `${d.bins}:/usr/bin:/bin`;
+    process.env.PATH = [d.bins, "/usr/bin", "/bin"].join(delimiter);
     process.env.ORCH_AGENT_DIRS = d.off;
   });
   afterEach(() => {
@@ -35,12 +36,12 @@ describe("DetectTest", () => {
   });
 
   it("test_path_hit_uses_absolute_path_and_template", () => {
-    fakeBin(d.bins, "codex");
+    const binary = fakeBin(d.bins, "codex");
     const [a, ...rest] = D.installed();
     expect(rest).toEqual([]);
     expect(a.name).toBe("codex");
     expect(a.on_path).toBe(true);
-    expect(a.command).toEqual([`${d.bins}/codex`, "exec", "-"]);
+    expect(a.command).toEqual([binary, "exec", "-"]);
   });
 
   it("test_non_executable_is_ignored", () => {
@@ -49,10 +50,10 @@ describe("DetectTest", () => {
   });
 
   it("test_fallback_dir_found_off_path", () => {
-    fakeBin(d.off, "claude");
+    const binary = fakeBin(d.off, "claude");
     const [a, ...rest] = D.installed();
     expect(rest).toEqual([]);
-    expect([a.name, a.on_path, a.path]).toEqual(["claude", false, `${d.off}/claude`]);
+    expect([a.name, a.on_path, a.path]).toEqual(["claude", false, binary]);
   });
 
   it("test_fallback_can_be_disabled", () => {
@@ -83,14 +84,14 @@ describe("InitDoctorTest", () => {
   });
 
   it("test_init_writes_detected_agents_and_default", async () => {
-    fakeBin(d.bins, "claude");
+    const claude = fakeBin(d.bins, "claude");
     fakeBin(d.bins, "codex");
     let [code, out] = await run("init");
     expect(code, out).toBe(0);
     expect(out).toContain("<- default worker agent");
     const cfg = cfgOf(d.home);
     expect(Object.keys(cfg.agents).sort()).toEqual(["claude", "codex"]);
-    expect(cfg.workers.command).toEqual([`${d.bins}/claude`, "-p"]);
+    expect(cfg.workers.command).toEqual([claude, "-p"]);
     [code, out] = await run("doctor");
     expect(code, out).toBe(0);
     expect(out).toContain("PASS  agent CLIs");
@@ -99,9 +100,9 @@ describe("InitDoctorTest", () => {
 
   it("test_init_agent_flag_picks_default", async () => {
     fakeBin(d.bins, "claude");
-    fakeBin(d.bins, "codex");
+    const codex = fakeBin(d.bins, "codex");
     expect((await run("init", "--agent", "codex"))[0]).toBe(0);
-    expect(cfgOf(d.home).workers.command[0]).toBe(`${d.bins}/codex`);
+    expect(cfgOf(d.home).workers.command[0]).toBe(codex);
   });
 
   it("test_init_unknown_agent_is_refused_and_writes_nothing", async () => {
@@ -141,7 +142,7 @@ describe("InitDoctorTest", () => {
     expect(out).toMatch(/mine\s+custom\s+configured/);
   });
 
-  it("test_worker_start_with_agent_feeds_task_on_stdin", async () => {
+  it.skipIf(process.platform === "win32")("test_worker_start_with_agent_feeds_task_on_stdin", async () => {
     fakeBin(d.bins, "codex", 'cat > "$1.out"'); // argv: exec -  => "$1"="exec"
     await run("init");
     const prompt = `${d.home}/task.md`;

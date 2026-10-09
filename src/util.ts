@@ -5,7 +5,7 @@ import {
   accessSync, closeSync, constants, fsyncSync, openSync, renameSync, statSync, writeSync, chmodSync,
 } from "node:fs";
 import { hostname, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, extname, join, resolve } from "node:path";
 
 /** Names (authors, workers, readers, task ids, note names): letters, digits, `_ . @ -`. */
 export const NAME_RE = /^[\p{L}\p{N}_.@-]+$/u;
@@ -28,17 +28,40 @@ export function isExecutableFile(p: string): boolean {
   }
 }
 
-/** Like Python's shutil.which: a name with a slash is checked as given, else PATH is searched. */
-export function which(cmd: string | undefined | null, envPath?: string): string | null {
+function isCommandFile(p: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return isExecutableFile(p);
+  try { return statSync(p).isFile(); } catch { return false; }
+}
+
+/** Like Python's shutil.which, including PATHEXT resolution on Windows. */
+export function which(cmd: string | undefined | null, envPath?: string, platform: NodeJS.Platform = process.platform,
+  pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD"): string | null {
   if (!cmd) return null;
-  if (cmd.includes("/")) return isExecutableFile(cmd) ? cmd : null;
+  const extensions = platform === "win32"
+    ? (extname(cmd) ? [""] : pathExt.split(";").filter(Boolean)).map((x) => x.toLowerCase())
+    : [""];
+  const candidates = (base: string) => extensions.map((x) => base + x);
+  if (cmd.includes("/") || cmd.includes("\\")) {
+    return candidates(cmd).find((p) => isCommandFile(p, platform)) ?? null;
+  }
   const path = envPath ?? process.env.PATH ?? "";
-  for (const d of path.split(":")) {
+  const sep = platform === "win32" ? ";" : delimiter;
+  for (const d of path.split(sep)) {
     if (!d) continue;
-    const p = join(d, cmd);
-    if (isExecutableFile(p)) return p;
+    const p = candidates(join(d, cmd)).find((candidate) => isCommandFile(candidate, platform));
+    if (p) return p;
   }
   return null;
+}
+
+/** Quote one argument for cmd.exe without allowing metacharacters or percent expansion. */
+export function quoteCmdArg(arg: string): string {
+  return `"${arg.replace(/%/g, "%%").replace(/([&|<>^])/g, "^$1").replace(/"/g, '""')}"`;
+}
+
+/** A fixed cmd.exe invocation for an already-resolved .cmd or .bat command. */
+export function cmdInvocation(command: string, args: string[]): [string, string[]] {
+  return [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", [command, ...args].map(quoteCmdArg).join(" ")]];
 }
 
 const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));

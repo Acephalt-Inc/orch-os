@@ -60,6 +60,13 @@ export async function runStdin(stdin: string, ...argv: string[]): Promise<[numbe
 }
 
 export function fakeBin(dir: string, name: string, body = 'cat > "$ORCH_TEST_OUT"'): string {
+  if (process.platform === "win32") {
+    const script = join(dir, `${name}.js`);
+    const p = join(dir, `${name}.cmd`);
+    writeFileSync(script, "process.stdin.resume();\n");
+    writeFileSync(p, `@echo off\r\n"${process.execPath}" "%~dp0${name}.js" %*\r\n`);
+    return p;
+  }
   const p = join(dir, name);
   writeFileSync(p, `#!/bin/sh\n${body}\n`);
   chmodSync(p, 0o755);

@@ -610,7 +610,7 @@ describe("ProfileVendorCase", () => {
   });
 });
 
-describe("ProfileWorkers", () => {
+describe.skipIf(process.platform === "win32")("ProfileWorkers", () => {
   const d = useBins();
 
   it("worker_start_refuses_at_the_written_limit_and_force_overrides", async () => {

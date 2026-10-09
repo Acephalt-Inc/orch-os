@@ -458,7 +458,7 @@ describe("ReviewWatchCli", () => {
   });
 });
 
-describe("ReviewWatchDispatch", () => {
+describe.skipIf(process.platform === "win32")("ReviewWatchDispatch", () => {
   it("worker_start_passes_the_review_environment_and_the_prompt_on_stdin", async () => {
     const root = tmp("orch-rw-w-");
     const out = join(root, "seen.txt");
@@ -474,7 +474,7 @@ describe("ReviewWatchDispatch", () => {
   });
 });
 
-describe("ReviewWatchWorkerLimit", () => {
+describe.skipIf(process.platform === "win32")("ReviewWatchWorkerLimit", () => {
   const ctx = useTmpHome();
 
   it("a_review_dispatch_is_refused_at_the_written_worker_limit", async () => {
