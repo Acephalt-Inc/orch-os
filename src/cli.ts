@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./args.js";
 import * as C from "./config.js";
 import * as D from "./detect.js";
+import { everydayDoctorRows, everydayInit } from "./everyday.js";
 import { Lease } from "./lease.js";
 import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
@@ -190,6 +191,7 @@ function askProfile(io: IO, found: string[]): Record<string, any> | null {
 }
 
 const cmdInit: Run = (a, io) => {
+  if (a.everyday) return everydayInit(a, io);
   if (Boolean(a.compute) !== Boolean(a.people)) {
     eprintln(io, "init: --compute and --people go together: give both, or neither");
     return 2;
@@ -447,6 +449,7 @@ const cmdDoctor: Run = (_a, io) => {
       for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
     });
   }
+  everydayDoctorRows(rows, cfg, cfg === null ? "" : handbookDir(cfg));
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [s, n, d] of rows) println(io, `${padEnd(s, 4)}  ${padEnd(n, w)}  ${d}`);
   const fails = rows.filter((r) => r[0] === "FAIL").length;
@@ -1041,6 +1044,8 @@ export function buildTree(): CmdSpec<Run> {
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [
+          opt("everyday", ["--everyday"], "bool", "set up notes, tasks and messages for everyday work"),
+          opt("no_agent_file", ["--no-agent-file"], "bool", "do not write CLAUDE.md in the current folder"),
           opt("force", ["--force"], "bool", "rewrite config.toml from defaults + fresh detection"),
           opt("agent", ["--agent"], "str", "default worker agent (default: first detected)"),
           opt("dir", ["--dir"], "str", "where to write the handbook (default [handbook] dir)"),
