@@ -6,12 +6,15 @@ import { fileURLToPath } from "node:url";
 import type { Args } from "./args.js";
 import * as C from "./config.js";
 import type { IO } from "./cli.js";
+import * as D from "./detect.js";
 import { Mailbox } from "./mailbox.js";
 import { parseToml } from "./toml.js";
 
 const TEMPLATE = fileURLToPath(new URL("../templates/handbook/everyday.md", import.meta.url));
 const BEGIN = "<!-- orch-os everyday: begin -->";
 const END = "<!-- orch-os everyday: end -->";
+
+export function lfText(text: string): string { return text.replace(/\r\n?/g, "\n"); }
 
 function fail(io: IO, text: string): number { io.err(text + "\n"); return 2; }
 
@@ -52,14 +55,20 @@ export function everydayInit(a: Args, io: IO): number {
   }
   mkdirSync(home, { recursive: true });
   if (configText === null) {
-    configText = C.renderDefault(home, [], null, "everyday");
+    const agents = D.installed();
+    configText = C.renderDefault(home, agents, agents[0]?.name, "everyday");
+    if (a.dir) configText = configText.replace(`dir = ${JSON.stringify(join(home, "handbook"))}`, `dir = ${JSON.stringify(dir)}`);
     writeFileSync(config, configText); io.out(`wrote ${config}\n`);
   } else io.out(`config exists: ${config} (unchanged)\n`);
   const cfg = parseToml(configText);
   const mc = cfg.mailbox ?? {};
   const mb = new Mailbox(C.expand(mc.path ?? join(home, "mailbox.md")), mc.sections ?? ["LEAD", "WORKER", "REVIEWER", "SYSTEM"]);
   if (!existsSync(mb.path)) { mkdirSync(dirname(mb.path), { recursive: true }); writeFileSync(mb.path, mb.skeleton()); io.out(`wrote ${mb.path}\n`); }
-  if (!existsSync(handbook) || a.force_handbook) { mkdirSync(dirname(handbook), { recursive: true }); writeFileSync(handbook, readFileSync(TEMPLATE)); io.out(`wrote ${handbook}\n`); }
+  if (!existsSync(handbook) || a.force_handbook) {
+    mkdirSync(dirname(handbook), { recursive: true });
+    writeFileSync(handbook, lfText(readFileSync(TEMPLATE, "utf8")));
+    io.out(`wrote ${handbook}\n`);
+  }
   if (!a.no_agent_file && newAgent !== oldAgent) writeFileSync(agentFile, newAgent!);
   io.out(`handbook: ${handbook}\nnext: orch doctor\n`);
   return 0;

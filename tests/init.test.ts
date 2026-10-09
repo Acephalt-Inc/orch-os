@@ -15,7 +15,7 @@ describe("InitHandbookV2", () => {
     for (const n of HANDBOOK) {
       const f = `${ctx.home}/handbook/${n}.md`;
       expect(out).toContain(`wrote ${f}`);
-      expect(readFileSync(f, "utf8")).toBe(readFileSync(`${TEMPLATE_DIR}${n}.md`, "utf8"));
+      expect(readFileSync(f, "utf8").replace(/\r\n?/g, "\n")).toBe(readFileSync(`${TEMPLATE_DIR}${n}.md`, "utf8").replace(/\r\n?/g, "\n"));
     }
     expect(HANDBOOK).toEqual(["lead-boot", "worker-boot", "review-boot", "protocols"]);
     const [dcode, dout] = await run("doctor");
@@ -27,7 +27,7 @@ describe("InitHandbookV2", () => {
     const dir = `${ctx.home}/skills`;
     expect((await run("init", "--dir", dir, "--layout", "skills"))[0]).toBe(0);
     for (const n of HANDBOOK) {
-      const text = readFileSync(`${dir}/${n}/SKILL.md`, "utf8");
+      const text = readFileSync(`${dir}/${n}/SKILL.md`, "utf8").replace(/\r\n?/g, "\n");
       expect(text.startsWith(`---\nname: ${n}\ndescription: `)).toBe(true);
     }
     expect((await run("init", "--layout", "nested"))[0]).toBe(2);
@@ -47,10 +47,10 @@ describe("InitHandbookV2", () => {
 
   it("every_template_has_frontmatter_and_names_the_orch_commands_it_uses", () => {
     for (const n of HANDBOOK) {
-      const t = readFileSync(`${TEMPLATE_DIR}${n}.md`, "utf8");
+      const t = readFileSync(`${TEMPLATE_DIR}${n}.md`, "utf8").replace(/\r\n?/g, "\n");
       expect(t).toMatch(new RegExp(`^---\\nname: ${n}\\ndescription: .+\\n---\\n`));
     }
-    const protocols = readFileSync(`${TEMPLATE_DIR}protocols.md`, "utf8");
+    const protocols = readFileSync(`${TEMPLATE_DIR}protocols.md`, "utf8").replace(/\r\n?/g, "\n");
     for (const k of ["QUESTION", "ANSWER", "DONE", "BLOCKED", "orch task claim", "orch merge-gate", "current head commit", "not the author"]) {
       expect(protocols).toContain(k);
     }

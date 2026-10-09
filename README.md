@@ -40,8 +40,6 @@ Set up ORCH-os for everyday use in this folder. Run the steps in order and show 
 4. If the last line is `doctor: PASS (0 required check(s) failed)`, show me that line, then read the file named on the `handbook:` line and follow it. If not, show me every line that starts with `FAIL` and stop.
 ```
 
-The package declares support for macOS and Linux only.
-
 State lives under `~/.orch` (or `$ORCH_HOME`) and is shared by every folder of that user.
 
 ## Why ORCH-os

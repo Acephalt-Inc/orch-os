@@ -7,7 +7,7 @@ import { ROOT } from "./_helpers.js";
 
 describe("TestsMapV2", () => {
   it("every_v1_test_in_the_map_has_a_vitest_counterpart", () => {
-    const map = readFileSync(join(ROOT, "docs", "tests-map.md"), "utf8");
+    const map = readFileSync(join(ROOT, "docs", "tests-map.md"), "utf8").replace(/\r\n?/g, "\n");
     const row = /^\| (\d+) \| `tests\/(test_\w+)\.py` `(\w+)\.(test_\w+)` \| `(tests\/[\w.-]+\.test\.ts)` `(\w+) > (test_\w+)` \|$/gm;
     const rows = [...map.matchAll(row)];
     expect(rows.length).toBe(59);

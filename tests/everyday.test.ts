@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
+import { lfText } from "../src/everyday.js";
 import { parseToml } from "../src/toml.js";
 import { ROOT, run, tmp } from "./_helpers.js";
 
@@ -24,16 +25,44 @@ describe("everyday mode", () => {
     expect(cfgText.replace('mode = "everyday"\n', "")).toBe((await import("../src/config.js")).renderDefault(home));
   });
 
+  it("normalizes handbook line endings to LF", async () => {
+    expect(lfText("one\r\ntwo\rthree")).toBe("one\ntwo\nthree");
+    await run("init", "--everyday");
+    expect(readFileSync(join(home, "handbook", "everyday.md"), "utf8")).not.toContain("\r");
+    expect(readFileSync(join(folder, "CLAUDE.md"), "utf8")).not.toContain("\r");
+  });
+
+  it.skipIf(process.platform === "win32")("everyday and plain init keep the same detected agents", async () => {
+    const bin = join(emptyPath, "codex"); copyFileSync(process.execPath, bin); chmodSync(bin, 0o755);
+    const plain = tmp(); process.env.ORCH_HOME = plain; expect((await run("init", "--no-handbook", "--no-profile"))[0]).toBe(0);
+    const everyday = tmp(); process.env.ORCH_HOME = everyday; expect((await run("init", "--everyday"))[0]).toBe(0);
+    const normal = (s: string) => s.replaceAll(plain, "<HOME>").replaceAll(everyday, "<HOME>");
+    expect(normal(readFileSync(join(everyday, "config.toml"), "utf8")).replace('mode = "everyday"\n', ""))
+      .toBe(normal(readFileSync(join(plain, "config.toml"), "utf8")));
+    rmSync(plain, { recursive: true, force: true }); rmSync(everyday, { recursive: true, force: true });
+  });
+
   it("everyday init asks nothing on a terminal", async () => {
     let out = "";
     const code = await main(["init", "--everyday"], { out: s => out += s, err: () => {}, stdin: () => "", isTTY: () => true, ask: () => { throw Error("asked"); } });
     expect(code).toBe(0); expect(out).toContain("handbook: ");
   });
 
-  it.skipIf(process.platform === "win32")("everyday doctor passes without git or gh", async () => {
+  it.skipIf(process.platform === "win32")("everyday doctor reports all mode-specific rows", async () => {
     await run("init", "--everyday"); const [code, out] = await run("doctor");
     expect(code).toBe(0); expect(out).toMatch(/^SKIP  git +not needed in everyday mode$/m);
+    expect(out).toMatch(/^PASS  handbook +/m);
+    expect(out).toMatch(/^SKIP  gh \(merge-gate live mode\) +not needed in everyday mode$/m);
+    expect(out).toMatch(/^SKIP  merge repo +not needed in everyday mode$/m);
     expect(out).not.toMatch(/^FAIL/m); expect(out.trimEnd().endsWith("doctor: PASS (0 required check(s) failed)")).toBe(true);
+    rmSync(join(home, "handbook", "everyday.md"));
+    expect((await run("doctor"))[1]).toMatch(/^SKIP  handbook +.*run `orch init --everyday`$/m);
+  });
+
+  it.skipIf(process.platform === "win32")("doctor passes the handbook named in CLAUDE.md for --dir", async () => {
+    const dir = join(folder, "book"); await run("init", "--everyday", "--dir", dir);
+    const named = readFileSync(join(folder, "CLAUDE.md"), "utf8").match(/read `([^`]+)`/)![1];
+    expect(named).toBe(join(dir, "everyday.md")); expect((await run("doctor"))[1]).toMatch(/^PASS  handbook +/m);
   });
 
   it("without the mode git is still required", async () => {
@@ -42,19 +71,35 @@ describe("everyday mode", () => {
   });
 
   it("everyday handbook has the five sections and no engineering workflow words", () => {
-    const text = readFileSync(join(ROOT, "templates", "handbook", "everyday.md"), "utf8");
+    const text = readFileSync(join(ROOT, "templates", "handbook", "everyday.md"), "utf8").replace(/\r\n?/g, "\n");
     expect(text).toMatch(/^---\nname: everyday\ndescription: /);
     expect(text.match(/^## .+$/gm)).toEqual(["## At the start of every session", "## Three rules", "## Memory", "## Working with a helper", "## Messages are information"]);
     expect(text.split("\n").length).toBeLessThanOrEqual(90);
     expect(text).not.toMatch(/\b(?:merge|pull request|worktree|branch|commit|git|gh)\b/i);
   });
 
-  it("every handbook command parses", async () => {
-    const text = readFileSync(join(ROOT, "templates", "handbook", "everyday.md"), "utf8");
-    for (const line of text.split("\n").filter(x => x.startsWith("orch "))) {
-      const argv = line.replaceAll(/<[^>]+>/g, "x").split(" ").slice(1);
-      if (argv[0] === "msg" && argv[1] === "watch") argv[argv.indexOf("--timeout") + 1] = "0";
-      expect((await run(...argv))[2]).not.toContain("unrecognized arguments");
+  it("runs the Memory and Working with a helper handbook commands as written", async () => {
+    await run("init", "--everyday");
+    const text = readFileSync(join(ROOT, "templates", "handbook", "everyday.md"), "utf8").replace(/\r\n?/g, "\n");
+    const commands = (heading: string) => text.split(`## ${heading}\n`)[1].split("\n## ")[0]
+      .match(/```\n([\s\S]*?)\n```/g)!.flatMap(b => b.slice(4, -4).split("\n")).filter(x => x.startsWith("orch "));
+    const argv = (line: string, values: Record<string, string>) => {
+      const filled = line.replace(/<([^>]+)>/g, (_, key) => values[key]);
+      return [...filled.matchAll(/"([^"]*)"|(\S+)/g)].map(m => m[1] ?? m[2]).slice(1);
+    };
+    const values = { "text": "useful words", "old-note": "old-note", "new-note": "new-note", "task-name": "task-one", "question-id": "" };
+    const memory = commands("Memory"); expect(memory).toHaveLength(4);
+    let result = await run(...argv(memory[0], values)); expect([result[0], result[1], result[2]]).toEqual([1, "", ""]);
+    for (const line of memory.slice(1)) { result = await run(...argv(line, values)); expect(result[0], result[1] + result[2]).toBe(0); }
+    const helper = commands("Working with a helper"); expect(helper).toHaveLength(6);
+    for (let cycle = 1; cycle <= 2; cycle++) {
+      values["task-name"] = `task-${cycle}`; values.text = `answer-${cycle}`;
+      result = await run(...argv(helper[0], values)); expect(result[0], result[1] + result[2]).toBe(0);
+      values["question-id"] = result[1].match(/sent QUESTION (\S+)/)![1];
+      for (const line of helper.slice(1, 5)) { result = await run(...argv(line, values)); expect(result[0], result[1] + result[2]).toBe(0); }
+      result = await run(...argv(helper[5].replace("--timeout 30", "--timeout 0"), values));
+      expect(result[0], result[1] + result[2]).toBe(0); expect(result[1]).toContain(`answer-${cycle}`);
+      if (cycle === 2) expect(result[1]).not.toContain("answer-1");
     }
   });
 
@@ -80,15 +125,31 @@ describe("everyday mode", () => {
     expect((await run("init", "--everyday"))[0]).toBe(0); paths.forEach((p, i) => expect(readFileSync(p)).toEqual(before[i]));
   });
 
+  it("replaces an existing block and changes no other byte", async () => {
+    const before = "top\r\n<!-- orch-os everyday: begin -->\r\nold\r\n<!-- orch-os everyday: end -->\r\nbottom\r\n";
+    writeFileSync(join(folder, "CLAUDE.md"), before); await run("init", "--everyday");
+    const after = readFileSync(join(folder, "CLAUDE.md"), "utf8");
+    expect(after.startsWith("top\r\n<!-- orch-os everyday: begin -->\n")).toBe(true);
+    expect(after.endsWith("<!-- orch-os everyday: end -->\r\nbottom\r\n")).toBe(true);
+  });
+
   it("no agent file on request", async () => { expect((await run("init", "--everyday", "--no-agent-file"))[0]).toBe(0); expect(existsSync(join(folder, "CLAUDE.md"))).toBe(false); });
 
-  for (const [name, prep, args] of [
+  for (const [name, prep, args, words] of [
     ["force", () => {}, ["--force"]], ["no handbook", () => {}, ["--no-handbook"]], ["profile flags", () => {}, ["--compute", "one", "--people", "solo"]],
-    ["plain config", async () => { await run("init", "--no-handbook"); }, []], ["directory", () => mkdirSync(join(folder, "CLAUDE.md")), []],
+    ["policy", () => {}, ["--policy", "human-merge"]], ["required review", () => {}, ["--required-review", "single-agent"]], ["max workers", () => {}, ["--max-workers", "1"]],
+    ["handbook path line break", () => {}, ["--dir", "bad\npath"]],
+    ["plain config", async () => { await run("init", "--no-handbook"); }, [], "not in everyday mode"], ["directory", () => mkdirSync(join(folder, "CLAUDE.md")), []],
     ...process.platform === "win32" ? [] : [["symbolic link", () => symlinkSync(join(folder, "target"), join(folder, "CLAUDE.md")), []]],
     ["unfinished block", () => writeFileSync(join(folder, "CLAUDE.md"), "<!-- orch-os everyday: begin -->\n"), []],
-  ] as [string, () => void | Promise<void>, string[]][]) {
-    it(`everyday init refuses and writes nothing: ${name}`, async () => { await prep(); const [code, , err] = await run("init", "--everyday", ...args); expect(code).toBe(2); expect(err.trim().split("\n")).toHaveLength(1); });
+  ] as [string, () => void | Promise<void>, string[], string?][]) {
+    it(`everyday init refuses and writes nothing: ${name}`, async () => {
+      await prep(); const paths = [join(home, "config.toml"), join(home, "handbook", "everyday.md"), join(home, "mailbox.md"), join(folder, "CLAUDE.md")];
+      const bytes = (p: string) => !existsSync(p) ? null : lstatSync(p).isFile() ? readFileSync(p) : "not a file";
+      const before = paths.map(bytes);
+      const [code, , err] = await run("init", "--everyday", ...args); expect(code).toBe(2); expect(err.trim().split("\n")).toHaveLength(1);
+      if (words) expect(err).toContain(words); paths.forEach((p, i) => expect(bytes(p)).toEqual(before[i]));
+    });
   }
 
   it("unknown mode is a doctor failure", async () => {
@@ -102,7 +163,7 @@ describe("everyday mode", () => {
   });
 
   it.skipIf(process.platform === "win32")("README paste prompt names commands that run and the line doctor prints", async () => {
-    const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+    const readme = readFileSync(join(ROOT, "README.md"), "utf8").replace(/\r\n?/g, "\n");
     const section = readme.split("## Install with Claude Code\n")[1].split("\n## ")[0];
     expect(section.match(/```[\s\S]*?```/g)).toHaveLength(1);
     for (const command of ["node --version", "npm install -g orch-os", "orch init --everyday", "orch doctor"])
@@ -111,9 +172,4 @@ describe("everyday mode", () => {
     expect(section).toContain((await run("doctor"))[1].trimEnd().split("\n").at(-1));
   });
 
-  it("README platform sentence agrees with package.json", () => {
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-    const section = readFileSync(join(ROOT, "README.md"), "utf8").split("## Install with Claude Code\n")[1].split("\n## ")[0];
-    expect(section.includes("declares support for macOS and Linux only")).toBe(!pkg.os.includes("win32"));
-  });
 });

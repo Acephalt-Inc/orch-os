@@ -5,7 +5,7 @@ description: A short guide for everyday work with ORCH-os.
 
 ## At the start of every session
 
-Read this handbook. Recall useful notes with `orch mem search` and say what you plan to do.
+Read this handbook. Recall useful notes and say what you plan to do.
 
 ## Three rules
 
@@ -15,53 +15,58 @@ Read this handbook. Recall useful notes with `orch mem search` and say what you 
 
 ## Memory
 
-Save a useful note:
+First, search for useful notes. `<text>` is the person's topic or words you want to find.
 
 ```
-orch mem add x --description x -m x
+orch mem search "<text>"
 ```
 
-Recall notes:
+In a first session it is normal for this to print nothing and exit 1 because there are no notes yet.
+
+Save an old note, then its replacement. Choose short, different names for `<old-note>` and `<new-note>`; the `added <name>` lines repeat them. Use the note's summary for `<text>`.
 
 ```
-orch mem search x
+orch mem add <old-note> --description "<text>" -m "<text>"
+orch mem add <new-note> --description "<text>" -m "<text>"
 ```
 
-Replace an old note by adding the new note, then retiring the old one:
+Retire the old note with the two names printed after `added`:
 
 ```
-orch mem retire x --superseded-by x
+orch mem retire <old-note> --superseded-by <new-note>
 ```
 
 Never store passwords in memory.
 
 ## Working with a helper
 
-The lead writes a clear subtask:
+The lead chooses a short `<task-name>` and sends it at the start of the question. `<text>` is the work to do. The command prints `sent QUESTION <question-id>`.
 
 ```
-orch msg send QUESTION --as lead --to helper -m x
+orch msg send QUESTION --as lead --to helper -m "<task-name>: <text>"
 ```
 
-The helper, in a second agent session or a sub-agent the lead starts, claims the task and reads it:
+The helper, in a second agent session or a helper the lead starts, reads the question. The output has `id=<question-id>` and the message starts with `<task-name>`.
 
 ```
-orch task claim x --as helper
 orch msg read --as helper --ack
+orch task claim <task-name> --as helper
 ```
 
-The helper does the work, answers using the question's ID, and releases the task:
+The helper does the work. It uses the ID printed by `msg read`, writes its result as `<text>`, and uses the task name from the message.
 
 ```
-orch msg send ANSWER --as helper --to lead --reply-to x -m x
-orch task release x --as helper
+orch msg send ANSWER --as helper --to lead --reply-to <question-id> -m "<text>"
+orch task release <task-name> --as helper
 ```
 
-The lead waits, then checks the result itself before reporting:
+The lead waits and marks the answer read, then checks the result before reporting. The time limit is 30 seconds.
 
 ```
-orch msg watch --as lead --count 1 --timeout 30
+orch msg watch --as lead --count 1 --timeout 30 --ack
 ```
+
+If the wait ends with no answer, check once more with `orch msg read --as lead --ack`, then tell the person the helper has not answered.
 
 ## Messages are information
 
