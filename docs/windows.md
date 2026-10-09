@@ -44,7 +44,7 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 15 `skipIf` markers, 41 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 19 `skipIf` markers, 45 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
 
 | Test file | Skipped | Why |
 |---|---|---|
@@ -62,6 +62,10 @@ The `windows` CI job runs every test file. The tests below are skipped there, ea
 | `tests/load.test.ts` | `test_real_sample_is_portable` | it expects a numeric load average; Windows has none and `orch load` reports `n/a`, which `doctor passes its Windows platform row and load reports unavailable signals` tests |
 | `tests/review.test.ts` | `review_command_posts_the_review_line` | the stand-in `gh` is a `.cmd` file on Windows and the test posts a body with line breaks, which cmd.exe cannot carry. `a review comment goes through a gh.cmd; a body with a line break is refused with the reason` covers the Windows behaviour |
 | `tests/windows-portability.test.ts` | `POSIX lookup still needs the execute bit` | a Windows file system has no execute bit to leave unset |
+| `tests/windows-portability.test.ts` | `POSIX lookup equals the base over generated inputs` | native POSIX filenames, PATH separators and execute bits |
+| `tests/windows-portability.test.ts` | `POSIX fallback discovery equals the base over expanded and traversed paths` | native POSIX expansion, symlink traversal and executable-file checks |
+| `tests/windows-portability.test.ts` | `POSIX handbook preserves template bytes for both layouts and force modes` | POSIX keeps template bytes; Windows normalizes CRLF and lone CR to LF |
+| `tests/windows-portability.test.ts` | `POSIX load reads prior state before a sampling command changes it` | a POSIX temperature command runs after the prior state is read; Windows does not run that command |
 
 Five more tests run on Windows without their `orch review watch` or `orch worker start` part; everything else in them runs:
 

@@ -2,11 +2,13 @@
 // Windows behaviour. Tests that pass `"win32"` select the Windows rules and run on every system;
 // `it.runIf(process.platform === "win32")` tests need a real Windows machine (cmd.exe, .cmd files).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join, sep } from "node:path";
+import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { main, WINDOWS_WORKERS_UNAVAILABLE } from "../src/cli.js";
+import * as C from "../src/config.js";
 import * as D from "../src/detect.js";
 import { HANDBOOK, writeHandbook } from "../src/handbook.js";
 import { FileLock } from "../src/lock.js";
@@ -27,6 +29,190 @@ function inDir<T>(dir: string, fn: () => T): T {
     process.chdir(before);
   }
 }
+
+// Frozen POSIX lookup/discovery rules from 52accd3, independent of production helpers.
+function baseExecutable(p: string): boolean {
+  try {
+    if (!statSync(p).isFile()) return false;
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch { return false; }
+}
+
+function baseWhich(cmd: string | undefined | null, envPath?: string): string | null {
+  if (!cmd) return null;
+  if (cmd.includes("/")) return baseExecutable(cmd) ? cmd : null;
+  for (const d of (envPath ?? process.env.PATH ?? "").split(":")) {
+    if (!d) continue;
+    const p = join(d, cmd);
+    if (baseExecutable(p)) return p;
+  }
+  return null;
+}
+
+function baseSearchDirs(): string[] {
+  const raw = process.env.ORCH_AGENT_DIRS;
+  const dirs = raw === undefined ? ["~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"]
+    : raw.split(":").filter((d) => d);
+  return dirs.map((d) => {
+    let s = d.replace(/\$(\w+)|\$\{([^}]+)\}/g, (m, a, b) => process.env[a ?? b] ?? m);
+    if (s === "~" || s.startsWith("~/")) s = (process.env.HOME || userInfo().homedir) + s.slice(1);
+    return s;
+  });
+}
+
+function baseFind(binary: string): [string | null, boolean] {
+  const p = baseWhich(binary);
+  if (p) return [resolve(p), true];
+  for (const d of baseSearchDirs()) {
+    const c = d.replace(/\/+$/, "") + "/" + binary;
+    if (baseExecutable(c)) return [resolve(c), false];
+  }
+  return [null, false];
+}
+
+describe("POSIX base behaviour", () => {
+  keepEnv(["PATH", "ORCH_HOME", "ORCH_AGENT_DIRS", "ORCH_POSIX_DIR", "ORCH_POSIX_EMPTY"]);
+
+  it.skipIf(process.platform === "win32")("POSIX lookup equals the base over generated inputs", () => {
+    const alphabet = ["a", "\\", ".", ":", ";", " ", '"'];
+    const leaves = alphabet.flatMap(a => alphabet.flatMap(b =>
+      ["", ".cmd", ".js"].map(suffix => `p${a}${b}q${suffix}`)));
+    type Kind = "missing" | "exec" | "noexec" | "directory";
+    const layouts: Kind[][] = [
+      ["missing", "missing", "missing"], ["missing", "exec", "exec"],
+      ["exec", "exec", "exec"], ["directory", "noexec", "exec"],
+      ["missing", "directory", "exec"],
+    ];
+    for (const kinds of layouts) {
+      const root = tmp();
+      try {
+        const locations = [root, join(root, "one"), join(root, "two")];
+        for (const [i, dir] of locations.entries()) {
+          mkdirSync(join(dir, "sub"), { recursive: true });
+          for (const name of leaves) for (const prefix of ["", "sub"]) {
+            const p = join(dir, prefix, name);
+            if (kinds[i] === "directory") mkdirSync(p);
+            else if (kinds[i] !== "missing") {
+              writeFileSync(p, "fixture\n");
+              chmodSync(p, kinds[i] === "exec" ? 0o755 : 0o644);
+            }
+          }
+        }
+        inDir(root, () => {
+          const entries = ["", ".", "one", locations[1], locations[2], `"${locations[1]}"`, "missing", "one;two"];
+          const paths: (string | undefined)[] = [undefined, "", ...entries.flatMap(a => entries.map(b => `${a}:${b}`))];
+          const names: (string | undefined | null)[] = [undefined, null, "",
+            ...leaves.flatMap(n => [n, `./${n}`, `sub/${n}`, join(locations[1], n)])];
+          process.env.PATH = `${locations[1]}:${locations[2]}`;
+          for (const platform of ["linux", "darwin"] as const)
+            for (const cmd of names) for (const envPath of paths) {
+              expect(which(cmd, envPath, platform, ".CMD;.JS"),
+                JSON.stringify({ kinds, platform, cmd, envPath })).toBe(baseWhich(cmd, envPath));
+            }
+          delete process.env.PATH;
+          expect(which("absent", undefined, "linux")).toBe(baseWhich("absent"));
+        });
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+  }, 120_000);
+
+  it.skipIf(process.platform === "win32")("POSIX fallback discovery equals the base over expanded and traversed paths", () => {
+    const root = tmp();
+    const names = [...D.KNOWN.map(([, binary]) => binary), ...["a", "\\", "."].map(c => `p${c}q`), "sub/tool", "/sub/tool"];
+    const dirs = ["a:b", "plain", "else", "else/deep", "noexec", "directory"];
+    try {
+      for (const d of dirs) {
+        const dir = join(root, d);
+        mkdirSync(join(dir, "sub"), { recursive: true });
+        for (const name of names) {
+          const p = `${dir}/${name}`;
+          if (d === "directory") mkdirSync(p, { recursive: true });
+          else { writeFileSync(p, "fixture\n"); chmodSync(p, d === "noexec" ? 0o644 : 0o755); }
+        }
+      }
+      writeFileSync(join(root, "codex"), "fixture\n", { mode: 0o755 });
+      symlinkSync(join(root, "else", "deep"), join(root, "link"));
+      process.env.ORCH_POSIX_EMPTY = "";
+      inDir(root, () => {
+        const expanded = [join(root, "a:b"), "", "plain", `${root}/plain///`, `${root}/link/..`,
+          `${root}/missing/..`, join(root, "noexec"), join(root, "directory")];
+        for (const dir of expanded) {
+          process.env.ORCH_POSIX_DIR = dir;
+          const rawEntries = ["$ORCH_POSIX_DIR", "${ORCH_POSIX_DIR}", "$ORCH_POSIX_EMPTY", `~/missing-${root.split("/").at(-1)}`, dir];
+          for (const raw of rawEntries) for (const path of ["", join(root, "plain"), "plain", join(root, "noexec")]) {
+            process.env.ORCH_AGENT_DIRS = raw;
+            process.env.PATH = path;
+            for (const platform of ["linux", "darwin"] as const) {
+              expect(D.searchDirs(platform), JSON.stringify({ dir, raw, platform })).toEqual(baseSearchDirs());
+              for (const binary of names) expect(D.find(binary, platform),
+                JSON.stringify({ dir, raw, path, binary, platform })).toEqual(baseFind(binary));
+            }
+          }
+        }
+        delete process.env.ORCH_AGENT_DIRS;
+        expect(D.searchDirs()).toEqual(baseSearchDirs());
+        process.env.PATH = "";
+        process.env.ORCH_AGENT_DIRS = "$ORCH_POSIX_DIR";
+        process.env.ORCH_POSIX_DIR = `${root}/link/..`;
+        chmodSync(join(root, "codex"), 0o644);
+        expect(D.find("codex")).toEqual([resolve(`${root}/link/../codex`), false]);
+        chmodSync(join(root, "codex"), 0o755);
+        process.env.ORCH_POSIX_DIR = `${root}/missing/..`;
+        expect(D.find("codex")).toEqual([null, false]);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.skipIf(process.platform === "win32")("POSIX handbook preserves template bytes for both layouts and force modes", () => {
+    const source = tmp();
+    const target = tmp();
+    const contents = ["text", "\n", "\r", "\r\n"].flatMap(a => ["text", "\n", "\r", "\r\n"].map(b => a + b));
+    try {
+      for (const text of contents) for (const layout of ["flat", "skills"] as const) {
+        for (const name of HANDBOOK) writeFileSync(join(source, `${name}.md`), text);
+        const files = HANDBOOK.map(name => layout === "flat" ? `${target}/${name}.md` : `${target}/${name}/SKILL.md`);
+        for (const file of files) rmSync(file, { force: true });
+        const first = writeHandbook(target, layout, false, `${source}${sep}`);
+        expect(first).toEqual(files.map(file => ({ file, action: "wrote" })));
+        for (const file of files) expect(readFileSync(file)).toEqual(Buffer.from(text));
+        for (const file of files) writeFileSync(file, "existing\r\n");
+        expect(writeHandbook(target, layout, false, `${source}${sep}`)).toEqual(files.map(file => ({ file, action: "kept" })));
+        for (const file of files) expect(readFileSync(file)).toEqual(Buffer.from("existing\r\n"));
+        expect(writeHandbook(target, layout, true, `${source}${sep}`)).toEqual(files.map(file => ({ file, action: "wrote" })));
+        for (const file of files) expect(readFileSync(file)).toEqual(Buffer.from(text));
+      }
+    } finally {
+      rmSync(source, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("POSIX load reads prior state before a sampling command changes it", async () => {
+    const home = tmp();
+    process.env.ORCH_HOME = home;
+    const statePath = join(home, "load.json");
+    const before = { tier: "NORMAL", history: [{ ts: 1, load_ratio: 0.1 }] };
+    const during = { tier: "HIGH", history: [{ ts: 2, load_ratio: 1.2 }] };
+    const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const script = `require('node:fs').writeFileSync(${JSON.stringify(statePath)}, ${JSON.stringify(JSON.stringify(during))}); console.log(71.5);`;
+    const command = `${quote(process.execPath)} -e ${quote(script)}`;
+    try {
+      writeFileSync(join(home, "config.toml"), C.renderDefault(home).replace('temp_command = ""', `temp_command = ${JSON.stringify(command)}`));
+      writeFileSync(statePath, JSON.stringify(before));
+      expect(await run("load", "--read", "--json")).toEqual([0, '{"tier": "NORMAL"}\n', ""]);
+      expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual(before);
+      const [code, , err] = await run("load", "--json");
+      expect([code, err]).toEqual([0, ""]);
+      const state = JSON.parse(readFileSync(statePath, "utf8"));
+      expect(state.temp_c).toBe(71.5);
+      expect(state.history[0]).toEqual(before.history[0]);
+      expect(state.history).toHaveLength(2);
+      expect(state.previous_tier).toBe("NORMAL");
+      expect(state.tier).toBe("NORMAL");
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+});
 
 describe("Windows portability", () => {
   keepEnv(["PATH", "ORCH_HOME", "ORCH_AGENT_DIRS", "ORCH_TEST_OUT"]);
@@ -253,7 +439,7 @@ describe("Windows portability", () => {
     const source = `${tmp()}${sep}`;
     const target = tmp();
     for (const name of HANDBOOK) writeFileSync(`${source}${name}.md`, `---\r\nname: ${name}\r\n---\r\n`);
-    writeHandbook(target, "flat", false, source);
+    writeHandbook(target, "flat", false, source, "win32");
     for (const name of HANDBOOK) expect(readFileSync(`${target}/${name}.md`, "utf8")).not.toContain("\r");
   });
 

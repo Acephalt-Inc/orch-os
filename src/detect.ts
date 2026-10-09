@@ -15,7 +15,7 @@
  * config.toml, where you can edit it (for example to add permission or model flags).
  */
 import { delimiter, resolve } from "node:path";
-import { expandPath, isWindowsSearchDir, which } from "./util.js";
+import { expandPath, isExecutableFile, isWindowsSearchDir, which } from "./util.js";
 
 /** name, binary, worker command template ({bin} {workdir} {name}), label */
 export const KNOWN: [string, string, string[], string][] = [
@@ -58,8 +58,8 @@ export function find(binary: string, platform: NodeJS.Platform = process.platfor
   const p = which(binary, undefined, platform);
   if (p) return [resolve(p), true];
   for (const d of searchDirs(platform)) {
-    const c = which(binary, d, platform);
-    if (c) return [resolve(c), false];
+    const c = platform === "win32" ? which(binary, d, platform) : d.replace(/\/+$/, "") + "/" + binary;
+    if (c && (platform === "win32" || isExecutableFile(c))) return [resolve(c), false];
   }
   return [null, false];
 }

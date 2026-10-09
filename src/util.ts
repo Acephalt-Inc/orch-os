@@ -65,7 +65,7 @@ export function which(cmd: string | undefined | null, envPath?: string, platform
     extensions = listed.length ? listed : WINDOWS_PROGRAM_EXTENSIONS;
   }
   const candidates = (base: string) => extensions.map((x) => base + x);
-  if (cmd.includes("/") || cmd.includes("\\")) {
+  if (cmd.includes("/") || (win && cmd.includes("\\"))) {
     if (win && !isFullyQualifiedWindowsPath(cmd)) return null;
     return candidates(cmd).find((p) => isCommandFile(p, platform)) ?? null;
   }

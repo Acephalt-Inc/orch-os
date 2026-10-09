@@ -749,7 +749,8 @@ const cmdLoad: Run = (a, io) => {
   const path = loadPath(cfg);
   let st: Record<string, any>;
   try {
-    st = a.read ? LD.readState(path) : LD.step(cfg, path, LD.takeSample(cfg, a._platform));
+    st = a.read ? LD.readState(path) : a._platform === "win32"
+      ? LD.step(cfg, path, LD.takeSample(cfg, a._platform)) : LD.step(cfg, path);
   } catch (e: any) {
     if (e instanceof SyntaxError) throw new ConfigError(`[load] renice_pattern is not a valid regular expression (${e.message})`);
     throw e;
