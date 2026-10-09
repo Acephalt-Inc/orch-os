@@ -18,7 +18,7 @@ orch doctor
 
 `orch --version`, `init`, `doctor`, `config`, `agents`, `lease`, `mailbox`, `msg`, `task`, `mem`, `profile`, `merge-gate` (fixtures, and live mode with the GitHub CLI) and `review approve|changes|reject`.
 
-The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/e2e-install.ps1` in Windows PowerShell: `npm pack`, `npm install -g` of that tarball, and `orch --version`, `init`, `doctor`, `mem add` and `mem search`, `task claim` and `release`, `msg send` and `msg read`, `lease acquire`, `status` and `release`, each with its exit code checked.
+The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/e2e-install.ps1` in Windows PowerShell: `npm pack`, `npm install -g` of that tarball, and `orch --version`, `init`, `doctor`, `load`, `mem add` and `mem search`, `task claim` and `release`, `msg send` and `msg read`, `lease acquire`, `status` and `release`, each with its exit code checked. On Windows the check also requires `load` to print `load_ratio=n/a`, `swap=n/a` and `temp=n/a`. The package and temporary folder are removed whether a check passes or fails.
 
 ## What is not available
 
@@ -37,10 +37,10 @@ The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/
 
 These rules apply on Windows only; macOS and Linux behave as before.
 
-- A program is looked up on `PATH` (and, for agent CLIs, the folders above). The current folder is never searched. A `PATH` or `ORCH_AGENT_DIRS` entry that is not a full path with a drive (`C:\tools`) or a network share (`\\server\share\tools`) is skipped: `.`, `tools`, `\tools` and `C:tools` all depend on where you happen to be.
+- A program is looked up on `PATH` (and, for agent CLIs, the folders above). The current folder is never searched. A command name containing `/` or `\` is accepted only when it is a full path with a drive (`C:\tools\program`) or a network share (`\\server\share\program`). A `PATH` or `ORCH_AGENT_DIRS` entry must be fully qualified too. Relative forms such as `.`, `tools`, `sub/program`, `\tools` and `C:tools` are not searched.
 - Only `.com`, `.exe`, `.bat` and `.cmd` files count as programs. `PATHEXT` decides the order among those four; the script types it also lists by default (`.vbs`, `.js`, `.wsf` and others) are ignored.
 - `gh` is started by the full path found this way. A bare name would make Windows look in the current folder first.
-- A `.bat` or `.cmd` file cannot be started directly. It is started through `cmd.exe` (by full path) with one fixed command line in which every argument is quoted and every cmd.exe special character is escaped. cmd.exe ends a command at a line break, so an argument that contains one is refused with a message instead of being cut short. This matters only if `gh` on your machine is a `.cmd` file: `orch review ... -m TEXT` then fails with that message. The `gh.exe` that the GitHub CLI installs is started directly and has no such limit.
+- A `.bat` or `.cmd` file cannot be started directly. It is started through `cmd.exe` (by full path) with delayed expansion off and one fixed command line in which every argument is quoted and every cmd.exe special character is escaped. cmd.exe ends a command at a line break, so an argument that contains one is refused with a message instead of being cut short. This matters only if `gh` on your machine is a `.cmd` file: `orch review ... -m TEXT` then fails with that message. The `gh.exe` that the GitHub CLI installs is started directly and has no such limit.
 
 ## Not covered on Windows
 

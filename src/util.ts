@@ -66,6 +66,7 @@ export function which(cmd: string | undefined | null, envPath?: string, platform
   }
   const candidates = (base: string) => extensions.map((x) => base + x);
   if (cmd.includes("/") || cmd.includes("\\")) {
+    if (win && !isFullyQualifiedWindowsPath(cmd)) return null;
     return candidates(cmd).find((p) => isCommandFile(p, platform)) ?? null;
   }
   const path = envPath ?? process.env.PATH ?? "";
@@ -110,7 +111,7 @@ export function cmdInvocation(command: string, args: string[]): [string, string[
     throw new Error(`${command} is a .cmd or .bat file, and cmd.exe cannot pass it an argument that contains a line break`);
   }
   const line = [command.replace(CMD_META, "^$1"), ...args.map((a) => quoteCmdArg(a))].join(" ");
-  return [cmdExe(), ["/d", "/s", "/c", `"${line}"`]];
+  return [cmdExe(), ["/d", "/v:off", "/s", "/c", `"${line}"`]];
 }
 
 /**

@@ -93,6 +93,23 @@ describe("Windows portability", () => {
     }
   });
 
+  it("Windows lookup accepts slash-bearing names only when fully qualified; POSIX lookup is unchanged", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, "sub"));
+    for (const name of ["gh.cmd", join("sub", "gh.cmd"), ".\\gh.cmd", "sub\\gh.cmd", "C:gh.cmd", "\\gh.cmd", "C:\\tools\\gh.cmd"]) {
+      writeFileSync(join(dir, name), "@echo off\r\n");
+    }
+    writeFileSync(join(dir, "sub", "tool"), "#!/bin/sh\n");
+    chmodSync(join(dir, "sub", "tool"), 0o755);
+    inDir(dir, () => {
+      for (const name of ["./gh", ".\\gh", "sub/gh", "sub\\gh", "C:gh", "\\gh"]) {
+        expect(which(name, "", "win32"), name).toBeNull();
+      }
+      expect(which("C:\\tools\\gh", "", "win32")).toBe("C:\\tools\\gh.cmd");
+      expect(which("sub/tool", "", "linux")).toBe("sub/tool");
+    });
+  });
+
   it("the fallback agent directories on Windows are per-user, and only absolute ones are searched", () => {
     expect(D.defaultDirs("win32", { APPDATA: "C:\\Users\\me\\AppData\\Roaming" })).toEqual(["~/.local/bin", "~/.claude/local", "C:\\Users\\me\\AppData\\Roaming\\npm"]);
     expect(D.defaultDirs("win32", {})).toEqual(["~/.local/bin", "~/.claude/local"]);
@@ -126,7 +143,7 @@ describe("Windows portability", () => {
     const [exe, args] = cmdInvocation("C:\\Program Files\\x\\agent.cmd", ["a b"]);
     expect(isFullyQualifiedWindowsPath(exe)).toBe(true);
     expect(exe.toLowerCase().endsWith("cmd.exe")).toBe(true);
-    expect(args).toEqual(["/d", "/s", "/c", '"C:\\Program^ Files\\x\\agent.cmd ^^^"a^^^ b^^^""']);
+    expect(args).toEqual(["/d", "/v:off", "/s", "/c", '"C:\\Program^ Files\\x\\agent.cmd ^^^"a^^^ b^^^""']);
     // cmd.exe is named by full path, never as a bare name
     expect(cmdExe({ ComSpec: "cmd.exe", SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\cmd.exe");
     expect(cmdExe({ ComSpec: "E:\\sys\\cmd.exe" })).toBe("E:\\sys\\cmd.exe");
@@ -141,7 +158,7 @@ describe("Windows portability", () => {
     mkdirSync(dir);
     const echo = fakeNodeBin(dir, "echoargs", "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
     const values = ['a & b|c" %PATH%', "%PATH%", "%%", "^caret^", "(paren) <lt> >gt", "back\\slash\\", "end\\\\", '"quoted"', 'in"ner\\"x', "semi;comma,eq=",
-      "*?!bang!", "", "tab\there", "\u00e9\u4e2d\u6587", "--jq", ".sha as $s | .statuses[] | [$s, .context, .state] | @json",
+      "*?!bang!", "!x!", "!PATH!", "/starts-with-a-slash", "", "tab\there", "\u00e9\u4e2d\u6587", "--jq", ".sha as $s | .statuses[] | [$s, .context, .state] | @json",
       ".check_runs[] | [.head_sha, .name, (.conclusion // .status), .check_suite.id] | @json",
       "repos/o/n/actions/runs?head_sha=abc&per_page=100", "C:\\Program Files\\x y\\", "& whoami", "| more", "> out.txt"];
     const result = runResolved(echo, values, { encoding: "utf8", cwd: dir });
