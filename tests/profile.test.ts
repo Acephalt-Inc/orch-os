@@ -105,8 +105,8 @@ describe("ProfileLegacy", () => {
     }
     expect(msg).toContain("[profile] has no policy key");
     // docs/profiles.md quotes the refusal as it is printed; docs/commands.md repeats its command
-    expect(readFileSync(join(ROOT, "docs/profiles.md"), "utf8").replace(/\r\n?/g, "\n")).toContain("```text\n" + msg + "\n```");
-    expect(readFileSync(join(ROOT, "docs/commands.md"), "utf8").replace(/\r\n?/g, "\n")).toContain("`orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`");
+    expect(readFileSync(join(ROOT, "docs/profiles.md"), "utf8")).toContain("```text\n" + msg + "\n```");
+    expect(readFileSync(join(ROOT, "docs/commands.md"), "utf8")).toContain("`orch profile update --policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N`");
     // neither page gives one strength or a number after the two flags
     for (const file of ["docs/profiles.md", "docs/commands.md"]) {
       expect(readFileSync(join(ROOT, file), "utf8"), file).not.toMatch(/--required-review (single-agent|cross-account|cross-vendor)(?![|\w-])|--max-workers \d/);
