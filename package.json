@@ -1,6 +1,6 @@
 {
   "name": "orch-os",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Run several CLI coding agents as one team: role lease, mailbox, addressed messages, task claims, review-based merge gate, detached workers with git worktrees, load governor, long-lived notes.",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Winnicent Zuo, Acephalt Inc. <winnicent.zuo@acephalt.com>",
