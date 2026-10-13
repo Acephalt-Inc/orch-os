@@ -2,7 +2,8 @@
 import { afterEach, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { constants, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
+  rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,8 +23,16 @@ interface Call {
 }
 const roots: string[] = [];
 let counter = 0;
+function restoreForCleanup(path: string) {
+  if (!lstatSync(path).isDirectory()) return;
+  chmodSync(path, 0o700);
+  for (const name of readdirSync(path)) restoreForCleanup(join(path, name));
+}
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    restoreForCleanup(root);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 function setup() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "private-admission-"));
@@ -67,7 +76,8 @@ function run(scenario: string, options: { home?: string; workspace?: string; uma
 }
 const submissions = (calls: Call[]) => calls.filter((call) => call.event === "submit");
 function writes(calls: Call[]) {
-  return submissions(calls).filter((call) => /mkdir|rmdir|\.rm|unlink|rename|link|chmod|chown|truncate|write|append|copy|\.cp/.test(call.op)
+  return submissions(calls).filter((call) => !call.op.startsWith("seam.")).filter((call) =>
+    /mkdir|rmdir|\.rm|unlink|rename|link|chmod|chown|truncate|write|append|copy|\.cp/.test(call.op)
     || (/open/.test(call.op) && ((call.flags ?? 0) & (constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | constants.O_RDWR)) !== 0));
 }
 const contentReads = (calls: Call[]) => submissions(calls).filter((call) => /handle\.read|fs\.readFile/.test(call.op));
@@ -158,7 +168,15 @@ it("posix_directory_admission_checks_opened_object", () => {
   }
   const { result, calls } = run("directories");
   for (const key of ["broad", "wrongUid", "nativeUid", "linkResult"]) fixedFailure(result[key], "UNSAFE_PATH");
-  for (const value of result.special) fixedFailure(value, "UNSAFE_PATH");
+  for (const value of result.special) {
+    if (value.notObservable) {
+      console.log(`K1.04/directory-special-mode-${value.mode.toString(8)} NOT OBSERVABLE: chmod requested ${value.mode.toString(8)}, `
+        + `but read-back was ${value.observedMode.toString(8)} on this platform; refusal for the missing bit is not verified.`);
+      continue;
+    }
+    expect(value.observedMode).toBe(value.mode);
+    fixedFailure(value.result, "UNSAFE_PATH");
+  }
   expect(result.systemUid).toBe(0);
   expect(result.currentUid).not.toBe(0);
   expect(result.after).toEqual(result.before);
@@ -182,6 +200,13 @@ it("posix_leaf_admission_precedes_content_read", () => {
   // K1.05
   expect(result.absent).toEqual({ value: { kind: "absent" } });
   for (const value of result.cases) {
+    if (value.notObservable) {
+      // K1.05: additional special-bit probe, not an admission pass or failure.
+      console.log(`K1.05/special-mode-${value.mode.toString(8)} NOT OBSERVABLE: chmod requested ${value.mode.toString(8)}, `
+        + `but read-back was ${value.observedMode.toString(8)} on this platform; refusal for the missing bit is not verified.`);
+      continue;
+    }
+    expect(value.observedMode).toBe(value.mode);
     fixedFailure(value.result, "UNSAFE_PATH");
     expect(value.after).toEqual(value.before);
   }

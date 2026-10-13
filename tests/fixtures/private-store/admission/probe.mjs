@@ -162,8 +162,15 @@ async function directoryCases() {
   const special = [];
   for (const mode of [0o1700, 0o2700, 0o4700, 0o600, 0o500]) {
     await chmod(folders[0], mode);
-    special.push(await call("folder-mode", (budget) => preparePartition(binding, budget)));
+    const observedMode = (await lstat(folders[0])).mode & 0o7777;
+    if ((mode & 0o7000) && (observedMode & 0o7000) !== (mode & 0o7000)) {
+      special.push({ mode, observedMode, notObservable: true });
+      continue;
+    }
+    special.push({ mode, observedMode, result: await call("folder-mode", (budget) => preparePartition(binding, budget)) });
   }
+  // Restore only this fixture's directory after its observations, for cleanup.
+  await chmod(folders[0], 0o700);
   await rm(folders[0], { recursive: true });
   const linked = join(home, "linked-private");
   await mkdir(linked, { mode: 0o700 });
@@ -223,9 +230,15 @@ async function leafCases() {
   for (const mode of [0o644, 0o400, 0o1600, 0o2600, 0o4600]) {
     await writeFile(state, "payload", { mode: 0o600 });
     await chmod(state, mode);
+    const observedMode = (await lstat(state)).mode & 0o7777;
+    if ((mode & 0o7000) && (observedMode & 0o7000) !== (mode & 0o7000)) {
+      cases.push({ mode, observedMode, notObservable: true });
+      await rm(state);
+      continue;
+    }
     const before = inventory(directory);
     const result = await call("leaf-mode", (budget) => openPrivateFile(binding, "state.json", budget));
-    cases.push({ result, before, after: inventory(directory) });
+    cases.push({ mode, observedMode, result, before, after: inventory(directory) });
     await rm(state);
   }
   await writeFile(state, "payload", { mode: 0o600 });
@@ -372,20 +385,22 @@ async function deadlineCases() {
       if (operation === "statfs") seam.platform = () => "linux";
       action = () => bindWorkspace(workspace, "memory-v1", 100, seam);
     } else if (operation === "read" || operation === "close") {
-      const result = await openPrivateFile(binding, "state.json", nextBudget());
       if (operation === "read") seam.read = async (handle, buffer) => observed("read", async () => {
         const value = await handle.read(buffer, 0, buffer.length, null);
         now = 101;
         return value;
       });
-      else {
-        const close = result.handle.close.bind(result.handle);
-        result.handle.close = async () => observed("close", async () => {
-          await close();
-          now = 101;
-        });
-      }
-      action = () => readBounded(result.handle, 16, 100, seam);
+      action = async () => {
+        const result = await openPrivateFile(binding, "state.json", nextBudget());
+        if (operation === "close") {
+          const close = result.handle.close.bind(result.handle);
+          result.handle.close = async () => observed("close", async () => {
+            await close();
+            now = 101;
+          });
+        }
+        return readBounded(result.handle, 16, 100, seam);
+      };
     } else {
       seam.open = async (...args) => observed("open", async () => {
         const handle = await open(...args);
