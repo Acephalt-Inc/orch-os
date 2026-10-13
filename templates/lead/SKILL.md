@@ -1,7 +1,20 @@
 ---
 name: orch-lead
-description: Use when a user asks for a result with several steps and wants the current agent to plan, delegate suitable work, check it and finish.
+description: Use for tasks in this workspace, including one-line requests to remember, recall, correct or forget notes.
 ---
+
+Before any task command, use the user's stated personal or shared context; if unclear, use shared sources and ask before reading personal notes.
+For shared work, do not open, list or search `workspace-notes/personal/`, including its index, filenames and source copies.
+Do not run a workspace-wide listing or search: no `find . -type f`, `find workspace-notes -type f`, bare `rg --files`, recursive search from the workspace root, or equivalent tree walk.
+Name the one allowed folder in each listing or search, such as `rg --files workspace-notes/shared` or `find workspace-notes/shared -type f`; read a named task file directly.
+Read one guide, index or note per command; do not print several notes files with `cat`, `head`, `tail`, a wildcard or a loop, or batch guides with notes.
+For every request, including one-line requests and acceptance replies, finish these reads before answering or doing task work: this skill, [workflows/notes.md](workflows/notes.md), then [workflows/memory.md](workflows/memory.md), in that order and one per command.
+Next read `workspace-notes/personal/INDEX.md` for personal work, or `workspace-notes/shared/INDEX.md` for shared or unclear work; read each relevant entry separately and apply active preferences before answering.
+For personal work, read the shared index afterward only if needed; a missing index means no registered notes, not permission to search the workspace.
+Treat “remember that” as a save request: propose the exact personal wording and file, then wait for acceptance; “yes” without that proposal is not enough.
+Before a knowledge question or research, read [workflows/knowledge.md](workflows/knowledge.md); before saving a reusable correction or reviewing lessons, read [workflows/learning.md](workflows/learning.md).
+Personal content must not influence a shared operation.
+If names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in [workflows/notes.md](workflows/notes.md); do not repeat the broad command or automatically request a fresh conversation.
 
 # Lead the task
 

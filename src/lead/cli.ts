@@ -13,16 +13,16 @@ import { fileURLToPath } from "node:url";
 import { type CmdSpec, HelpRequested, parse, UsageError } from "../args.js";
 import { install, preflight, resolveWorkspace, type Conflict } from "./install.js";
 import { COMMAND_BUDGET_MS, errorCode, type LeadEnv, LeadError, type LeadFs, loadPack, realFs } from "./pack.js";
-import { type Host, HOSTS, PAYLOAD_COUNT, refuseWorkspaceText, STATE_DIR } from "./paths.js";
+import { COMPLETE, DIRECTORIES, type Host, hostRoot, HOSTS, PAYLOAD_COUNT, refuseWorkspaceText, STATE_DIR } from "./paths.js";
 import { type AnchorState, type Liveness, readState, type RowWhy, type StateReport } from "./status.js";
-import { type Preserved, uninstall } from "./uninstall.js";
+import { type DirWhy, type Preserved, uninstall } from "./uninstall.js";
 
 /** Every fixed piece of text these commands print. `{name}` is filled in at run time. */
 export const LEAD_TEXT = {
   help: "lead text pack in one workspace: install it, report on it, remove it; nothing that already exists is changed",
   helpInstall: "create the lead pack and one bootstrap file in a workspace that has neither",
   helpStatus: "report the state of every pack path in a workspace; reads only",
-  helpUninstall: "remove the unchanged files install created; everything else stays",
+  helpUninstall: "remove the unchanged files and the empty directories install created; everything else stays",
   optWorkspace: "the workspace folder; it must exist",
   optHost: "the assistant the pack is for",
   optDryRun: "print every path install would create, then stop; creates nothing",
@@ -58,9 +58,11 @@ export const LEAD_TEXT = {
   whyBadAnchor: "its anchor cannot be read, so ownership is unknown",
   whyUnstable: "changed while it was checked",
   whyUnreadable: "cannot be checked",
+  whyLinked: "a folder on its path is a link",
   stateAbsent: "state directory: {path} (absent)",
   stateInvalid: "state directory: {path} ({reason}; nothing in it is trusted or removed)",
-  stateValid: "state directory: {path} (manifest valid; installer process {pid} {liveness})",
+  stateValid: "state directory: {path} (manifest valid; install not recorded as finished; installer process {pid} {liveness})",
+  stateFinished: "state directory: {path} (manifest valid; install recorded as finished)",
   liveDead: "is not running",
   liveAlive: "is running, or its id now belongs to another program",
   liveUnknown: "could not be checked",
@@ -69,13 +71,24 @@ export const LEAD_TEXT = {
   anchorUnreadable: "  anchor that cannot be read: {path}",
   tmpSame: "  temporary manifest left behind (same file as the manifest): {path}",
   tmpDifferent: "  temporary manifest left behind (not the manifest): {path}",
+  directoriesRecorded: "  directories recorded as created by install: {count}",
+  directoriesAbsent: "  directories recorded as created by install: no record",
+  directoriesInvalid: "  directories record without the expected bytes: {path}",
+  completeInvalid: "  record that install finished without the expected bytes: {path}",
   unknownEntry: "  unknown entry, not opened: {path}",
   removed: "  removed         {path}",
   alreadyAbsent: "  already absent  {path}",
   preserved: "  preserved       {path}  ({state}: {why})",
   stateRemoved: "  state removed   {path}",
   statePreserved: "  state preserved {path}  ({why})",
-  directoryLeft: "  directory left  {path}",
+  dirRemoved: "  dir removed     {path}",
+  dirLeft: "  dir left        {path}  ({why})",
+  whyDirNotEmpty: "not empty",
+  whyDirExisted: "install did not create it",
+  whyDirNoRecord: "no record that install created it",
+  whyDirNotSame: "not the directory install created",
+  whyDirNotDirectory: "not a directory",
+  whyDirKept: "kept while a path above is preserved",
   whyStateChanged: "does not hold the expected bytes",
   whyStateUnknown: "unknown entry, not opened",
   whyStateNotEmpty: "not empty",
@@ -84,7 +97,7 @@ export const LEAD_TEXT = {
   nothingRemovedInvalid: "nothing was removed: {reason}; look at {path} and remove it by hand if you do not need it",
   nothingRemovedBusy: "nothing was removed: installer process {pid} {liveness}",
   residue: "some paths were preserved; they are listed above and nothing else was removed",
-  directoriesNote: "directories are never removed; a new install for this host is refused while its pack directory exists",
+  directoriesNote: "a new install for this host is refused while its pack directory exists",
   planPrintFailed: "orch lead: the list of paths could not be printed ({code}); nothing was created",
   outputFailed: "orch lead: output could not be written ({code})",
   errorLine: "orch lead: {message}",
@@ -140,6 +153,11 @@ function processWrite(bytes: Buffer, done: (error?: Error | null) => void): void
 const WHY: Readonly<Record<Exclude<RowWhy, "">, string>> = {
   EDITED: LEAD_TEXT.whyEdited, OTHER_FILE: LEAD_TEXT.whyOtherFile, NOT_FILE: LEAD_TEXT.whyNotFile, NO_MANIFEST: LEAD_TEXT.whyNoManifest,
   NO_ANCHOR: LEAD_TEXT.whyNoAnchor, BAD_ANCHOR: LEAD_TEXT.whyBadAnchor, UNSTABLE: LEAD_TEXT.whyUnstable, UNREADABLE: LEAD_TEXT.whyUnreadable,
+  LINKED: LEAD_TEXT.whyLinked,
+};
+const DIR_WHY: Readonly<Record<DirWhy, string>> = {
+  NOT_EMPTY: LEAD_TEXT.whyDirNotEmpty, EXISTED: LEAD_TEXT.whyDirExisted, NO_RECORD: LEAD_TEXT.whyDirNoRecord, NOT_SAME: LEAD_TEXT.whyDirNotSame,
+  NOT_DIRECTORY: LEAD_TEXT.whyDirNotDirectory, KEPT: LEAD_TEXT.whyDirKept,
 };
 const STATE_WHY: Readonly<Record<string, string>> = {
   CHANGED: LEAD_TEXT.whyStateChanged, UNKNOWN_ENTRY: LEAD_TEXT.whyStateUnknown, NOT_EMPTY: LEAD_TEXT.whyStateNotEmpty, NEEDED: LEAD_TEXT.whyStateNeeded,
@@ -163,7 +181,10 @@ function reportLines(env: LeadEnv, workspace: string, report: StateReport): stri
   } else if (report.state === "INVALID" || !report.manifest) {
     lines.push(fill(LEAD_TEXT.stateInvalid, { path: stateDir, reason: report.reason }));
   } else {
-    lines.push(fill(LEAD_TEXT.stateValid, { path: stateDir, pid: report.manifest.pid, liveness: LIVE[report.liveness ?? "DEAD"] }));
+    // A finished install is not asked about its installer; an unfinished one names the answer.
+    // (An installer that reports its own stopped run does not ask about itself: it ends with this report.)
+    if (report.complete.state === "VALID") lines.push(fill(LEAD_TEXT.stateFinished, { path: stateDir }));
+    else lines.push(fill(LEAD_TEXT.stateValid, { path: stateDir, pid: report.manifest.pid, liveness: LIVE[report.liveness ?? "DEAD"] }));
     const bad = (state: AnchorState) => state === "NOT_FILE" || state === "UNREADABLE";
     lines.push(fill(LEAD_TEXT.anchorsComplete, { count: report.rows.filter((r) => r.anchorState === "OK").length, total: PAYLOAD_COUNT }));
     for (const row of report.rows) {
@@ -171,6 +192,9 @@ function reportLines(env: LeadEnv, workspace: string, report: StateReport): stri
       if (bad(row.anchorState)) lines.push(fill(LEAD_TEXT.anchorUnreadable, { path: abs(`${STATE_DIR}/${row.anchor}`) }));
     }
     if (report.tmp !== "ABSENT") lines.push(fill(report.tmp === "SAME_AS_MANIFEST" ? LEAD_TEXT.tmpSame : LEAD_TEXT.tmpDifferent, { path: abs(`${STATE_DIR}/manifest.tmp`) }));
+    if (report.directories.state === "VALID") lines.push(fill(LEAD_TEXT.directoriesRecorded, { count: report.directories.created.length }));
+    else lines.push(report.directories.state === "ABSENT" ? LEAD_TEXT.directoriesAbsent : fill(LEAD_TEXT.directoriesInvalid, { path: abs(DIRECTORIES) }));
+    if (report.complete.state === "INVALID") lines.push(fill(LEAD_TEXT.completeInvalid, { path: abs(COMPLETE) }));
   }
   for (const rel of report.unknown) lines.push(fill(LEAD_TEXT.unknownEntry, { path: abs(rel) }));
   return lines;
@@ -248,14 +272,15 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
       for (const rel of outcome.absent) lines.push(fill(LEAD_TEXT.alreadyAbsent, { path: abs(rel) }));
       for (const p of outcome.preserved) lines.push(preservedLine(env, workspace, p));
       for (const rel of outcome.stateRemoved) lines.push(fill(LEAD_TEXT.stateRemoved, { path: abs(rel) }));
-      for (const rel of outcome.directoriesLeft) lines.push(fill(LEAD_TEXT.directoryLeft, { path: abs(rel) }));
+      for (const rel of outcome.directoriesRemoved) lines.push(fill(LEAD_TEXT.dirRemoved, { path: abs(rel) }));
+      for (const dir of outcome.directoriesLeft) lines.push(fill(LEAD_TEXT.dirLeft, { path: abs(dir.path), why: DIR_WHY[dir.why] }));
       if (outcome.before.state === "ABSENT") lines.push(LEAD_TEXT.nothingToRemove);
       if (outcome.before.state === "INVALID") lines.push(fill(LEAD_TEXT.nothingRemovedInvalid, { reason: outcome.before.reason, path: abs(STATE_DIR) }));
       if (outcome.aggregate === "BUSY" && outcome.before.manifest) {
         lines.push(fill(LEAD_TEXT.nothingRemovedBusy, { pid: outcome.before.manifest.pid, liveness: LIVE[outcome.before.liveness ?? "UNKNOWN"] }));
       }
       if (outcome.preserved.length) lines.push(LEAD_TEXT.residue);
-      if (outcome.directoriesLeft.length) lines.push(LEAD_TEXT.directoriesNote);
+      if (outcome.directoriesLeft.some((dir) => dir.path === hostRoot(host))) lines.push(LEAD_TEXT.directoriesNote);
       lines.push(fill(LEAD_TEXT.result, { aggregate: outcome.aggregate }));
       await emit(lines);
       return outcome.aggregate === "NOT_INSTALLED" ? 0 : 2;

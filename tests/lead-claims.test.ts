@@ -47,15 +47,18 @@ function unitsOf(file: string, text: string): string[] {
 describe("orch lead: reviewed text", () => {
   it("lead_reviewed_sentences_and_behavior_claims", () => {
     const reviewed: Record<string, string> = { ...FROZEN.sources, ...FROZEN.documents };
-    expect(Object.keys(FROZEN.sources).length, "18 packaged files").toBe(18);
+    expect(Object.keys(FROZEN.sources).length, "21 packaged files").toBe(21);
     expect(Object.keys(FROZEN.units).sort(), "every reviewed file has a sentence list").toEqual(Object.keys(reviewed).sort());
     const everything: [string, Unit][] = [];
+    /** The sentences as they are in the files now, outside the pack: documentation, README lines, command text. */
+    const published: [string, string][] = [];
     for (const [file, hash] of Object.entries(reviewed)) {
       const bytes = read(file);
       expect.soft(sha(bytes), `[reviewed-hash] ${file} is not the text that was read and approved; read it again, then edit the fixture by hand`).toBe(hash);
       expect.soft([bytes.includes(13), bytes.length > 0 && bytes[bytes.length - 1] === 10], `${file}: LF line ends, final newline`).toEqual([false, true]);
       const units: Unit[] = FROZEN.units[file];
       expect.soft(unitsOf(file, bytes.toString("utf8")), `[sentence-inventory] ${file}: every sentence is listed and classified, in order`).toEqual(units.map((u) => u.text));
+      if (!file.startsWith("templates/")) for (const text of unitsOf(file, bytes.toString("utf8"))) published.push([file, text]);
       for (const unit of units) everything.push([file, unit]);
     }
     // README lines about the pack: present, and classified like the rest.
@@ -67,6 +70,7 @@ describe("orch lead: reviewed text", () => {
       }
       const about = text.split("\n").filter((line) => /orch lead|lead-install/.test(line));
       expect.soft(about.filter((line) => !units.some((u) => line.includes(u.text))), `[sentence-inventory] ${file}: no other line mentions the lead pack`).toEqual([]);
+      for (const line of about) published.push([file, line]);
     }
     // Every fixed string of the commands, read from the source text of the table that holds them.
     const table = /export const LEAD_TEXT = \{\n([\s\S]*?)\n\} as const;/.exec(read("src/lead/cli.ts").toString("utf8"))?.[1] ?? "";
@@ -78,6 +82,10 @@ describe("orch lead: reviewed text", () => {
     }
     expect.soft(printed, "[sentence-inventory] the fixed strings of the commands are the reviewed ones").toEqual(Object.fromEntries(Object.entries(FROZEN.cli_text as Record<string, Unit>).map(([key, u]) => [key, u.text])));
     for (const unit of Object.values(FROZEN.cli_text as Record<string, Unit>)) everything.push(["src/lead/cli.ts", unit]);
+    // Outside the pack, no sentence says what an assistant will do with the text.
+    for (const text of Object.values(printed)) published.push(["src/lead/cli.ts", text]);
+    const promises = published.filter(([, text]) => /\bassistant\b[^.;]*\bwill\b|\bwill\b[^.;]*\b(follow|obey|comply)\b/i.test(text));
+    expect.soft([published.length > 150, promises.map(([file, text]) => `${file}: ${text}`)], "[no-promise-about-assistant] the documentation, the README lines and the command text promise nothing about the assistant").toEqual([true, []]);
 
     // Classes, and a witness for every sentence about program behaviour.
     const tests: Record<string, string> = {};

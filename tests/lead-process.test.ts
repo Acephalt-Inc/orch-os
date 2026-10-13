@@ -11,7 +11,8 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync,
+  unlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
@@ -33,6 +34,9 @@ const reviewedBytes = (host: Host, dest: string) => readFileSync(join(ROOT, ...s
 const anchorOf = (host: Host, dest: string) => `.orch-lead-install/objects/${String(dests(host).indexOf(dest)).padStart(2, "0")}`;
 const BOOT: Record<Host, string> = { claude: "CLAUDE.md", codex: "AGENTS.md" };
 const ROOT_OF: Record<Host, string> = { claude: ".claude/skills/orch-lead", codex: ".agents/skills/orch-lead" };
+const PARENTS: Record<Host, string[]> = { claude: [".claude", ".claude/skills"], codex: [".agents", ".agents/skills"] };
+/** The directories install creates in an empty workspace, outermost first. */
+const createdDirs = (host: Host) => [...PARENTS[host], ROOT_OF[host], `${ROOT_OF[host]}/agents`, `${ROOT_OF[host]}/workflows`];
 const at = (workspace: string, rel: string) => join(workspace, ...rel.split("/"));
 
 const scratch: string[] = [];
@@ -235,6 +239,9 @@ out.write = function (chunk, encoding, callback) {
     if (callback) callback(error);
   });
 };
+// A barrier at the end: the command has done all its work and printed its result, and its
+// process id is still in use until the test releases it.
+process.on("exit", () => barrier("before", "exit", ""));
 syncBuiltinESMExports();
 log("preload", { path: "" });
 barrier("before", "start", "");
@@ -397,19 +404,17 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
 
     const uninstall = await orch(p, ["lead", "uninstall", ...args]);
     expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[real-cli] uninstall runs\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
-    // Directories on the host side stay; nothing else does.
-    expect.soft(tree(w), "[directories-left] uninstall leaves the host directories and nothing else")
-      .toEqual(["dir .claude", "dir .claude/skills", "dir .claude/skills/orch-lead", "dir .claude/skills/orch-lead/agents", "dir .claude/skills/orch-lead/workflows"]);
+    // The files, the state and the directories install created are gone.
+    expect.soft(tree(w), "[clean-uninstall] uninstall leaves nothing in a workspace that was empty before install").toEqual([]);
     const after = await orch(p, ["lead", "status", ...args]);
     expect.soft([after.code, resultOf(after.stdout)], "[real-cli] status after uninstall").toEqual([0, "NOT_INSTALLED"]);
     const reinstall = await orch(p, ["lead", "install", ...args]);
-    expect.soft([reinstall.code, resultOf(reinstall.stdout), describeMutations(reinstall)],
-      `[reinstall-refused] the empty pack directory refuses a new install\n${reinstall.stdout}`).toEqual([2, "CONFLICT", []]);
+    expect.soft([reinstall.code, resultOf(reinstall.stdout)], `[reinstall-works] install for the same host works again after uninstall\n${reinstall.stdout}\n${reinstall.stderr}`).toEqual([0, "INSTALLED"]);
   });
 
   it("lead_packed_tarball_runs_without_checkout", async () => {
     const p = packed();
-    // The tarball carries exactly the 18 reviewed text files of the pack, byte for byte.
+    // The tarball carries exactly the 21 reviewed text files of the pack, byte for byte.
     const packedTemplates = p.files.filter((f) => /^package\/templates\/(lead|workflows)\//.test(f)).map((f) => f.slice("package/".length));
     expect.soft(packedTemplates, "[packed-inventory] template files in the tarball").toEqual(Object.keys(FROZEN.sources).sort());
     const installedRoot = WINDOWS ? join(p.prefix, "node_modules", "orch-os") : join(p.prefix, "lib", "node_modules", "orch-os");
@@ -427,14 +432,14 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
       expect.soft([install.code, resultOf(install.stdout)], `[packed-install] ${host}: install from the packed CLI\n${install.stdout}\n${install.stderr}`).toEqual([0, "INSTALLED"]);
       const expected = dests(host).map((dest) => `file ${dest} ${FROZEN.sources[sourceOf(host, dest)]}`).sort();
       expect.soft(tree(w).filter((line) => line.startsWith("file ") && !line.includes(".orch-lead-install/")).sort(), `[packed-install] ${host}: installed files and their hashes`).toEqual(expected);
-      expect.soft(install.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").length, `[packed-install] ${host}: the packed command was observed making its 18 links`).toBe(18);
+      expect.soft(install.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").length, `[packed-install] ${host}: the packed command was observed making its 21 links`).toBe(21);
       const status = await orch(p, ["lead", "status", ...args]);
       expect.soft([status.code, resultOf(status.stdout)], `[packed-install] ${host}: status`).toEqual([0, "INSTALLED"]);
       const conflict = await orch(p, ["lead", "install", ...args]);
       expect.soft([conflict.code, resultOf(conflict.stdout), describeMutations(conflict)], `[packed-install] ${host}: a second install is a conflict without writes`).toEqual([2, "CONFLICT", []]);
       const uninstall = await orch(p, ["lead", "uninstall", ...args]);
       expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[packed-install] ${host}: uninstall\n${uninstall.stdout}`).toEqual([0, "NOT_INSTALLED"]);
-      expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), `[packed-install] ${host}: no file is left`).toEqual([]);
+      expect.soft(tree(w), `[packed-install] ${host}: nothing is left`).toEqual([]);
       all.push(install, status, conflict, uninstall);
       // Every write of every command was inside the workspace.
       for (const r of all.slice(-4)) {
@@ -448,7 +453,7 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     const checkout = ROOT.split(sep).join("/") + "/";
     expect.soft(events.filter((ev) => typeof ev.path === "string" && ev.path.startsWith(checkout)).map((ev) => `${ev.op} ${ev.path}`), "[packed-no-checkout] nothing in the checkout is touched").toEqual([]);
     expect.soft([tree(p.env.HOME), existsSync(p.env.ORCH_HOME), existsSync(p.env.GIT_DIR)], "[packed-no-home-writes] home, ORCH home and git directory are untouched").toEqual(homeBefore);
-    console.log(`[observation] ${process.platform}: packed tarball sha256 ${p.tarballSha}; entry ${WINDOWS ? "orch.cmd" : "bin/orch"}`);
+    console.log(`[observation] ${process.platform}: packed tarball sha256 ${p.tarballSha}; ${p.files.length} files; entry ${WINDOWS ? "orch.cmd" : "bin/orch"}`);
   });
 
   it("lead_loader_and_cli_have_no_unrequested_effects", async () => {
@@ -480,7 +485,7 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     const install = await run(["install", ...args]);
     expect.soft(install.code, install.stdout + install.stderr).toBe(0);
     expect.soft(inside(install, w), "[no-unrequested-writes] install writes only inside the workspace").toEqual([]);
-    // The loader opens exactly the 17 packaged files of this host, read-only.
+    // The loader opens exactly the 20 packaged files of this host, read-only.
     const templates = join(ROOT, "templates").split(sep).join("/") + "/";
     expect.soft(install.trace.filter((ev) => ev.op === "openSync" && ev.path.startsWith(templates)).map((ev) => `${ev.path.slice(templates.length - "templates/".length)} ${ev.mutating}`).sort(),
       "[loader-reads-only-inventory]").toEqual(FROZEN.inventory.claude.map((row: string[]) => `${row[0]} false`).sort());
@@ -529,7 +534,7 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
       symlinkSync(join(w, "real-skills"), at(w, ".claude/skills"), "dir");
       return at(w, ".claude/skills");
     });
-    expect(cases.length).toBe(17 * 3 + 9 + 7);
+    expect(cases.length).toBe(20 * 3 + 9 + 7);
     for (const c of cases) {
       const { w } = workspace();
       const obstacle = c.place(w);
@@ -551,8 +556,8 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     const { w } = workspace();
     const expected = [
       ".claude", ".claude/skills", ".claude/skills/orch-lead", ".claude/skills/orch-lead/agents", ".claude/skills/orch-lead/workflows",
-      ".orch-lead-install", ".orch-lead-install/manifest.json", ".orch-lead-install/manifest.tmp", ".orch-lead-install/objects",
-      ...dests("claude"), ...dests("claude").map((dest) => anchorOf("claude", dest)),
+      ".orch-lead-install", ".orch-lead-install/complete", ".orch-lead-install/directories.json", ".orch-lead-install/manifest.json", ".orch-lead-install/manifest.tmp",
+      ".orch-lead-install/objects", ...dests("claude"), ...dests("claude").map((dest) => anchorOf("claude", dest)),
     ].map((rel) => at(w, rel)).sort();
     const printedPaths = (text: string) => text.split("\n").map((line) => /^ {2}(?:directory|file|state|temporary)\s+(.+)$/.exec(line)?.[1]).filter(Boolean);
 
@@ -643,7 +648,7 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     expect([killed.code, killed.signal], "the process was killed, it did not exit by itself").toEqual(WINDOWS ? [1, null] : [null, "SIGKILL"]);
     expect.soft(killed.stdout, "the killed process never reported a result").not.toMatch(/^result:/m);
 
-    // No cleanup ran: the manifest, all 17 anchors and exactly the first payload are on disk.
+    // No cleanup ran: the manifest, all 20 anchors, the record of the directories and exactly the first payload are on disk.
     expect.soft(readFileSync(at(w, ".orch-lead-install/manifest.json"), "utf8"), "[kill-visible] the manifest is complete and names the killed installer").toBe(manifestText("claude", w, s.child.pid!));
     expect.soft(order.map((dest) => existsSync(at(w, dest))), "[kill-visible] exactly the first payload exists").toEqual(order.map((dest) => dest === first));
     expect.soft(order.map((dest) => hashOf(at(w, anchorOf("claude", dest)))), "[kill-visible] every anchor is complete").toEqual(order.map((dest) => FROZEN.sources[sourceOf("claude", dest)]));
@@ -651,12 +656,12 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
 
     const status = await run(["status", "--workspace", w, "--host", "claude"]);
     expect.soft([status.code, resultOf(status.stdout)], `[kill-visible] status after the kill\n${status.stdout}`).toEqual([2, "PARTIAL"]);
-    expect.soft(rowStates(status.stdout, w), "[kill-visible] status names the one owned file and the 16 missing ones")
+    expect.soft(rowStates(status.stdout, w), "[kill-visible] status names the one owned file and the 19 missing ones")
       .toEqual(Object.fromEntries(order.map((dest) => [dest, dest === first ? "OWNED_MATCH" : "MISSING"])));
 
     const uninstall = await run(["uninstall", "--workspace", w, "--host", "claude"]);
     expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[kill-cleanable] uninstall after the kill\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
-    expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), "[kill-cleanable] only the user's file is left").toEqual([`file notes.txt ${sha("the user's own notes\n")}`]);
+    expect.soft(tree(w), "[kill-cleanable] only the user's file is left: the directories the killed run created are gone too").toEqual([`file notes.txt ${sha("the user's own notes\n")}`]);
     expect.soft(status.stdout + uninstall.stdout, "nothing ever reported a complete install").not.toContain("INSTALLED\n".replace("INSTALLED", "result: INSTALLED"));
   });
 
@@ -728,9 +733,9 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
       const goneBefore = dests("claude").filter((dest) => !existsSync(at(w, dest)));
       const retry = await run(["uninstall", ...args(w)]);
       expect.soft([retry.code, resultOf(retry.stdout)], `[retry-completes] ${point.name}: the retry finishes\n${retry.stdout}\n${retry.stderr}`).toEqual([0, "NOT_INSTALLED"]);
-      expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), `[retry-completes] ${point.name}: no file is left`).toEqual([]);
+      expect.soft(tree(w), `[retry-completes] ${point.name}: nothing is left`).toEqual([]);
       expect.soft(lines(retry.stdout, w, "already absent ").sort(), `[all-paths-accounted] ${point.name}: paths removed by the killed run are reported as already absent`).toEqual([...goneBefore].sort());
-      expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        ")].sort(), `[all-paths-accounted] ${point.name}: all 17 paths are accounted for`).toEqual([...dests("claude")].sort());
+      expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        ")].sort(), `[all-paths-accounted] ${point.name}: all 20 paths are accounted for`).toEqual([...dests("claude")].sort());
     }
     // With an edited file: the retry keeps it, with its anchor and the manifest, and says so.
     const { w } = workspace();
@@ -744,9 +749,12 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     await s.done;
     const retry = await run(["uninstall", ...args(w)]);
     expect.soft([retry.code, resultOf(retry.stdout)], `[retry-retains-mismatch] the retry reports residue\n${retry.stdout}`).toEqual([2, "PARTIAL"]);
-    expect.soft(tree(w).filter((line) => line.startsWith("file ")), "[retry-retains-mismatch] the edited file, its anchor and the manifest stay").toEqual([
-      `file ${edited} ${sha(editedBytes)}`, `file .orch-lead-install/manifest.json ${hashOf(at(w, ".orch-lead-install/manifest.json"))}`, `file ${anchorOf("claude", edited)} ${sha(editedBytes)}`,
+    expect.soft(tree(w).filter((line) => line.startsWith("file ")), "[retry-retains-mismatch] the edited file, its anchor, the manifest and the two records stay").toEqual([
+      `file ${edited} ${sha(editedBytes)}`, ...["complete", "directories.json", "manifest.json"].map((name) => `file .orch-lead-install/${name} ${hashOf(at(w, `.orch-lead-install/${name}`))}`),
+      `file ${anchorOf("claude", edited)} ${sha(editedBytes)}`,
     ].sort());
+    expect.soft(tree(w).filter((line) => line.startsWith("dir ") && !line.includes(".orch-lead-install")), "[retry-retains-mismatch] and no directory was removed while a file is preserved")
+      .toEqual(createdDirs("claude").map((dir) => `dir ${dir}`));
     expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        "), ...lines(retry.stdout, w, "preserved      ")].sort(), "[all-paths-accounted] with an edited file").toEqual([...dests("claude")].sort());
   });
 
@@ -827,22 +835,232 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     const winner = await a.done;
     expect.soft([winner.code, resultOf(winner.stdout)], `the winner completes\n${winner.stdout}\n${winner.stderr}`).toEqual([0, "INSTALLED"]);
 
-    // The recorded id answers as alive, as not ours to ask, or with an unknown error: BUSY each
-    // time, nothing removed. Only "no such process" lets uninstall work.
+    // The install is recorded as finished now. Whatever the recorded id would answer (alive, not
+    // ours to ask, an unknown error), status does not ask and reports INSTALLED.
     const installed = tree(w);
-    const probes: [string, (pid: number) => void, number, string][] = [
-      ["a live process has the id", () => {}, 2, "BUSY"],
-      ["asking is not permitted", () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, 2, "BUSY"],
-      ["the answer is an unknown error", () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); }, 2, "BUSY"],
+    const probes: [string, (pid: number) => void][] = [
+      ["a live process has the id", () => {}],
+      ["asking is not permitted", () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }],
+      ["the answer is an unknown error", () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); }],
     ];
-    for (const [name, probe, code, result] of probes) {
+    for (const [name, probe] of probes) {
       let out = "";
       const asked: number[] = [];
-      const exit = await main(["lead", "uninstall", ...args], { out: (s) => (out += s), err: () => {}, stdin: () => "" },
+      const exit = await main(["lead", "status", ...args], { out: (s) => (out += s), err: () => {}, stdin: () => "" },
         { lead: { probe: (pid: number) => { asked.push(pid); probe(pid); } } } as never);
-      expect.soft([exit, resultOf(out), asked, tree(w)], `[busy-refuses] ${name}`).toEqual([code, result, [a.child.pid], installed]);
+      expect.soft([exit, resultOf(out), asked, tree(w)], `[finished-not-asked] ${name}`).toEqual([0, "INSTALLED", [], installed]);
     }
     const finish = await run(["uninstall", ...args]);
-    expect.soft([finish.code, resultOf(finish.stdout)], "uninstall works once the installer is gone").toEqual([0, "NOT_INSTALLED"]);
+    expect.soft([finish.code, resultOf(finish.stdout), tree(w)], "uninstall of the finished install leaves nothing").toEqual([0, "NOT_INSTALLED", []]);
+  });
+});
+
+describe.skipIf(!RUN)("orch lead: reinstall, own directories, finished installs", () => {
+  const H = ROOT_OF.claude;
+  const slash = (path: string) => path.split(sep).join("/");
+  /** A traced path relative to the workspace, or marked as outside it. */
+  const relOf = (w: string, path: string) => (path.startsWith(`${slash(w)}/`) ? path.slice(slash(w).length + 1) : `OUTSIDE ${path}`);
+  /** Directories uninstall says it left, with the reason it prints. */
+  const left = (stdout: string, w: string): Record<string, string> => Object.fromEntries(stdout.split("\n")
+    .map((line) => /^ {2}dir left {8}(.+?) {2}\((.+)\)$/.exec(line)).filter((m) => m !== null).map((m) => [relOf(w, slash(m![1])), m![2]]));
+  const rmdirs = (r: Result, w: string, ok: boolean) => r.trace.filter((ev) => ev.op === "rmdirSync" && (ev.code === "OK") === ok).map((ev) => relOf(w, ev.path));
+  const STATE_DIRS = [".orch-lead-install", ".orch-lead-install/objects"];
+
+  it("lead_reinstall_after_uninstall_round_trip", async () => {
+    for (const host of ["claude", "codex"] as Host[]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      // Round 1 in an empty workspace. Before round 2 the user has notes of the kind the guides describe, and an ignore rule.
+      let notes: string[] = [];
+      for (const round of [1, 2]) {
+        if (round === 2) {
+          mkdirSync(at(w, "workspace-notes/personal/entries"), { recursive: true });
+          writeFileSync(at(w, "workspace-notes/personal/INDEX.md"), "- [name](entries/name.md) | preference | active | a note of the user's\n");
+          writeFileSync(at(w, "workspace-notes/personal/entries/name.md"), "the user's note\n");
+          writeFileSync(at(w, ".ignore"), "/workspace-notes/personal/\n");
+          notes = tree(w);
+        }
+        const install = await run(["install", ...args]);
+        expect.soft([install.code, resultOf(install.stdout)], `[round-trip] ${host}, round ${round}: install succeeds\n${install.stdout}\n${install.stderr}`).toEqual([0, "INSTALLED"]);
+        const status = await run(["status", ...args]);
+        expect.soft([status.code, resultOf(status.stdout)], `[round-trip] ${host}, round ${round}: status\n${status.stdout}`).toEqual([0, "INSTALLED"]);
+        const uninstall = await run(["uninstall", ...args]);
+        expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[round-trip] ${host}, round ${round}: uninstall completes\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+        expect.soft(tree(w), `[round-trip] ${host}, round ${round}: the workspace is as it was before install`).toEqual(notes);
+        const onNotes = [install, status, uninstall].flatMap((r) => r.trace).filter((ev) => [ev.path, ev.path2].some((path) => typeof path === "string" && /^(workspace-notes(\/|$)|\.ignore$)/.test(relOf(w, path))));
+        expect.soft([round === 1 || notes.length === 6, onNotes.map((ev) => `${ev.op} ${relOf(w, ev.path)}`)], `[notes-untouched] ${host}, round ${round}: no command makes any file call on the notes folder or the ignore file`).toEqual([true, []]);
+        expect.soft(rmdirs(uninstall, w, true).sort(), `[own-directories-removed] ${host}, round ${round}: exactly the directories install created, and the two state directories`)
+          .toEqual([...createdDirs(host), ...STATE_DIRS].sort());
+        expect.soft(rmdirs(uninstall, w, false), `[deepest-first] ${host}, round ${round}: no removal was tried on a directory that still held something`).toEqual([]);
+        expect.soft(createdDirs(host).filter((dir) => !uninstall.stdout.includes(`  dir removed     ${at(w, dir)}\n`)), `[own-directories-removed] ${host}, round ${round}: each one is listed as removed`).toEqual([]);
+      }
+    }
+  });
+
+  it("lead_uninstall_removes_only_its_own_empty_directories", async () => {
+    const claude = (w: string) => ["--workspace", w, "--host", "claude"];
+    // A file of the user's inside the pack directory keeps that directory and everything above it.
+    {
+      const { w } = workspace();
+      expect((await run(["install", ...claude(w)])).code, "install").toBe(0);
+      const mine = `${H}/workflows/my-own-guide.md`;
+      writeFileSync(at(w, mine), "the user's own guide\n");
+      const kept = [".claude", ".claude/skills", H, `${H}/workflows`];
+      const ids = kept.map((dir) => idOf(at(w, dir)));
+      const uninstall = await run(["uninstall", ...claude(w)]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], `the installed files and the state are gone\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+      expect.soft(tree(w), "[user-file-keeps-directory] the user's file, its directory and everything above it stay; the empty directory beside it is removed")
+        .toEqual(["dir .claude", "dir .claude/skills", `dir ${H}`, `dir ${H}/workflows`, `file ${mine} ${sha("the user's own guide\n")}`]);
+      expect.soft(kept.map((dir) => idOf(at(w, dir))), "[user-file-keeps-directory] and they are the same directories").toEqual(ids);
+      expect.soft(left(uninstall.stdout, w), "[directory-left-reported] uninstall names each directory it left, with the reason").toEqual(Object.fromEntries(kept.map((dir) => [dir, "not empty"])));
+      expect.soft(uninstall.stdout, "[directory-left-reported] and the one it removed").toContain(`  dir removed     ${at(w, `${H}/agents`)}\n`);
+      const again = await run(["install", ...claude(w)]);
+      expect.soft([again.code, resultOf(again.stdout), describeMutations(again)], "a new install is a conflict while the user's file is in the pack directory").toEqual([2, "CONFLICT", []]);
+    }
+    // A host parent that was there before install is there after uninstall.
+    for (const [host, existing] of [["claude", [".claude"]], ["codex", [".agents", ".agents/skills"]]] as [Host, string[]][]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      for (const dir of existing) mkdirSync(at(w, dir));
+      const ids = existing.map((dir) => idOf(at(w, dir)));
+      for (const round of [1, 2]) {
+        const install = await run(["install", ...args]);
+        expect.soft([install.code, resultOf(install.stdout)], `[preexisting-parent-kept] ${host}, round ${round}: install beside the directory that was already there\n${install.stdout}`).toEqual([0, "INSTALLED"]);
+        const uninstall = await run(["uninstall", ...args]);
+        expect.soft([uninstall.code, resultOf(uninstall.stdout)], `${host}, round ${round}: uninstall completes\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+        expect.soft([tree(w), existing.map((dir) => idOf(at(w, dir)))], `[preexisting-parent-kept] ${host}, round ${round}: what was there before install is all that is left, and it is the same directory`)
+          .toEqual([existing.map((dir) => `dir ${dir}`), ids]);
+        expect.soft(uninstall.trace.filter((ev) => ev.op === "rmdirSync").map((ev) => relOf(w, ev.path)).filter((dir) => existing.includes(dir)),
+          `[preexisting-parent-kept] ${host}, round ${round}: no removal was even tried on it`).toEqual([]);
+        expect.soft(left(uninstall.stdout, w), `[directory-left-reported] ${host}, round ${round}: and uninstall says why it stays`).toEqual(Object.fromEntries(existing.map((dir) => [dir, "install did not create it"])));
+      }
+    }
+    // An empty directory the user made at the same path later is not the directory install created.
+    {
+      const { w } = workspace();
+      expect((await run(["install", ...claude(w)])).code, "install").toBe(0);
+      const agents = `${H}/agents`;
+      mkdirSync(at(w, `${agents}.new`));
+      for (const name of readdirSync(at(w, agents))) unlinkSync(join(at(w, agents), name));
+      rmdirSync(at(w, agents));
+      renameSync(at(w, `${agents}.new`), at(w, agents));
+      const id = idOf(at(w, agents));
+      const uninstall = await run(["uninstall", ...claude(w)]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], `uninstall completes\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+      expect.soft([idOf(at(w, agents)), tree(w)], "[recreated-directory-kept] the user's directory stays, with everything above it").toEqual([id, ["dir .claude", "dir .claude/skills", `dir ${H}`, `dir ${agents}`]]);
+      expect.soft(left(uninstall.stdout, w), "[directory-left-reported] with the reasons")
+        .toEqual({ [agents]: "not the directory install created", [H]: "not empty", ".claude/skills": "not empty", ".claude": "not empty" });
+    }
+    // A directory replaced by a link: nothing behind the link is opened, removed or even looked at.
+    const LINKED = "a folder on its path is a link";
+    const variants = [
+      ["the pack directory", H, LINKED], ["a directory inside the pack", `${H}/agents`, LINKED], ["a host parent", ".claude/skills", LINKED],
+      ["the directory of the anchors", ".orch-lead-install/objects", "its anchor cannot be read, so ownership is unknown"],
+    ];
+    for (const [name, target, why] of variants) {
+      const { base, w } = workspace();
+      expect((await run(["install", ...claude(w)])).code, "install").toBe(0);
+      const outside = join(base, "moved away");
+      renameSync(at(w, target), outside);
+      writeFileSync(join(outside, "canary.txt"), "not part of the workspace\n");
+      symlinkSync(outside, at(w, target), "dir");
+      const behindBefore = tree(outside);
+      // Every installed path below the link; with the anchors behind the link, every installed path.
+      const through = dests("claude").filter((dest) => dest.startsWith(`${target}/`) || target.startsWith(".orch-lead-install/"));
+      const behind = (r: Result) => r.trace.filter((ev) => [ev.path, ev.path2].some((p) => typeof p === "string" && (p.startsWith(`${slash(at(w, target))}/`) || p === slash(outside) || p.startsWith(`${slash(outside)}/`))))
+        .map((ev) => `${ev.op} ${ev.path}`);
+      const status = await run(["status", ...claude(w)]);
+      expect.soft([status.code, resultOf(status.stdout), behind(status)], `[link-refused] ${name}: status reports it without reading behind the link\n${status.stdout}`).toEqual([2, "PARTIAL", []]);
+      expect.soft(through.filter((dest) => rowStates(status.stdout, w)[dest] !== "UNVERIFIABLE"), `[link-refused] ${name}: every path through the link is UNVERIFIABLE`).toEqual([]);
+      const uninstall = await run(["uninstall", ...claude(w)]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[link-refused] ${name}: uninstall reports residue\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([2, "PARTIAL"]);
+      expect.soft(behind(uninstall), `[nothing-behind-link] ${name}: no file call of any kind (open, unlink, rmdir, lstat, readdir) reaches behind the link`).toEqual([]);
+      expect.soft(uninstall.trace.filter((ev) => ev.op === "rmdirSync").map((ev) => relOf(w, ev.path)), `[nothing-behind-link] ${name}: no directory removal is tried`).toEqual([]);
+      expect.soft(tree(outside), `[nothing-behind-link] ${name}: the canary and everything else behind the link are unchanged`).toEqual(behindBefore);
+      expect.soft([lstatSync(at(w, target)).isSymbolicLink(), readlinkSync(at(w, target))], `[nothing-behind-link] ${name}: the link is still the link`).toEqual([true, outside]);
+      expect.soft(through.filter((dest) => !uninstall.stdout.includes(`  preserved       ${at(w, dest)}  (UNVERIFIABLE: ${why})\n`)),
+        `[link-refused] ${name}: every path through the link is listed as preserved`).toEqual([]);
+      expect.soft([through.length > 0, existsSync(at(w, ".orch-lead-install/manifest.json")), through.filter((dest) => !existsSync(at(w, anchorOf("claude", dest))))],
+        `[link-refused] ${name}: the record and the anchors of those paths stay`).toEqual([true, true, []]);
+      // The user puts the folder back: uninstall then finishes.
+      unlinkSync(at(w, target));
+      unlinkSync(join(outside, "canary.txt"));
+      renameSync(outside, at(w, target));
+      const finish = await run(["uninstall", ...claude(w)]);
+      expect.soft([finish.code, resultOf(finish.stdout), tree(w)], `[link-undone-cleans] ${name}: with the folder back in place uninstall leaves nothing\n${finish.stdout}\n${finish.stderr}`).toEqual([0, "NOT_INSTALLED", []]);
+    }
+  });
+
+  it("lead_finished_install_is_never_busy", async () => {
+    const claude = (w: string) => ["--workspace", w, "--host", "claude"];
+    const questions = (r: Result) => r.trace.filter((ev) => ev.op === "kill").map((ev) => [ev.pid, ev.signal]);
+    // (1) A complete install whose recorded process id is in use by a live process: here the
+    // installer itself, held after all its work, before its process ends.
+    {
+      const { w } = workspace();
+      const installer = lead(["install", ...claude(w)], [{ op: "exit", action: "block", name: "INSTALL_DONE" }]);
+      expect(await installer.phase("INSTALL_DONE"), "[phase-reached] the installer did all its work and is held before its process ends").toBe(true);
+      expect.soft(hashOf(at(w, ".orch-lead-install/manifest.json")), "the record names the live installer").toBe(sha(manifestText("claude", w, installer.child.pid!)));
+      const status = await run(["status", ...claude(w)]);
+      expect.soft([status.code, resultOf(status.stdout)], `[finished-not-busy] status of a finished install whose installer id is alive\n${status.stdout}`).toEqual([0, "INSTALLED"]);
+      const uninstall = await run(["uninstall", ...claude(w)]);
+      expect.soft([installer.child.exitCode, installer.child.signalCode], "the process with the recorded id is still alive").toEqual([null, null]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout), tree(w)], `[finished-not-busy] uninstall proceeds and leaves nothing\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED", []]);
+      expect.soft([...questions(status), ...questions(uninstall)], "[finished-no-question] neither command asks about the recorded process").toEqual([]);
+      installer.release();
+      installer.child.stdin!.end();
+      const done = await installer.done;
+      expect.soft([done.code, resultOf(done.stdout)], `the held installer had finished normally\n${done.stdout}\n${done.stderr}`).toEqual([0, "INSTALLED"]);
+    }
+    // (2) An install in progress whose installer is alive: BUSY, nothing removed, one question.
+    const { w } = workspace();
+    writeFileSync(join(w, "notes.txt"), "the user's own notes\n");
+    const held = lead(["install", ...claude(w)], [{ op: "linkSync", when: "before", match: dests("claude")[1], action: "block", name: "HELD" }]);
+    expect(await held.phase("HELD"), "[phase-reached] the installer is held after its first publication").toBe(true);
+    const unfinished = tree(w);
+    const busy = await run(["uninstall", ...claude(w)]);
+    expect.soft([busy.code, resultOf(busy.stdout), describeMutations(busy), tree(w)], `[unfinished-live-busy] uninstall while the installer of an unfinished install lives\n${busy.stdout}`).toEqual([2, "BUSY", [], unfinished]);
+    expect.soft(questions(busy), "[unfinished-live-busy] it asked once, with signal 0, about the recorded id").toEqual([[held.child.pid, 0]]);
+    held.kill();
+    await held.done;
+    // The installer is gone, but its id answers as alive, as not ours to ask, or with an unknown
+    // error (as when another program has that id now): still BUSY, nothing removed.
+    const probes: [string, (pid: number) => void][] = [
+      ["a live process has the id", () => {}],
+      ["asking is not permitted", () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }],
+      ["the answer is an unknown error", () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); }],
+    ];
+    for (const [name, probe] of probes) {
+      let out = "";
+      const asked: number[] = [];
+      const exit = await main(["lead", "uninstall", ...claude(w)], { out: (s) => (out += s), err: () => {}, stdin: () => "" },
+        { lead: { probe: (pid: number) => { asked.push(pid); probe(pid); } } } as never);
+      expect.soft([exit, resultOf(out), asked, tree(w)], `[unfinished-live-busy] ${name}`).toEqual([2, "BUSY", [held.child.pid], unfinished]);
+    }
+    // (3) An install in progress whose installer has ended: uninstall removes what the record
+    // lists (the files and directories that run created, then the state) and nothing else.
+    const clean = await run(["uninstall", ...claude(w)]);
+    expect.soft([clean.code, resultOf(clean.stdout)], `[unfinished-dead-cleans] uninstall after the installer of an unfinished install ended\n${clean.stdout}\n${clean.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+    expect.soft(tree(w), "[unfinished-dead-cleans] only the user's file is left").toEqual([`file notes.txt ${sha("the user's own notes\n")}`]);
+    const listed = new Set([...dests("claude"), ...dests("claude").map((dest) => anchorOf("claude", dest)), ...createdDirs("claude"), ...STATE_DIRS,
+      ".orch-lead-install/manifest.json", ".orch-lead-install/directories.json"]);
+    expect.soft(mutations(clean).map((ev) => `${ev.op} ${relOf(w, ev.path)}`).filter((line) => !listed.has(line.split(" ").slice(1).join(" "))),
+      "[unfinished-dead-cleans] every removal is of a path the record lists").toEqual([]);
+    expect.soft([...new Set(questions(clean).map((q) => JSON.stringify(q)))], "[unfinished-dead-cleans] it asked about the recorded id with signal 0, and the answer was that no such process exists")
+      .toEqual([JSON.stringify([held.child.pid, 0])]);
+
+    // (4) Killed before it recorded the directories it made: uninstall removes the state and
+    // leaves every directory, because nothing says which of them install created.
+    const { w: early } = workspace();
+    const s = lead(["install", ...claude(early)], [{ op: "mkdirSync", when: "before", match: `${H}/agents`, action: "block", name: "IN_DIRECTORIES" }]);
+    expect(await s.phase("IN_DIRECTORIES"), "[phase-reached] the installer is held while it creates directories").toBe(true);
+    s.kill();
+    await s.done;
+    const made = ["dir .claude", "dir .claude/skills", `dir ${H}`];
+    expect(tree(early).filter((line) => !line.includes(".orch-lead-install")), "three directories exist, and nothing else outside the state").toEqual(made);
+    const un = await run(["uninstall", ...claude(early)]);
+    expect.soft([un.code, resultOf(un.stdout), tree(early)], `[no-record-no-removal] without a record of directories uninstall removes the state and leaves the directories\n${un.stdout}\n${un.stderr}`)
+      .toEqual([0, "NOT_INSTALLED", made]);
+    expect.soft(left(un.stdout, early), "[no-record-no-removal] and says why").toEqual({ ".claude": "no record that install created it", ".claude/skills": "no record that install created it", [H]: "no record that install created it" });
   });
 });

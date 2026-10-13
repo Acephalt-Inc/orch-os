@@ -8,10 +8,16 @@
 // deadline. A change counts as KILLED only when the named test ran and an assertion carrying
 // each named label failed. A test that passes is SURVIVED. Anything else (the copy does not
 // compile, the test is missing, the run times out, the test fails somewhere else) is INVALID and
-// fails here: it is never counted as a kill. The controls at the end prove that rule.
+// fails here: it is never counted as a kill. The controls near the end prove that rule.
+//
+// Around the changes: before the first one, every named test passes in the unchanged copy (clean
+// control). After the last one, the copy is compared byte for byte with what it was before the
+// first change, sources and compiled files, and every named test passes in it again (restored
+// control): a change that was not put back would show there, not as a kill of a later mutant.
 //
 // Measured on macOS. Skipped on Windows unless ORCH_LEAD_UNMEASURED=1.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,6 +40,15 @@ const record = (id: string, result: { verdict: string; detail: string }) => {
 
 let copy = "";
 let counter = 0;
+/** Every file of the copy that a change or a compile can touch, with its content hash, as it was before the first change. */
+let unchanged: string[] = [];
+function snapshot(): string[] {
+  const walk = (rel: string): string[] => readdirSync(join(copy, ...rel.split("/")), { withFileTypes: true }).flatMap((entry) => {
+    const r = `${rel}/${entry.name}`;
+    return entry.isDirectory() ? walk(r) : [`${r} ${createHash("sha256").update(readFileSync(join(copy, ...r.split("/")))).digest("hex")}`];
+  });
+  return ["src", "dist", "templates", "docs", "tests"].flatMap(walk).sort();
+}
 const options: ts.CompilerOptions = { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, newLine: ts.NewLineKind.LineFeed };
 
 /** Compile one source file of the copy to its place under dist/, the way the build names it. */
@@ -94,6 +109,7 @@ describe.skipIf(!RUN)("orch lead: mutation witnesses", () => {
     for (const path of ["src", "tests", "docs", "package.json", "tsconfig.json", "vitest.config.ts", ...assets]) cpSync(join(ROOT, path), join(copy, path), { recursive: true });
     symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"), WINDOWS ? "junction" : "dir");
     for (const file of sourceFiles("src")) compile(file);
+    unchanged = snapshot();
   });
   afterAll(() => {
     if (copy) rmSync(copy, { recursive: true, force: true });
@@ -118,5 +134,20 @@ describe.skipIf(!RUN)("orch lead: mutation witnesses", () => {
     const result = withEdits(control);
     record(control.id, result);
     expect(result, result.detail).toMatchObject({ verdict: "INVALID" });
+  });
+
+  // Every change was put back: the same bytes, and the same passing tests, as before the first one.
+  it("restored control: sources and compiled files of the copy are byte for byte what they were before the first change", () => {
+    const now = snapshot();
+    record("restored control: bytes", { verdict: now.join("\n") === unchanged.join("\n") ? "SAME" : "DIFFERENT", detail: `${now.length} files` });
+    expect(unchanged.length, "the copy was recorded before the first change").toBeGreaterThan(100);
+    expect(now.filter((line) => !unchanged.includes(line)), "files that differ from the unchanged copy").toEqual([]);
+    expect(now.length, "no file was added or lost").toBe(unchanged.length);
+  });
+  it.each(named)("restored control: %s passes again after every change was put back", (pair) => {
+    const [testFile, test] = pair.split(" ");
+    const result = runTest(testFile, test, ["no-such-label"]);
+    record(`restored control: ${test}`, result);
+    expect(result, `the restored copy: ${result.detail}`).toMatchObject({ verdict: "SURVIVED" });
   });
 });

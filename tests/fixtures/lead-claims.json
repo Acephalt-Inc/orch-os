@@ -19,7 +19,7 @@
    "marker": "workspace-must-exist",
    "mutant": "missing-workspace-created"
   },
-  "creates-17-files": {
+  "creates-20-files": {
    "test_file": "tests/lead-pack.test.ts",
    "test": "lead_shared_inventory_and_references",
    "marker": "inventory",
@@ -55,7 +55,7 @@
    "marker": "conflict-reported",
    "mutant": "preflight-skips-bootstrap"
   },
-  "reinstall-refused": {
+  "pack-directory-refuses": {
    "test_file": "tests/lead-process.test.ts",
    "test": "lead_preflight_conflict_has_zero_mutations",
    "marker": "conflict-reported",
@@ -193,12 +193,6 @@
    "marker": "edited-anchor-kept",
    "mutant": "changed-anchor-deleted"
   },
-  "directories-left": {
-   "test_file": "tests/lead-install.test.ts",
-   "test": "lead_uninstall_requires_identity_and_hash",
-   "marker": "directories-left",
-   "mutant": "uninstall-removes-pack-dirs"
-  },
   "busy-refuses": {
    "test_file": "tests/lead-process.test.ts",
    "test": "lead_concurrent_install_reservation_and_busy_cleanup",
@@ -282,6 +276,108 @@
    "test": "lead_corrupt_manifest_never_opens_outside",
    "marker": "unknown-not-opened",
    "mutant": "unknown-entry-opened"
+  },
+  "revised-guides-installed": {
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "marker": "first-reads-exist",
+   "mutant": "drop-revised-guide"
+  },
+  "first-reads-named": {
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "marker": "first-reads-exist",
+   "mutant": "old-bootstrap-text"
+  },
+  "notes-folders-named": {
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "marker": "named-folders",
+   "mutant": "names-absent-folder"
+  },
+  "no-notes-created": {
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "marker": "no-notes-created",
+   "mutant": "install-creates-notes"
+  },
+  "guides-ask-first": {
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "marker": "ask-before-first-save",
+   "mutant": "guide-drops-ask"
+  },
+  "notes-untouched": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "marker": "notes-untouched",
+   "mutant": "status-reads-notes"
+  },
+  "link-refused": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "marker": "link-refused",
+   "mutant": "link-check-skipped"
+  },
+  "nothing-behind-link": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "marker": "nothing-behind-link",
+   "mutant": "link-check-skipped"
+  },
+  "own-directories-removed": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "marker": "own-directories-removed",
+   "mutant": "directories-not-removed"
+  },
+  "preexisting-parent-kept": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "marker": "preexisting-parent-kept",
+   "mutant": "remove-preexisting-parent"
+  },
+  "user-file-keeps-directory": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "marker": "user-file-keeps-directory",
+   "mutant": "remove-non-empty-directory"
+  },
+  "directory-left-reported": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "marker": "directory-left-reported",
+   "mutant": "dir-left-not-printed"
+  },
+  "reinstall-works": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "marker": "round-trip",
+   "mutant": "directories-not-removed"
+  },
+  "left-directory-stays": {
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_uninstall_requires_identity_and_hash",
+   "marker": "left-directory-stays",
+   "mutant": "no-record-removal-later"
+  },
+  "finished-not-asked": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "marker": "finished-no-question",
+   "mutant": "finished-flag-ignored"
+  },
+  "unfinished-dead-cleans": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "marker": "unfinished-dead-cleans",
+   "mutant": "dead-installer-busy"
+  },
+  "no-record-no-removal": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "marker": "no-record-no-removal",
+   "mutant": "no-record-removal"
   }
  },
  "mutants": [
@@ -460,8 +556,8 @@
    "edits": [
     {
      "file": "src/lead/status.ts",
-     "find": "const aggregate: Aggregate = complete ? \"INSTALLED\"",
-     "replace": "const aggregate: Aggregate = complete || true ? \"INSTALLED\""
+     "find": "const aggregate: Aggregate = allThere ? \"INSTALLED\"",
+     "replace": "const aggregate: Aggregate = allThere || true ? \"INSTALLED\""
     }
    ]
   },
@@ -475,8 +571,8 @@
    "edits": [
     {
      "file": "src/lead/status.ts",
-     "find": "const aggregate: Aggregate = complete ? \"INSTALLED\"",
-     "replace": "const aggregate: Aggregate = complete || true ? \"INSTALLED\""
+     "find": "const aggregate: Aggregate = allThere ? \"INSTALLED\"",
+     "replace": "const aggregate: Aggregate = allThere || true ? \"INSTALLED\""
     }
    ]
   },
@@ -505,8 +601,8 @@
    "edits": [
     {
      "file": "src/lead/uninstall.ts",
-     "find": "  if (before.liveness !== \"DEAD\") {",
-     "replace": "  if (before.liveness !== \"DEAD\" && false) {"
+     "find": "  if (before.liveness !== null && before.liveness !== \"DEAD\") {",
+     "replace": "  if (before.liveness !== null && before.liveness !== \"DEAD\" && false) {"
     }
    ]
   },
@@ -882,21 +978,6 @@
    ]
   },
   {
-   "id": "uninstall-removes-pack-dirs",
-   "test_file": "tests/lead-install.test.ts",
-   "test": "lead_uninstall_requires_identity_and_hash",
-   "markers": [
-    "directories-left"
-   ],
-   "edits": [
-    {
-     "file": "src/lead/uninstall.ts",
-     "find": "      outcome.aggregate = empty ? \"NOT_INSTALLED\" : \"UNVERIFIABLE_PREPARATION\";",
-     "replace": "      for (const rel of [...packDirs(host)].reverse()) env.fs.rmdirSync(at(rel));\n      outcome.aggregate = empty ? \"NOT_INSTALLED\" : \"UNVERIFIABLE_PREPARATION\";"
-    }
-   ]
-  },
-  {
    "id": "absent-state-reported-partial",
    "test_file": "tests/lead-install.test.ts",
    "test": "lead_manifest_intent_is_not_completion",
@@ -921,8 +1002,8 @@
    "edits": [
     {
      "file": "src/lead/status.ts",
-     "find": " && tmp === \"ABSENT\" && unknown.length === 0;",
-     "replace": " && tmp === \"ABSENT\";"
+     "find": " && tmp === \"ABSENT\" && unknown.length === 0",
+     "replace": " && tmp === \"ABSENT\""
     }
    ]
   },
@@ -1218,6 +1299,601 @@
      "file": "templates/lead/SKILL.md",
      "find": "Do not use extra paid APIs without an explicit budget.",
      "replace": "Use extra paid APIs without an explicit budget."
+    }
+   ]
+  },
+  {
+   "id": "remove-preexisting-parent",
+   "why": "uninstall also removes an empty directory that the record does not list",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "preexisting-parent-kept"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      else if (!row) leave(\"EXISTED\");\n",
+     "replace": ""
+    },
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      else if (row.dev !== now.dev || row.ino !== now.ino) leave(\"NOT_SAME\");",
+     "replace": "      else if (row && (row.dev !== now.dev || row.ino !== now.ino)) leave(\"NOT_SAME\");"
+    }
+   ]
+  },
+  {
+   "id": "remove-non-empty-directory",
+   "why": "uninstall removes a recorded directory with whatever it holds",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "user-file-keeps-directory"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "          env.fs.rmdirSync(at(rel));\n          outcome.directoriesRemoved.push(rel);",
+     "replace": "          env.fs.rmSync(at(rel), { recursive: true, force: true });\n          outcome.directoriesRemoved.push(rel);"
+    }
+   ]
+  },
+  {
+   "id": "directory-identity-skipped",
+   "why": "uninstall removes an empty directory at a recorded path without comparing it with the one install created",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "recreated-directory-kept"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      else if (row.dev !== now.dev || row.ino !== now.ino) leave(\"NOT_SAME\");\n",
+     "replace": ""
+    }
+   ]
+  },
+  {
+   "id": "dir-left-not-printed",
+   "why": "uninstall leaves directories without naming them",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "directory-left-reported"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "      for (const dir of outcome.directoriesLeft) lines.push(fill(LEAD_TEXT.dirLeft, { path: abs(dir.path), why: DIR_WHY[dir.why] }));",
+     "replace": "      void DIR_WHY;"
+    }
+   ]
+  },
+  {
+   "id": "link-check-skipped",
+   "why": "a payload path below a folder that is now a link is followed",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "link-refused",
+    "nothing-behind-link"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "  if (linkOnPath(env, workspace, row.path) !== null) return { ...base, state: \"UNVERIFIABLE\", why: \"LINKED\" };",
+     "replace": "  void linkOnPath;"
+    }
+   ]
+  },
+  {
+   "id": "anchor-link-followed",
+   "why": "an anchor below a state folder that is now a link is read",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "nothing-behind-link"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "const anchor = linkOnPath(env, workspace, `${STATE_DIR}/${row.anchor}`) === null ? readAnchor(",
+     "replace": "const anchor = true ? readAnchor("
+    }
+   ]
+  },
+  {
+   "id": "directories-not-removed",
+   "why": "uninstall leaves every directory, as the version before did",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "markers": [
+    "round-trip",
+    "own-directories-removed"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "directories-not-removed-install",
+   "why": "the same change, seen by the test that installs again",
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_uninstall_requires_identity_and_hash",
+   "markers": [
+    "clean-uninstall-leaves-nothing",
+    "reinstall-works"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "shallowest-first",
+   "why": "uninstall tries the outermost directory first",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "markers": [
+    "deepest-first"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "    for (const rel of hostDirs(host).reverse()) {\n      const now = found.get(rel)!;",
+     "replace": "    for (const rel of hostDirs(host)) {\n      const now = found.get(rel)!;"
+    }
+   ]
+  },
+  {
+   "id": "pack-directories-not-recorded",
+   "why": "install does not record the pack directories it created",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "directories-record"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "      for (const rel of packDirs(host)) {\n        step = at(rel);\n        created.push({ path: rel, ...makeDirectory(env, step, 0o777) });",
+     "replace": "      for (const rel of packDirs(host)) {\n        step = at(rel);\n        makeDirectory(env, step, 0o777);"
+    }
+   ]
+  },
+  {
+   "id": "no-record-removal",
+   "why": "uninstall removes empty directories although no record says install created them",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "markers": [
+    "no-record-no-removal"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      else if (before.directories.state !== \"VALID\") leave(\"NO_RECORD\");",
+     "replace": "      else if (before.directories.state !== \"VALID\") { try { env.fs.rmdirSync(at(rel)); } catch { leave(\"NO_RECORD\"); } }"
+    }
+   ]
+  },
+  {
+   "id": "no-record-removal-later",
+   "why": "the same change, seen by a later uninstall without any state",
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_uninstall_requires_identity_and_hash",
+   "markers": [
+    "left-directory-stays"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      else if (before.directories.state !== \"VALID\") leave(\"NO_RECORD\");",
+     "replace": "      else if (before.directories.state !== \"VALID\") { try { env.fs.rmdirSync(at(rel)); } catch { leave(\"NO_RECORD\"); } }"
+    }
+   ]
+  },
+  {
+   "id": "preflight-skips-pack-dir-install",
+   "why": "install does not check for an existing pack directory",
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_uninstall_requires_identity_and_hash",
+   "markers": [
+    "pack-directory-refuses"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "  for (const rel of packDirs(host)) mustBeAbsent(rel, \"directory\");",
+     "replace": "  void packDirs;"
+    }
+   ]
+  },
+  {
+   "id": "finished-flag-ignored",
+   "why": "the recorded process id is asked about although install is recorded as finished",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "markers": [
+    "finished-not-busy",
+    "finished-no-question"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "  const live = finished || (self && manifest.pid === env.pid) ? null : liveness(env, manifest.pid);",
+     "replace": "  const live = (self && manifest.pid === env.pid) ? null : liveness(env, manifest.pid);"
+    }
+   ]
+  },
+  {
+   "id": "finished-flag-ignored-status",
+   "why": "the same change, seen by status with a replaced answer",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_concurrent_install_reservation_and_busy_cleanup",
+   "markers": [
+    "finished-not-asked"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "  const live = finished || (self && manifest.pid === env.pid) ? null : liveness(env, manifest.pid);",
+     "replace": "  const live = (self && manifest.pid === env.pid) ? null : liveness(env, manifest.pid);"
+    }
+   ]
+  },
+  {
+   "id": "finished-flag-not-written",
+   "why": "install does not record that it finished",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "finished-record"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "    step = at(COMPLETE);\n    createExclusive(env, step, serializeComplete(manifestSha), 0o600, deadline, true);\n",
+     "replace": ""
+    }
+   ]
+  },
+  {
+   "id": "finished-flag-early",
+   "why": "install records that it finished before it publishes the files",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "markers": [
+    "unfinished-live-busy"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "    step = at(COMPLETE);\n    createExclusive(env, step, serializeComplete(manifestSha), 0o600, deadline, true);\n",
+     "replace": ""
+    },
+    {
+     "file": "src/lead/install.ts",
+     "find": "    // Publication: each payload path becomes a second name of its anchor.",
+     "replace": "    createExclusive(env, at(COMPLETE), serializeComplete(manifestSha), 0o600, deadline, true);\n    // Publication: each payload path becomes a second name of its anchor."
+    }
+   ]
+  },
+  {
+   "id": "finished-record-not-required",
+   "why": "status reports INSTALLED without the record that install finished",
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_manifest_intent_is_not_completion",
+   "markers": [
+    "finished-record-required"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "    && directories.state === \"VALID\" && finished;",
+     "replace": "    && directories.state === \"VALID\";"
+    }
+   ]
+  },
+  {
+   "id": "directories-record-not-required",
+   "why": "status reports INSTALLED without a valid record of the directories",
+   "test_file": "tests/lead-install.test.ts",
+   "test": "lead_manifest_intent_is_not_completion",
+   "markers": [
+    "directories-record-required"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "    && directories.state === \"VALID\" && finished;",
+     "replace": "    && finished;"
+    }
+   ]
+  },
+  {
+   "id": "dead-installer-busy",
+   "why": "uninstall refuses an unfinished install also when its installer has ended",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_finished_install_is_never_busy",
+   "markers": [
+    "unfinished-dead-cleans"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  if (before.liveness !== null && before.liveness !== \"DEAD\") {",
+     "replace": "  if (before.liveness !== null) {"
+    }
+   ]
+  },
+  {
+   "id": "old-bootstrap-text",
+   "why": "the pack ships the bootstrap text of the version before, with a hash the loader accepts",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "first-reads-exist",
+    "bootstrap-reviewed"
+   ],
+   "edits": [
+    {
+     "file": "templates/lead/bootstrap-claude.md",
+     "find": "Before any task command, use the user's stated personal or shared context; if unclear, use shared sources and ask before reading personal notes.\nFor shared work, do not open, list or search `workspace-notes/personal/`, including its index, filenames and source copies.\nDo not run a workspace-wide listing or search: no `find . -type f`, `find workspace-notes -type f`, bare `rg --files`, recursive search from the workspace root, or equivalent tree walk.\nName the one allowed folder in each listing or search, such as `rg --files workspace-notes/shared` or `find workspace-notes/shared -type f`; read a named task file directly.\nRead one guide, index or note per command; do not print several notes files with `cat`, `head`, `tail`, a wildcard or a loop, or batch guides with notes.\nFor every request, including one-line requests and acceptance replies, read `.claude/skills/orch-lead/SKILL.md`, then `.claude/skills/orch-lead/workflows/notes.md`, then `.claude/skills/orch-lead/workflows/memory.md`, in that order and one per command, before answering or doing task work.\nNext read `workspace-notes/personal/INDEX.md` for personal work, or `workspace-notes/shared/INDEX.md` for shared or unclear work; read each relevant entry separately and apply active preferences before answering.\nFor personal work, read the shared index afterward only if needed; a missing index means no registered notes, not permission to search the workspace.\nTreat “remember that” as a save request: propose the exact personal wording and file, then wait for acceptance; “yes” without that proposal is not enough.\nPersonal content must not influence a shared operation.\nIf names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in `.claude/skills/orch-lead/workflows/notes.md`; do not repeat the broad command or automatically request a fresh conversation.\nFollow the lead instructions within the user's request and the host's permissions.\n",
+     "replace": "For tasks in this workspace, read .claude/skills/orch-lead/SKILL.md and follow its lead instructions within the user's request and the host's permissions.\n"
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/lead/bootstrap-claude.md\": \"78620ed144bacdb52983d702c4551a256169cb3157aa8a2b317078a466264496\"",
+     "replace": "\"templates/lead/bootstrap-claude.md\": \"32b36c39c7392f33f0d7f8f5606b4209b32ba5649008964b8e8473bc853c38c5\""
+    }
+   ]
+  },
+  {
+   "id": "drop-revised-guide",
+   "why": "the notes guide is left out of the payload; the install itself completes with 19 files",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "first-reads-exist"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/paths.ts",
+     "find": "  [\"templates/workflows/notes.md\", \"workflows/notes.md\"],\n",
+     "replace": ""
+    },
+    {
+     "file": "src/lead/paths.ts",
+     "find": "export const PAYLOAD_COUNT = 20;",
+     "replace": "export const PAYLOAD_COUNT = 19;"
+    }
+   ]
+  },
+  {
+   "id": "link-to-absent-guide",
+   "why": "an installed guide keeps a link to a guide that is not installed",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "links-resolve"
+   ],
+   "edits": [
+    {
+     "file": "templates/workflows/company-knowledge.md",
+     "find": "[knowledge.md](knowledge.md)",
+     "replace": "[recall.md](recall.md)"
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/workflows/company-knowledge.md\": \"bb77bbebf33362013af281a71095d81a2b1878236ee6c8661b9a07a4cf0c659a\"",
+     "replace": "\"templates/workflows/company-knowledge.md\": \"1b682767d4e1378975ea3e0b9745f544899c35ea24e30363775e6a8b863fe9e1\""
+    }
+   ]
+  },
+  {
+   "id": "names-absent-guide",
+   "why": "the skill names a guide that is not installed",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "named-files-exist"
+   ],
+   "edits": [
+    {
+     "file": "templates/lead/SKILL.md",
+     "find": "workflows/company-knowledge.md or workflows/memory.md.",
+     "replace": "workflows/company-knowledge.md, workflows/recall.md or workflows/memory.md."
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/lead/SKILL.md\": \"85e2a5f8d47ffe8d0174126e6b496a8e19adca776fac1aba063d307a9ed82b87\"",
+     "replace": "\"templates/lead/SKILL.md\": \"ea95d2b8cfebb99b80292c71989f75e8c0dbaff73dd3ae8a165b2a267352da9e\""
+    }
+   ]
+  },
+  {
+   "id": "names-absent-folder",
+   "why": "a guide names a folder that is neither installed nor one of the notes folders",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "named-folders"
+   ],
+   "edits": [
+    {
+     "file": "templates/workflows/learning.md",
+     "find": "move the entry to `archive/`",
+     "replace": "move the entry to `attic/`"
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/workflows/learning.md\": \"692235ed3265f395e970623e172af938fc27c660971e760e59dc24c721692995\"",
+     "replace": "\"templates/workflows/learning.md\": \"e82e67334d7adb76741c0bac5c55f4ba651c351bd23712495092bb6f620bdd45\""
+    }
+   ]
+  },
+  {
+   "id": "names-absent-command",
+   "why": "a guide tells the assistant to run a command this version does not have",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "no-absent-command"
+   ],
+   "edits": [
+    {
+     "file": "templates/workflows/memory.md",
+     "find": "Do not save secrets, full conversations, guesses or temporary task progress.",
+     "replace": "Do not save secrets, full conversations, guesses or temporary task progress.\nRun `orch notes save` to store a note."
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/workflows/memory.md\": \"80170839ed41a52e7fcb953f081b484d23b1552b134d3c8e341673dfe7e298aa\"",
+     "replace": "\"templates/workflows/memory.md\": \"5c13a7ea7df31d76ffb39a3a2edb38839738e75d5501ba1df64654fef4227330\""
+    }
+   ]
+  },
+  {
+   "id": "guide-drops-ask",
+   "why": "the memory guide no longer tells the assistant to ask before a personal save",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "ask-before-first-save"
+   ],
+   "edits": [
+    {
+     "file": "templates/workflows/memory.md",
+     "find": ", then ask to save them.",
+     "replace": "."
+    },
+    {
+     "file": "src/lead/pack.ts",
+     "find": "\"templates/workflows/memory.md\": \"80170839ed41a52e7fcb953f081b484d23b1552b134d3c8e341673dfe7e298aa\"",
+     "replace": "\"templates/workflows/memory.md\": \"af68c5bd30c173f8d7c73a01060d21aeb5cae7dbc1010713a881636c0c66c8d9\""
+    }
+   ]
+  },
+  {
+   "id": "install-creates-notes",
+   "why": "install creates the notes folder",
+   "test_file": "tests/lead-pack.test.ts",
+   "test": "lead_shared_inventory_and_references",
+   "markers": [
+    "no-notes-created"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "    step = at(COMPLETE);\n",
+     "replace": "    env.fs.mkdirSync(at(\"workspace-notes\"), { mode: 0o777, recursive: false });\n    step = at(COMPLETE);\n"
+    }
+   ]
+  },
+  {
+   "id": "status-reads-notes",
+   "why": "status and uninstall look at the ignore file",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reinstall_after_uninstall_round_trip",
+   "markers": [
+    "notes-untouched"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "  const stateDir = env.path.join(workspace, STATE_DIR);\n  const dirStat = lstatOrCode(env, stateDir);",
+     "replace": "  lstatOrCode(env, env.path.join(workspace, \".ignore\"));\n  const stateDir = env.path.join(workspace, STATE_DIR);\n  const dirStat = lstatOrCode(env, stateDir);"
+    }
+   ]
+  },
+  {
+   "id": "directories-not-removed-packed",
+   "why": "the same change, seen by another test of a complete uninstall",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_real_cli_has_install_status_uninstall",
+   "markers": [
+    "clean-uninstall",
+    "reinstall-works"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "directories-not-removed-kill",
+   "why": "the same change, seen by another test of a complete uninstall",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_sigkill_between_publications_is_visible_and_cleanable",
+   "markers": [
+    "kill-cleanable"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "directories-not-removed-retry",
+   "why": "the same change, seen by another test of a complete uninstall",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_retry_after_kill_is_idempotent",
+   "markers": [
+    "retry-completes"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "directories-removed-with-residue",
+   "why": "uninstall removes empty directories while a payload path is still preserved",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_retry_after_kill_is_idempotent",
+   "markers": [
+    "retry-retains-mismatch"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(true);"
+    }
+   ]
+  },
+  {
+   "id": "docs-promise-about-assistant",
+   "why": "the documentation promises what the assistant does",
+   "test_file": "tests/lead-claims.test.ts",
+   "test": "lead_reviewed_sentences_and_behavior_claims",
+   "markers": [
+    "no-promise-about-assistant"
+   ],
+   "edits": [
+    {
+     "file": "docs/lead-install.md",
+     "find": "These commands do not check that the assistant does so.",
+     "replace": "The assistant will do so."
     }
    ]
   }

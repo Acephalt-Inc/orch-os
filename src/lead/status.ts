@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /**
- * What is on disk: the manifest (a record of intent, never of completion), the anchors, and the
- * state of each of the 17 payload paths. Everything here reads; nothing here writes.
+ * What is on disk: the manifest (a record of intent, never of completion), the anchors, the
+ * record of the directories install created, the record that install finished, and the state of
+ * each of the 20 payload paths. Everything here reads; nothing here writes.
  *
  * A payload file is owned only when it is the same file as its anchor (same device and inode)
- * and the manifest lists it; equal bytes at another inode are a foreign file. The report is a
- * snapshot: another program can change the files right after they are read.
+ * and the manifest lists it; equal bytes at another inode are a foreign file. A path that passes
+ * through a folder that is now a link is never opened. The report is a snapshot: another program
+ * can change the files right after they are read.
+ *
+ * The record that install finished changes one thing only: whether the recorded installer
+ * process id is asked about. It never makes a file owned and never makes a result INSTALLED by
+ * itself; that is always read from the files.
  */
 import {
   BIG, errorCode, type FileRead, type LeadEnv, LeadError, MANIFEST_CAP, FILE_CAP, packHash, readBounded, reviewedRows, sha256,
 } from "./pack.js";
 import {
-  type Host, HOSTS, insideWorkspace, isLiteralRowPath, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, PAYLOAD_COUNT, STATE_DIR,
+  COMPLETE, DIRECTORIES, type Host, hostDirs, HOSTS, insideWorkspace, isLiteralRowPath, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, PAYLOAD_COUNT, STATE_DIR,
 } from "./paths.js";
 
 export type RowState = "OWNED_MATCH" | "OWNED_CHANGED" | "MISSING" | "FOREIGN" | "UNVERIFIABLE";
@@ -19,7 +25,8 @@ export type Aggregate = "NOT_INSTALLED" | "INSTALLED" | "PARTIAL" | "CONFLICT" |
 export type AnchorState = "OK" | "MISSING" | "MISMATCH" | "NOT_FILE" | "UNREADABLE";
 export type Liveness = "DEAD" | "ALIVE" | "UNKNOWN";
 /** Why a row has its state; the command line turns each into one fixed phrase. */
-export type RowWhy = "" | "EDITED" | "OTHER_FILE" | "NOT_FILE" | "NO_MANIFEST" | "NO_ANCHOR" | "BAD_ANCHOR" | "UNSTABLE" | "UNREADABLE";
+export type RowWhy = "" | "EDITED" | "OTHER_FILE" | "NOT_FILE" | "NO_MANIFEST" | "NO_ANCHOR" | "BAD_ANCHOR" | "UNSTABLE" | "UNREADABLE" | "LINKED";
+export type RecordState = "ABSENT" | "VALID" | "INVALID";
 
 export interface ManifestRow {
   path: string;
@@ -84,6 +91,53 @@ export function checkManifest(bytes: Buffer, host: Host, workspace: string): Man
   return { ok: true, manifest: { schema: 1, host, workspace, pack: packHash(rows.map((r) => ({ dest: r.path, sha256: r.sha256 }))), pid: v.pid, rows } };
 }
 
+/** One host directory this install created, with its identity at that moment (decimal text). */
+export interface DirRow {
+  path: string;
+  dev: string;
+  ino: string;
+}
+
+/** The one byte form of the directories record. It names the manifest it belongs to by hash. */
+export function serializeDirectories(manifestSha: string, created: readonly DirRow[]): Buffer {
+  const lines = created.map((d) => `    ${JSON.stringify({ path: d.path, dev: d.dev, ino: d.ino })}`);
+  return Buffer.from(`{"schema":1,"manifest":"${manifestSha}","created":[${lines.length ? `\n${lines.join(",\n")}\n` : ""}]}\n`, "utf8");
+}
+
+/**
+ * Accept only the exact bytes this version writes: directories of this host's layout, outermost
+ * first, none twice, each with a numeric identity. Returns the rows, or null.
+ */
+export function checkDirectories(bytes: Buffer, host: Host, manifestSha: string): DirRow[] | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (v.schema !== 1 || v.manifest !== manifestSha || !Array.isArray(v.created)) return null;
+  const allowed = hostDirs(host);
+  const rows: DirRow[] = [];
+  let last = -1;
+  for (const item of v.created as unknown[]) {
+    const r = item as Record<string, unknown> | null;
+    if (typeof r !== "object" || r === null || typeof r.path !== "string" || typeof r.dev !== "string" || typeof r.ino !== "string") return null;
+    if (!/^\d{1,20}$/.test(r.dev) || !/^\d{1,20}$/.test(r.ino)) return null;
+    const index = allowed.indexOf(r.path);
+    if (index <= last) return null;
+    last = index;
+    rows.push({ path: r.path, dev: r.dev, ino: r.ino });
+  }
+  return serializeDirectories(manifestSha, rows).equals(bytes) ? rows : null;
+}
+
+/** The one byte form of the record that install finished. It names its manifest by hash. */
+export function serializeComplete(manifestSha: string): Buffer {
+  return Buffer.from(`{"schema":1,"manifest":"${manifestSha}","install":"complete"}\n`, "utf8");
+}
+
 export interface RowReport {
   path: string;
   anchor: string;
@@ -104,6 +158,11 @@ export interface StateReport {
   tmp: "ABSENT" | "SAME_AS_MANIFEST" | "DIFFERENT";
   /** Entries of the state directory this version does not know, relative to the workspace. Never opened. */
   unknown: string[];
+  /** The record of the host directories this install created. `file` is set when VALID. */
+  directories: { state: RecordState; created: DirRow[]; file: FileRead | null };
+  /** The record that install finished. `file` is set when VALID. */
+  complete: { state: RecordState; file: FileRead | null };
+  /** Answer about the recorded installer process. Null when it was not asked: the install is recorded as finished, or the installer reads its own work. */
   liveness: Liveness | null;
   aggregate: Aggregate;
 }
@@ -113,6 +172,36 @@ function lstatOrCode(env: LeadEnv, path: string): ReturnType<LeadEnv["fs"]["lsta
     return env.fs.lstatSync(path, BIG);
   } catch (e) {
     return errorCode(e);
+  }
+}
+
+/**
+ * The first folder on the way to `rel` that is not a real directory any more (a link, a junction
+ * or a file), relative to the workspace; null when there is none. A folder that does not exist
+ * ends the walk: nothing can be behind it.
+ */
+export function linkOnPath(env: LeadEnv, workspace: string, rel: string): string | null {
+  const parts = rel.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join("/");
+    const st = lstatOrCode(env, insideWorkspace(env.path, workspace, dir));
+    if (st === "ENOENT") return null;
+    if (typeof st === "string" || !st.isDirectory()) return dir;
+  }
+  return null;
+}
+
+/** A small record file of the state directory: its bytes, or why they cannot be used. */
+function readRecord(env: LeadEnv, path: string, deadline: number): FileRead | "ABSENT" | "INVALID" {
+  const st = lstatOrCode(env, path);
+  if (st === "ENOENT") return "ABSENT";
+  if (typeof st === "string" || !st.isFile()) return "INVALID";
+  try {
+    const file = readBounded(env, path, MANIFEST_CAP, deadline);
+    return file.dev === st.dev && file.ino === st.ino ? file : "INVALID";
+  } catch (e) {
+    if (e instanceof LeadError && e.code === "DEADLINE") throw e;
+    return "INVALID";
   }
 }
 
@@ -135,8 +224,11 @@ function readAnchor(env: LeadEnv, path: string, expected: string, deadline: numb
 export function classifyRow(env: LeadEnv, workspace: string, row: ManifestRow, deadline: number): RowReport {
   const dest = insideWorkspace(env.path, workspace, row.path);
   const anchorPath = insideWorkspace(env.path, workspace, `${STATE_DIR}/${row.anchor}`);
-  const anchor = readAnchor(env, anchorPath, row.sha256, deadline);
+  // An anchor below a state folder that is now a link is not read.
+  const anchor = linkOnPath(env, workspace, `${STATE_DIR}/${row.anchor}`) === null ? readAnchor(env, anchorPath, row.sha256, deadline) : { state: "UNREADABLE" as AnchorState, file: null };
   const base = { path: row.path, anchor: row.anchor, anchorState: anchor.state, id: null };
+  // A destination below a folder that is now a link is not looked at: whatever is there is behind the link.
+  if (linkOnPath(env, workspace, row.path) !== null) return { ...base, state: "UNVERIFIABLE", why: "LINKED" };
   const st = lstatOrCode(env, dest);
   if (st === "ENOENT") return { ...base, state: "MISSING", why: "" };
   if (typeof st === "string") return { ...base, state: "UNVERIFIABLE", why: "UNREADABLE" };
@@ -165,7 +257,7 @@ export function liveness(env: LeadEnv, pid: number): Liveness {
   }
 }
 
-const KNOWN_TOP = new Set(["manifest.json", "manifest.tmp", "objects"]);
+const KNOWN_TOP = new Set(["manifest.json", "manifest.tmp", "objects", "directories.json", "complete"]);
 
 function unknownEntries(env: LeadEnv, workspace: string): string[] {
   const out: string[] = [];
@@ -197,7 +289,10 @@ function rowsWithoutManifest(env: LeadEnv, workspace: string, host: Host, presen
  * its own work: its own process id is then not a reason to report BUSY.
  */
 export function readState(env: LeadEnv, workspace: string, host: Host, deadline: number, self = false): StateReport {
-  const empty = { manifest: null, manifestFile: null, tmp: "ABSENT" as const, unknown: [], liveness: null };
+  const empty = {
+    manifest: null, manifestFile: null, tmp: "ABSENT" as const, unknown: [], liveness: null,
+    directories: { state: "ABSENT" as RecordState, created: [], file: null }, complete: { state: "ABSENT" as RecordState, file: null },
+  };
   const stateDir = env.path.join(workspace, STATE_DIR);
   const dirStat = lstatOrCode(env, stateDir);
   if (dirStat === "ENOENT") {
@@ -240,9 +335,28 @@ export function readState(env: LeadEnv, workspace: string, host: Host, deadline:
     }
   }
 
+  // The two records name this manifest by hash; any other bytes are not a record of this install.
+  const manifestSha = sha256(manifestFile.bytes);
+  const directories: StateReport["directories"] = { state: "ABSENT", created: [], file: null };
+  const directoriesFile = readRecord(env, env.path.join(workspace, ...DIRECTORIES.split("/")), deadline);
+  if (directoriesFile !== "ABSENT") {
+    const created = directoriesFile === "INVALID" ? null : checkDirectories(directoriesFile.bytes, host, manifestSha);
+    if (directoriesFile === "INVALID" || created === null) directories.state = "INVALID";
+    else Object.assign(directories, { state: "VALID", created, file: directoriesFile });
+  }
+  const complete: StateReport["complete"] = { state: "ABSENT", file: null };
+  const completeFile = readRecord(env, env.path.join(workspace, ...COMPLETE.split("/")), deadline);
+  if (completeFile !== "ABSENT") {
+    if (completeFile === "INVALID" || !completeFile.bytes.equals(serializeComplete(manifestSha))) complete.state = "INVALID";
+    else Object.assign(complete, { state: "VALID", file: completeFile });
+  }
+
   const rows = manifest.rows.map((row) => classifyRow(env, workspace, row, deadline));
-  const live = self && manifest.pid === env.pid ? null : liveness(env, manifest.pid);
-  const complete = rows.every((r) => r.state === "OWNED_MATCH" && r.anchorState === "OK") && tmp === "ABSENT" && unknown.length === 0;
-  const aggregate: Aggregate = complete ? "INSTALLED" : live !== null && live !== "DEAD" ? "BUSY" : "PARTIAL";
-  return { state: "VALID", reason: "", manifest, manifestFile, rows, tmp, unknown, liveness: live, aggregate };
+  // Only an install that is not recorded as finished can still have a running installer.
+  const finished = complete.state === "VALID";
+  const live = finished || (self && manifest.pid === env.pid) ? null : liveness(env, manifest.pid);
+  const allThere = rows.every((r) => r.state === "OWNED_MATCH" && r.anchorState === "OK") && tmp === "ABSENT" && unknown.length === 0
+    && directories.state === "VALID" && finished;
+  const aggregate: Aggregate = allThere ? "INSTALLED" : live !== null && live !== "DEAD" ? "BUSY" : "PARTIAL";
+  return { state: "VALID", reason: "", manifest, manifestFile, rows, tmp, unknown, directories, complete, liveness: live, aggregate };
 }

@@ -13,7 +13,11 @@ export const STATE_DIR = ".orch-lead-install";
 export const MANIFEST = `${STATE_DIR}/manifest.json`;
 export const MANIFEST_TMP = `${STATE_DIR}/manifest.tmp`;
 export const OBJECTS_DIR = `${STATE_DIR}/objects`;
-export const PAYLOAD_COUNT = 17;
+/** Written after the host directories exist: which of them this install created. */
+export const DIRECTORIES = `${STATE_DIR}/directories.json`;
+/** Written last: its presence says that install finished. */
+export const COMPLETE = `${STATE_DIR}/complete`;
+export const PAYLOAD_COUNT = 20;
 
 /** Packaged source (relative to the package) and destination relative to the host root. */
 const COMMON: readonly (readonly [string, string])[] = [
@@ -31,7 +35,10 @@ const COMMON: readonly (readonly [string, string])[] = [
   ["templates/workflows/call-review.md", "workflows/call-review.md"],
   ["templates/workflows/market-research.md", "workflows/market-research.md"],
   ["templates/workflows/company-knowledge.md", "workflows/company-knowledge.md"],
+  ["templates/workflows/notes.md", "workflows/notes.md"],
   ["templates/workflows/memory.md", "workflows/memory.md"],
+  ["templates/workflows/knowledge.md", "workflows/knowledge.md"],
+  ["templates/workflows/learning.md", "workflows/learning.md"],
   ["templates/workflows/sample-customers.csv", "workflows/sample-customers.csv"],
 ];
 
@@ -63,7 +70,7 @@ export interface PayloadRow {
   bootstrap: boolean;
 }
 
-/** The 17 payload rows of a host, in code-point order of the destination, anchors numbered in that order. */
+/** The 20 payload rows of a host, in code-point order of the destination, anchors numbered in that order. */
 export function payloadRows(host: Host): PayloadRow[] {
   const layout = HOST_LAYOUT[host];
   const rows = COMMON.map(([source, rel]) => ({ source, dest: `${layout.root}/${rel}`, bootstrap: false }));
@@ -86,6 +93,11 @@ export function sharedParents(host: Host): string[] {
 export function packDirs(host: Host): string[] {
   const root = HOST_LAYOUT[host].root;
   return [root, `${root}/agents`, `${root}/workflows`];
+}
+
+/** Every host-side directory install may create, outermost first: a parent always comes before what is inside it. */
+export function hostDirs(host: Host): string[] {
+  return [...sharedParents(host), ...packDirs(host)];
 }
 
 export function hostRoot(host: Host): string {

@@ -3,9 +3,10 @@
  * Create-only installation of the lead pack.
  *
  * Order: check every path (no writes) -> the caller prints the plan -> reserve the state
- * directory -> manifest -> one private anchor file per payload -> host directories -> one hard
- * link per payload, the bootstrap file last. Nothing is ever overwritten, renamed over, copied
- * over or rolled back. A collision found by the first step stops with no write at all; a
+ * directory -> manifest -> one private anchor file per payload -> host directories -> the record
+ * of which of those directories this run created -> one hard link per payload, the bootstrap
+ * file last -> the record that install finished. Nothing is ever overwritten, renamed over,
+ * copied over or rolled back. A collision found by the first step stops with no write at all; a
  * collision or error after that stops where it is and leaves what was already created, to be
  * reported by `status` and removed by `uninstall`.
  *
@@ -18,9 +19,10 @@ import {
   BIG, createExclusive, errorCode, FILE_CAP, type LeadEnv, LeadError, MANIFEST_CAP, type PackEntry, readBounded, sha256,
 } from "./pack.js";
 import {
-  codePointCompare, type Host, insideWorkspace, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, packDirs, payloadRows, publicationOrder, sharedParents, STATE_DIR,
+  codePointCompare, COMPLETE, DIRECTORIES, type Host, insideWorkspace, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, packDirs, payloadRows, publicationOrder, sharedParents,
+  STATE_DIR,
 } from "./paths.js";
-import { checkManifest, readState, serializeManifest, type StateReport } from "./status.js";
+import { checkManifest, type DirRow, readState, serializeComplete, serializeDirectories, serializeManifest, type StateReport } from "./status.js";
 
 export type PlanKind = "directory" | "file" | "state" | "temporary";
 
@@ -89,6 +91,8 @@ export function preflight(env: LeadEnv, workspace: string, host: Host): Prefligh
   mustBeAbsent(OBJECTS_DIR, "directory");
   mustBeAbsent(MANIFEST, "state");
   mustBeAbsent(MANIFEST_TMP, "temporary");
+  mustBeAbsent(DIRECTORIES, "state");
+  mustBeAbsent(COMPLETE, "state");
   for (const rel of sharedParents(host)) {
     const path = at(rel);
     try {
@@ -124,9 +128,12 @@ export interface InstallOutcome {
   report: StateReport | null;
 }
 
-function makeDirectory(env: LeadEnv, path: string, mode: number): void {
+/** Create one directory (never an existing one) and return its identity. */
+function makeDirectory(env: LeadEnv, path: string, mode: number): { dev: string; ino: string } {
   env.fs.mkdirSync(path, { mode, recursive: false });
-  if (!env.fs.lstatSync(path, BIG).isDirectory()) throw new LeadError(`${path} is not a directory after it was created`, "io", "NOT_A_DIRECTORY");
+  const st = env.fs.lstatSync(path, BIG);
+  if (!st.isDirectory()) throw new LeadError(`${path} is not a directory after it was created`, "io", "NOT_A_DIRECTORY");
+  return { dev: String(st.dev), ino: String(st.ino) };
 }
 
 /**
@@ -170,18 +177,39 @@ export function install(env: LeadEnv, workspace: string, host: Host, pack: reado
     }
 
     // Host directories. The two shared parents may have appeared meanwhile and must then be
-    // real directories; the pack's own directories must be new.
-    for (const rel of missingParents) {
-      step = at(rel);
-      try {
-        makeDirectory(env, step, 0o777);
-      } catch (e) {
-        if (errorCode(e) !== "EEXIST" || !env.fs.lstatSync(step, BIG).isDirectory()) throw e;
+    // real directories; the pack's own directories must be new. Only a directory this run's own
+    // mkdir created is remembered: one that appeared meanwhile belongs to whoever made it.
+    const manifestSha = sha256(manifestBytes);
+    const created: DirRow[] = [];
+    let failure: { error: unknown } | null = null;
+    try {
+      for (const rel of missingParents) {
+        step = at(rel);
+        try {
+          created.push({ path: rel, ...makeDirectory(env, step, 0o777) });
+        } catch (e) {
+          if (errorCode(e) !== "EEXIST" || !env.fs.lstatSync(step, BIG).isDirectory()) throw e;
+        }
       }
+      for (const rel of packDirs(host)) {
+        step = at(rel);
+        created.push({ path: rel, ...makeDirectory(env, step, 0o777) });
+      }
+    } catch (e) {
+      failure = { error: e };
     }
-    for (const rel of packDirs(host)) {
-      step = at(rel);
-      makeDirectory(env, step, 0o777);
+    // The record of the directories this run created, with their identity. It is written also
+    // when a directory step failed, so that uninstall can remove exactly what was created.
+    const failedAt = step;
+    try {
+      step = at(DIRECTORIES);
+      createExclusive(env, step, serializeDirectories(manifestSha, created), 0o600, deadline, true);
+    } catch (e) {
+      if (failure === null) throw e;
+    }
+    if (failure !== null) {
+      step = failedAt;
+      throw failure.error;
     }
 
     // Publication: each payload path becomes a second name of its anchor. linkSync fails with
@@ -196,6 +224,11 @@ export function install(env: LeadEnv, workspace: string, host: Host, pack: reado
       env.fs.linkSync(anchorPath, step);
       published += 1;
     }
+
+    // Last: the record that install finished. Until it exists, status and uninstall ask
+    // whether the recorded installer process is still running.
+    step = at(COMPLETE);
+    createExclusive(env, step, serializeComplete(manifestSha), 0o600, deadline, true);
   } catch (e) {
     if (e instanceof LeadError && e.code === "DEADLINE") throw e;
     if (errorCode(e) === "EEXIST") return stopped("COLLISION", "EEXIST");

@@ -2,19 +2,34 @@
 /**
  * Remove what `orch lead install` created and that is still exactly as it created it.
  *
- * A payload file is removed only when a valid manifest lists it, it is the same file as its
- * anchor (device and inode), and its bytes still have the reviewed hash; this is checked again
- * right before the unlink. Everything else stays and is listed. Directories on the host side
- * are never removed. Nothing is deleted recursively.
+ * A payload file is removed only when a valid manifest lists it, no folder on its path is a
+ * link, it is the same file as its anchor (device and inode), and its bytes still have the
+ * reviewed hash; this is checked again right before the unlink. Everything else stays and is
+ * listed.
+ *
+ * A host-side directory is removed only when every payload path is gone, the directories record
+ * of this install lists it, it is still that directory (device and inode), and it is empty: the
+ * removal is a plain rmdir, deepest first, which the system refuses for a directory that holds
+ * anything. A directory that was there before install, one without a record, one that was
+ * replaced and one that holds a file of the user's stay and are listed with the reason.
+ * Nothing is deleted recursively.
+ *
+ * The recorded installer process id is asked about only while the install is not recorded as
+ * finished. Then a live, unaskable or unknown answer means BUSY and nothing is removed; "no
+ * such process" lets uninstall remove what the records list.
  *
  * Limits: there is no way to tell the system "unlink only if this is still that file", so a
- * program that replaces a file between the last check and the unlink is not defended against.
- * Two uninstalls at the same time are not supported. The check on the recorded installer
- * process id is a question, not a lock: a reused id makes uninstall refuse (BUSY).
+ * program that replaces a file or a folder between the last check and the removal is not
+ * defended against. Two uninstalls at the same time are not supported. For an unfinished
+ * install the question about the process id is a question, not a lock: a reused id makes
+ * uninstall refuse (BUSY).
  */
-import { BIG, errorCode, FILE_CAP, type LeadEnv, LeadError, MANIFEST_CAP, readBounded, sha256 } from "./pack.js";
-import { type Host, insideWorkspace, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, packDirs, payloadRows, publicationOrder, sharedParents, STATE_DIR } from "./paths.js";
+import { BIG, errorCode, FILE_CAP, type FileRead, type LeadEnv, LeadError, MANIFEST_CAP, readBounded, sha256 } from "./pack.js";
+import { COMPLETE, DIRECTORIES, type Host, hostDirs, insideWorkspace, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, payloadRows, publicationOrder, STATE_DIR } from "./paths.js";
 import { type Aggregate, classifyRow, type ManifestRow, readState, type RowState, type RowWhy, type StateReport } from "./status.js";
+
+/** Why a host-side directory was left in place. */
+export type DirWhy = "NOT_EMPTY" | "EXISTED" | "NO_RECORD" | "NOT_SAME" | "NOT_DIRECTORY" | "KEPT";
 
 export interface Preserved {
   path: string;
@@ -30,8 +45,10 @@ export interface UninstallOutcome {
   absent: string[];
   preserved: Preserved[];
   stateRemoved: string[];
-  /** Host-side directories that exist and were left in place. */
-  directoriesLeft: string[];
+  /** Host-side directories this install created and uninstall removed, deepest first. */
+  directoriesRemoved: string[];
+  /** Host-side directories that exist and were left in place, with the reason. */
+  directoriesLeft: { path: string; why: DirWhy }[];
 }
 
 function isAbsent(env: LeadEnv, path: string): boolean {
@@ -63,21 +80,68 @@ function unlinkSame(env: LeadEnv, path: string, id: { dev: bigint; ino: bigint }
   return "REMOVED";
 }
 
+/** True when a record read again later is the same file with the same bytes as before. */
+function sameRecord(before: FileRead, after: FileRead | null): boolean {
+  return after !== null && after.dev === before.dev && after.ino === before.ino && after.bytes.equals(before.bytes);
+}
+
 export function uninstall(env: LeadEnv, workspace: string, host: Host, deadline: number): UninstallOutcome {
   const at = (rel: string) => insideWorkspace(env.path, workspace, rel);
   const before = readState(env, workspace, host, deadline);
-  const outcome: UninstallOutcome = { aggregate: before.aggregate, before, removed: [], absent: [], preserved: [], stateRemoved: [], directoriesLeft: [] };
-  const listDirectories = () => {
-    for (const rel of [...sharedParents(host), ...packDirs(host)]) if (!isAbsent(env, at(rel))) outcome.directoriesLeft.push(rel);
+  const outcome: UninstallOutcome = { aggregate: before.aggregate, before, removed: [], absent: [], preserved: [], stateRemoved: [], directoriesRemoved: [], directoriesLeft: [] };
+  /**
+   * The host-side directories, deepest first. With `remove`, a directory goes when the record
+   * lists it, it is still that directory and rmdir finds it empty. Nothing below a path that is
+   * not a real directory is looked at.
+   */
+  const directories = (remove: boolean) => {
+    const recorded = new Map(before.directories.created.map((d) => [d.path, d]));
+    const found = new Map<string, { dev: string; ino: string } | "ABSENT" | "NOT_DIRECTORY" | "BELOW">();
+    for (const rel of hostDirs(host)) {
+      const parent = found.get(rel.slice(0, Math.max(rel.lastIndexOf("/"), 0)));
+      if (typeof parent === "string") {
+        found.set(rel, parent === "ABSENT" ? "ABSENT" : "BELOW");
+        continue;
+      }
+      try {
+        const st = env.fs.lstatSync(at(rel), BIG);
+        found.set(rel, st.isDirectory() ? { dev: String(st.dev), ino: String(st.ino) } : "NOT_DIRECTORY");
+      } catch (e) {
+        if (errorCode(e) !== "ENOENT") throw e;
+        found.set(rel, "ABSENT");
+      }
+    }
+    for (const rel of hostDirs(host).reverse()) {
+      const now = found.get(rel)!;
+      if (now === "ABSENT" || now === "BELOW") continue;
+      const leave = (why: DirWhy) => void outcome.directoriesLeft.push({ path: rel, why });
+      const row = recorded.get(rel);
+      if (now === "NOT_DIRECTORY") leave("NOT_DIRECTORY");
+      else if (before.directories.state !== "VALID") leave("NO_RECORD");
+      else if (!row) leave("EXISTED");
+      else if (!remove) leave("KEPT");
+      else if (row.dev !== now.dev || row.ino !== now.ino) leave("NOT_SAME");
+      else {
+        try {
+          env.fs.rmdirSync(at(rel));
+          outcome.directoriesRemoved.push(rel);
+        } catch (e) {
+          if (errorCode(e) === "ENOENT") continue;
+          if (!["ENOTEMPTY", "EEXIST", "ENOTDIR"].includes(errorCode(e))) throw e;
+          leave(errorCode(e) === "ENOTDIR" ? "NOT_DIRECTORY" : "NOT_EMPTY");
+        }
+      }
+    }
   };
   if (before.state === "ABSENT") {
-    listDirectories();
+    directories(false);
     return outcome;
   }
   // No valid manifest: nothing gives permission to delete, whatever the file names suggest.
   if (before.state === "INVALID" || !before.manifest || !before.manifestFile) return outcome;
-  // The installer may still be running. Alive, not permitted to ask, or unknown: do nothing.
-  if (before.liveness !== "DEAD") {
+  // An install that is not recorded as finished may still have a running installer. Alive, not
+  // permitted to ask, or unknown: do nothing. A finished install was not asked about (null).
+  if (before.liveness !== null && before.liveness !== "DEAD") {
     outcome.aggregate = "BUSY";
     return outcome;
   }
@@ -107,9 +171,21 @@ export function uninstall(env: LeadEnv, workspace: string, host: Host, deadline:
     }
   }
 
+  // Host-side directories: only once every payload path is gone.
+  const allAbsent = rows.every((r) => resolved.has(r.path));
+  directories(allAbsent);
+
   // Anchors: only for rows whose payload path is now absent, and only with the full reviewed bytes.
+  // When the anchors' folder is no longer a real directory, nothing in it is looked at; it is
+  // listed below as an entry this version does not know.
   let stateClean = true;
-  for (const row of rows) {
+  let anchorsReachable = true;
+  try {
+    anchorsReachable = env.fs.lstatSync(at(OBJECTS_DIR), BIG).isDirectory();
+  } catch (e) {
+    if (errorCode(e) !== "ENOENT") throw e;
+  }
+  for (const row of anchorsReachable ? rows : []) {
     const rel = `${STATE_DIR}/${row.anchor}`;
     const path = at(rel);
     if (isAbsent(env, path)) continue;
@@ -166,12 +242,35 @@ export function uninstall(env: LeadEnv, workspace: string, host: Host, deadline:
     stateClean = false;
   }
 
-  // The manifest goes last, and only when every row is absent and the state holds nothing else.
-  const allAbsent = rows.every((r) => resolved.has(r.path));
+  // The two records: bytes that are not a record of this install are never removed.
+  const records: [string, { state: string; file: FileRead | null }, { file: FileRead | null }][] = [
+    [DIRECTORIES, before.directories, after.directories], [COMPLETE, before.complete, after.complete],
+  ];
+  for (const [rel, record] of records) {
+    if (record.state !== "INVALID") continue;
+    outcome.preserved.push({ path: rel, state: "STATE", why: "CHANGED" });
+    stateClean = false;
+  }
+
+  // The records and the manifest go last, and only when every row is absent and the state holds
+  // nothing else: first the directories record, then the record that install finished, then
+  // the manifest.
   if (allAbsent && stateClean && after.state === "VALID" && after.manifestFile
     && after.manifestFile.dev === before.manifestFile.dev && after.manifestFile.ino === before.manifestFile.ino
     && after.manifestFile.bytes.equals(before.manifestFile.bytes)) {
-    if (unlinkSame(env, at(MANIFEST), before.manifestFile) !== "CHANGED") {
+    let recordsGone = true;
+    for (const [rel, record, now] of records) {
+      if (!recordsGone || record.state !== "VALID" || !record.file) continue;
+      const result = sameRecord(record.file, now.file) ? unlinkSame(env, at(rel), record.file) : "CHANGED";
+      if (result === "REMOVED") outcome.stateRemoved.push(rel);
+      if (result === "CHANGED") {
+        outcome.preserved.push({ path: rel, state: "STATE", why: "CHANGED" });
+        recordsGone = false;
+      }
+    }
+    if (!recordsGone) {
+      outcome.preserved.push({ path: MANIFEST, state: "STATE", why: "NEEDED" });
+    } else if (unlinkSame(env, at(MANIFEST), before.manifestFile) !== "CHANGED") {
       outcome.stateRemoved.push(MANIFEST);
       // Only the two reserved directories, only when empty; rmdir refuses anything else.
       let empty = true;
@@ -194,6 +293,5 @@ export function uninstall(env: LeadEnv, workspace: string, host: Host, deadline:
     outcome.preserved.push({ path: MANIFEST, state: "STATE", why: "NEEDED" });
   }
   if (outcome.aggregate !== "NOT_INSTALLED" && outcome.aggregate !== "UNVERIFIABLE_PREPARATION") outcome.aggregate = "PARTIAL";
-  listDirectories();
   return outcome;
 }

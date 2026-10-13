@@ -118,7 +118,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
       const r = status(w);
       expect.soft([r.code, resultOf(r.out), rowStates(r.out, w)], `[intent-not-completion] a manifest without anchors or files is PARTIAL, all rows MISSING\n${r.out}${r.err}`)
         .toEqual([2, "PARTIAL", all("claude", "MISSING")]);
-      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 17");
+      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 20");
     }
     // Manifest and every anchor complete, but no file was published.
     {
@@ -164,6 +164,34 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
       expect.soft([extra.code, resultOf(extra.out)], `[result-table] an unexpected entry in the state directory means not INSTALLED\n${extra.out}`).toEqual([2, "PARTIAL"]);
       unlinkSync(at(w, ".orch-lead-install/extra"));
       expect.soft(resultOf(status(w).out), "[result-table] INSTALLED again without the entry").toBe("INSTALLED");
+      // The record that install finished is part of INSTALLED: without it, or with other bytes in it, the result is PARTIAL.
+      const finishedPath = at(w, ".orch-lead-install/complete");
+      const finishedBytes = readFileSync(finishedPath);
+      unlinkSync(finishedPath);
+      const unfinished = status(w);
+      expect.soft([unfinished.code, resultOf(unfinished.out), rowStates(unfinished.out, w), unfinished.out.includes("(manifest valid; install not recorded as finished; installer process")],
+        `[finished-record-required] every file in place, no record that install finished: PARTIAL\n${unfinished.out}`).toEqual([2, "PARTIAL", all("claude", "OWNED_MATCH"), true]);
+      writeFileSync(finishedPath, '{"schema":1,"install":"complete"}\n');
+      const forged = status(w);
+      expect.soft([forged.code, resultOf(forged.out), forged.out.includes(`record that install finished without the expected bytes: ${finishedPath}`)],
+        `[finished-record-required] a record with other bytes is not that record\n${forged.out}`).toEqual([2, "PARTIAL", true]);
+      writeFileSync(finishedPath, finishedBytes);
+      const finished = status(w);
+      expect.soft([resultOf(finished.out), finished.out.includes("(manifest valid; install recorded as finished)")], "[finished-record-required] INSTALLED again with the record").toEqual(["INSTALLED", true]);
+      // The same for the record of the directories install created.
+      const recordPath = at(w, ".orch-lead-install/directories.json");
+      const recordBytes = readFileSync(recordPath);
+      unlinkSync(recordPath);
+      const noRecord = status(w);
+      expect.soft([noRecord.code, resultOf(noRecord.out), noRecord.out.includes("directories recorded as created by install: no record")],
+        `[directories-record-required] no record of the directories: PARTIAL\n${noRecord.out}`).toEqual([2, "PARTIAL", true]);
+      writeFileSync(recordPath, recordBytes.toString("utf8").replace(".claude/skills/orch-lead/agents", ".claude/skills/orch-lead/../../other"));
+      const badRecord = status(w);
+      expect.soft([badRecord.code, resultOf(badRecord.out), badRecord.out.includes(`directories record without the expected bytes: ${recordPath}`)],
+        `[directories-record-required] a record that names another path is refused\n${badRecord.out}`).toEqual([2, "PARTIAL", true]);
+      writeFileSync(recordPath, recordBytes);
+      const recorded = status(w);
+      expect.soft([resultOf(recorded.out), recorded.out.includes("directories recorded as created by install: 5")], "[directories-record-required] INSTALLED again with the record").toEqual(["INSTALLED", true]);
       // The workspace folder is renamed: the manifest names the old path.
       const moved = join(base, "moved");
       renameSync(w, moved);
@@ -173,7 +201,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
       const un = lead("uninstall", ...args(moved));
       expect.soft([un.code, resultOf(un.out), tree(moved)], "[moved-workspace] uninstall then removes nothing").toEqual([2, "UNVERIFIABLE_PREPARATION", before]);
     }
-    expect(statuses.length).toBe(9);
+    expect(statuses.length).toBe(15);
     expect.soft(statuses.map(lastLine), "[activation-unverified] every status ends with the activation line").toEqual(statuses.map(() => ACTIVATION));
     expect.soft(statuses.filter((out) => /all files were written|activation: verified/.test(out)), "[activation-unverified] no status claims more").toEqual([]);
   });
@@ -210,7 +238,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
     };
     const status = lead("status", ...args);
     expect.soft([status.code, resultOf(status.out)], `status\n${status.out}${status.err}`).toEqual([2, "PARTIAL"]);
-    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 17 paths").toEqual(expected);
+    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 20 paths").toEqual(expected);
 
     const identity = () => Object.fromEntries(kept.map((rel) => [rel, idOf(at(w, rel))]));
     const content = () => [readFileSync(at(w, p("brief.md")), "utf8").endsWith("my own line\n"), sha(readFileSync(at(w, p("handoff.md")))), readFileSync(at(w, p("routing.md")), "utf8"),
@@ -240,19 +268,30 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
     expect.soft([second.code, resultOf(second.out), existsSync(at(w, ".orch-lead-install/manifest.json"))], "[edited-anchor-kept] and uninstall reports it").toEqual([2, "PARTIAL", true]);
     expect.soft(second.out, "[edited-anchor-kept] with its path").toContain(`state preserved ${editedAnchor}  (`);
 
-    // A complete uninstall leaves the host directories, and those refuse a new install.
+    // A complete uninstall leaves nothing behind in a workspace that was empty; a new install then works.
     const { w: clean } = workspace();
     const cleanArgs = ["--workspace", clean, "--host", "claude"];
     expect(lead("install", ...cleanArgs).code, "install").toBe(0);
     const done = lead("uninstall", ...cleanArgs);
-    expect.soft([done.code, resultOf(done.out)], `complete uninstall\n${done.out}${done.err}`).toEqual([0, "NOT_INSTALLED"]);
-    expect.soft(tree(clean), "[directories-left] uninstall removes no directory outside its state directory")
-      .toEqual(["dir .claude", "dir .claude/skills", `dir ${H}`, `dir ${H}/agents`, `dir ${H}/workflows`]);
+    expect.soft([done.code, resultOf(done.out), tree(clean)], `[clean-uninstall-leaves-nothing] uninstall removes the files, the state and the 5 directories install created\n${done.out}${done.err}`).toEqual([0, "NOT_INSTALLED", []]);
+    const again = lead("install", ...cleanArgs);
+    expect.soft([again.code, resultOf(again.out)], `[reinstall-works] install for the same host works again\n${again.out}${again.err}`).toEqual([0, "INSTALLED"]);
+
+    // A file of the user's inside the pack directory keeps it; install is refused while that directory exists,
+    // and a later uninstall has no record left and removes no directory.
+    writeFileSync(at(clean, `${H}/mine.txt`), "mine\n");
+    const left = lead("uninstall", ...cleanArgs);
+    const remaining = ["dir .claude", "dir .claude/skills", `dir ${H}`, `file ${H}/mine.txt ${sha("mine\n")}`];
+    expect.soft([left.code, resultOf(left.out), tree(clean)], `[pack-directory-refuses] the directory with the user's file stays, with those above it\n${left.out}${left.err}`).toEqual([0, "NOT_INSTALLED", remaining]);
+    expect.soft([left.out.includes(`dir left        ${at(clean, H)}  (not empty)`), left.out.includes("a new install for this host is refused while its pack directory exists")],
+      "[pack-directory-refuses] uninstall names the directory, the reason and the consequence").toEqual([true, true]);
     const refused = lead("install", ...cleanArgs);
-    expect.soft([refused.code, resultOf(refused.out)], "a new install is refused while the empty pack directory exists").toEqual([2, "CONFLICT"]);
-    for (const rel of [`${H}/workflows`, `${H}/agents`, H]) {
-      attempt(() => rmdirSync(at(clean, rel)));
-    }
-    expect.soft(lead("install", ...cleanArgs).code, "and accepted once the user deleted it").toBe(0);
+    expect.soft([refused.code, resultOf(refused.out), tree(clean)], `[pack-directory-refuses] a new install is refused while the pack directory exists\n${refused.out}`).toEqual([2, "CONFLICT", remaining]);
+    attempt(() => unlinkSync(at(clean, `${H}/mine.txt`)));
+    const later = lead("uninstall", ...cleanArgs);
+    expect.soft([later.code, tree(clean), later.out.includes(`dir left        ${at(clean, H)}  (no record that install created it)`)],
+      `[left-directory-stays] a later uninstall has no record and removes no directory\n${later.out}`).toEqual([0, remaining.slice(0, 3), true]);
+    for (const rel of [H, ".claude/skills", ".claude"]) attempt(() => rmdirSync(at(clean, rel)));
+    expect.soft(lead("install", ...cleanArgs).code, "[left-directory-stays] and install works once the user deleted them").toBe(0);
   });
 });

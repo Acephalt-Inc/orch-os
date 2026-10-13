@@ -15,11 +15,17 @@ orch lead install --workspace PATH --host claude
 orch lead install --workspace PATH --host codex
 ```
 
-Install creates 17 files: 16 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`. Install also creates the state directory `.orch-lead-install` with a manifest and one anchor file per installed file. Each installed file and its anchor are one file with two names. On macOS the installed files, the anchors and the manifest can be read and written by your user only.
+Install creates 20 files: 19 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`. Install also creates the state directory `.orch-lead-install` with a manifest, one anchor file per installed file, a record of the directories it created and, as its last step, a record that it finished. Each installed file and its anchor are one file with two names. On macOS the installed files and the files of the state directory can be read and written by your user only.
 
 Install first checks every path it would create. If any of them exists, install stops and creates nothing. This includes an existing `CLAUDE.md` or `AGENTS.md`, an existing pack directory and an existing `.orch-lead-install`. Install then prints every path it will create, and creates nothing until that list has been written. With `--dry-run`, install prints the list and creates nothing.
 
 Install never changes or removes a file that already exists. If another program creates one of the paths after the check, install stops at that path, leaves that file unchanged and reports `PARTIAL`. Files created before the stop stay until you run uninstall.
+
+## What the pack contains
+
+The pack holds the lead skill, five role files, a task brief, a handoff form, a routing table, nine workflow guides and one sample file. Four of the guides are about notes: `workflows/notes.md`, `workflows/memory.md`, `workflows/knowledge.md` and `workflows/learning.md`. The bootstrap file and the first lines of the skill name the skill, `workflows/notes.md` and `workflows/memory.md`, in that order, as the files to read before an answer.
+
+The guides describe notes kept in `workspace-notes/personal/` and `workspace-notes/shared/` inside the workspace, and a rule in the workspace-root `.ignore` file. Install does not create `workspace-notes/` or `.ignore`. The guides tell the assistant to ask before the first personal save and before the `.ignore` rule is added. These commands do not check that the assistant does so. Status and uninstall do not read or remove `workspace-notes/` or `.ignore`.
 
 ## Status
 
@@ -27,7 +33,7 @@ Install never changes or removes a file that already exists. If another program 
 orch lead status --workspace PATH --host claude
 ```
 
-Status reads only. It prints one state for each of the 17 paths:
+Status reads only. It prints one state for each of the 20 paths:
 
 | State | Meaning |
 |---|---|
@@ -37,14 +43,16 @@ Status reads only. It prints one state for each of the 17 paths:
 | `FOREIGN` | something else is at this path; equal content does not make it the installed file |
 | `UNVERIFIABLE` | the path exists and its ownership cannot be established |
 
+A path below a folder that was replaced by a link is `UNVERIFIABLE`. Status and uninstall do not look at anything behind that link.
+
 It then prints one result:
 
 | Result | Meaning |
 |---|---|
-| `INSTALLED` | all 17 files are `OWNED_MATCH` and the state directory holds nothing unexpected |
+| `INSTALLED` | all 20 files are `OWNED_MATCH`, install recorded that it finished, and the state directory holds nothing unexpected |
 | `NOT_INSTALLED` | the workspace has no state directory |
 | `PARTIAL` | the manifest is valid and something is missing, changed or foreign |
-| `BUSY` | as `PARTIAL`, and the process id recorded by install is in use |
+| `BUSY` | as `PARTIAL`, the install is not recorded as finished, and the process id recorded by install is in use |
 | `UNVERIFIABLE_PREPARATION` | a state directory exists without a manifest this version accepts |
 | `CONFLICT` | printed by install only: a path already exists |
 
@@ -56,11 +64,11 @@ Status always ends with `host activation: unverified`.
 orch lead uninstall --workspace PATH --host claude
 ```
 
-Uninstall removes an installed file only when it is still the file install created and its content is unchanged. A file you edited, a file that replaced an installed file and a file install did not create stay in place and are listed. Uninstall removes the state directory only when no listed path remains. Uninstall never removes a directory outside `.orch-lead-install`.
+Uninstall removes an installed file only when it is still the file install created and its content is unchanged. A file you edited, a file that replaced an installed file and a file install did not create stay in place and are listed. Uninstall removes the state directory only when no listed path remains.
 
-After a complete uninstall the empty pack directory remains. Install for the same host is refused until you delete that empty directory yourself.
+When every installed file is gone, uninstall removes the directories that install created, deepest first, and only those that are empty. A directory that existed before install stays. A directory that holds a file install did not create stays, with every directory above it. Uninstall lists each directory it left and the reason. After an uninstall that left no pack directory, install for the same host works again. While the pack directory exists, install for that host is refused. A later uninstall has no record of a directory that an earlier one left and does not remove it. Delete it yourself.
 
-Uninstall refuses with `BUSY` while the process id recorded by install is in use.
+Uninstall asks whether the process id recorded by install is in use only when the install is not recorded as finished. In that case uninstall refuses with `BUSY` while the id is in use. When that process has ended, uninstall removes the files and directories that the unfinished install recorded.
 
 ## Exit codes
 
@@ -78,10 +86,28 @@ They read no ORCH configuration and write nothing outside the workspace. They st
 
 - A collision after the first check can leave a partial install. Status lists it and uninstall removes the files install created.
 - A crash or kill while install prepares its state directory can leave files that uninstall will not remove. Status then reports `UNVERIFIABLE_PREPARATION` or `PARTIAL`. Run uninstall, read what it preserved, then delete the `.orch-lead-install` directory yourself.
-- The check on the recorded process id is a question, not a lock. If another program now has that id, uninstall reports `BUSY` until that program ends.
-- A program that changes a file between the last check and the removal is not defended against. Do not run two uninstalls at once.
+- An install that was killed before it recorded its directories leaves them in place. Uninstall then removes its state and lists those directories. Delete the empty directories yourself before you install again.
+- For an install that is not recorded as finished, the check on the recorded process id is a question, not a lock. If another program now has that id, uninstall reports `BUSY` until that program ends.
+- A program that changes a file or a folder between the last check and the removal is not defended against. Do not run two uninstalls at once.
+- If a folder that install created was replaced by a link, uninstall removes nothing below it and keeps the state directory. Put the folder back, then run uninstall again.
 - If a file you want to keep is at one of the pack's paths, uninstall keeps the state directory. Move that file away and run uninstall again. If you edited an installed file in place, its anchor is a second name of your edited file and uninstall keeps that too. Delete the `.orch-lead-install` directory yourself when you no longer need it.
 - The manifest records the workspace path. After the workspace folder is moved or renamed, status reports `UNVERIFIABLE_PREPARATION`.
 - A host can find the skill directory of a partial install on its own, before the bootstrap file exists.
 - The pack is instructions for an assistant. It grants no permission, enforces no limit on workers, spending or context, and is not a working lead session.
-- Windows link, junction and file-permission behaviour has not been measured.
+- Windows link, junction, directory-identity and file-permission behaviour has not been measured.
+
+### Limits of the notes guides
+
+These files tell the assistant how to save, find and use notes. They do not enforce privacy, acceptance, size limits, deletion or who can write a file.
+
+Personal content must not influence a shared operation. This version gives the assistant a read order, named folders and a recovery procedure; it cannot guarantee that the assistant follows them.
+
+The ignore rule reduces accidental discovery by tools that honor it. It does not prevent direct reads, every recursive listing, forced version-control additions or access by other software. Filenames and index text can reveal personal information too.
+
+If personal content enters a conversation, asking the assistant to rebuild from shared sources does not remove that content or prove it had no influence. A corrected answer or note does not erase earlier conversation records or copies. Use a separately controlled environment when separation must be enforced.
+
+A saved note may be missed in a later session. File presence is not evidence that the assistant read it. Saving a lesson does not train the model or demonstrate an improvement.
+
+This version provides no scheduled work, automatic resumption, remote knowledge connection, upload, crash recovery, backup erasure or safe concurrent writes. It cannot grant the host permission to read or write files.
+
+The revised text has not yet been tested with real assistants or on Windows 11. The earlier results were individual observations on one Mac in non-interactive sessions, not pass rates. A later program's ability to read these notes must be tested before it is promised.

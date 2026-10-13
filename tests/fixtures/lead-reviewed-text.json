@@ -7,27 +7,30 @@
   "limit"
  ],
  "sources": {
-  "templates/lead/SKILL.md": "db9c31178c7b2759d64f2f09f3a9da8b30ef0e1a76046b2645acbcde5a7c5231",
+  "templates/lead/SKILL.md": "85e2a5f8d47ffe8d0174126e6b496a8e19adca776fac1aba063d307a9ed82b87",
   "templates/lead/agents/advisor.md": "5232653ac1c31e80d7a2c842472887a7ce00f62ab9e82a9e48edb37130be355d",
   "templates/lead/agents/builder.md": "736b5d085879493b3fadf2e3fb5ad6702298107c076c11765160c9a0979fb0e4",
   "templates/lead/agents/mechanical.md": "4651955f2e1f9131bfaf373ed9b4ae18271aad52a2a7c3df3139ba1197f68f62",
   "templates/lead/agents/reader.md": "80309b9ecde5d3f6d7790213f8596fec4d780381b31ad9e0c44d804b796e1b75",
   "templates/lead/agents/verifier.md": "aa9b98d10cc513d7bc1b7b4b4b864d505387e2267275a27c7e4d1eeccf53d242",
-  "templates/lead/bootstrap-claude.md": "32b36c39c7392f33f0d7f8f5606b4209b32ba5649008964b8e8473bc853c38c5",
-  "templates/lead/bootstrap-codex.md": "4d5d4cc985e5ef18f186335d4d406872a30fe014ce649c06e67797d05124f3c6",
+  "templates/lead/bootstrap-claude.md": "78620ed144bacdb52983d702c4551a256169cb3157aa8a2b317078a466264496",
+  "templates/lead/bootstrap-codex.md": "20d18389a5393db04673ee95096e43e7bff9ea58791d51e85e2899a9dd1eab70",
   "templates/lead/brief.md": "9aa59257d174f1a7c0bf8aa5e018c440f7a5868b9e93d2007308c8f513216e24",
   "templates/lead/handoff.md": "183ee785a86c99e13cf6349e961fe2d7636449bf5f371d24ec1cae36b2ffd62b",
   "templates/lead/routing.md": "0431228857660f6e143bdcda6ad7a3280ecf21dfdc1fb0961704799921cd4489",
   "templates/workflows/call-review.md": "7f43620f8c4975eef0dea5db8976c3536b38dfc1925f1814cf1e690f4cb59930",
-  "templates/workflows/company-knowledge.md": "027184f5044a01486d554bfb2d94887f32de35f159c3cdd8eaa98ce79d0b9143",
+  "templates/workflows/company-knowledge.md": "bb77bbebf33362013af281a71095d81a2b1878236ee6c8661b9a07a4cf0c659a",
   "templates/workflows/crm-review.md": "6978fdf07c83cf8ecc54b0df307b7a14f4a40573a500b724aaf5044d9722f20d",
+  "templates/workflows/knowledge.md": "1a05e429caee22ec4b7b7557f453bd86c1d5c919938fbdac1e1efa6aab3e4624",
+  "templates/workflows/learning.md": "692235ed3265f395e970623e172af938fc27c660971e760e59dc24c721692995",
   "templates/workflows/market-research.md": "49b34071638aadf6ee50cb4a9852f7f576b3cf78b76bf7b5ae4be8e6f737a464",
   "templates/workflows/materials.md": "4951748bf820602585c06f4459e928a59c7469e841e402e129df92d89906e50a",
-  "templates/workflows/memory.md": "dcb4f31e0a6f06175ff3a6fa71eab29454fdba0c3192a8002e6c263ade2d97b1",
+  "templates/workflows/memory.md": "80170839ed41a52e7fcb953f081b484d23b1552b134d3c8e341673dfe7e298aa",
+  "templates/workflows/notes.md": "2eba8925eb784b15f3eae41c2902c54d1b5ba54a9c99744e7eb8daf79c19edc7",
   "templates/workflows/sample-customers.csv": "89a778c53ff3441b39007b86ddd3b83b7c2940441c063fb9438b63e8cc3260a2"
  },
  "documents": {
-  "docs/lead-install.md": "cfc2b586569985b4ad92c0caa55ee62cffffda6527601995f8631e219d86a8e4"
+  "docs/lead-install.md": "3f8c9abd3dad969d020bea47215af007732e7f3bf28a334e545aa55b6b146dbb"
  },
  "inventory": {
   "claude": [
@@ -80,6 +83,14 @@
     ".claude/skills/orch-lead/workflows/crm-review.md"
    ],
    [
+    "templates/workflows/knowledge.md",
+    ".claude/skills/orch-lead/workflows/knowledge.md"
+   ],
+   [
+    "templates/workflows/learning.md",
+    ".claude/skills/orch-lead/workflows/learning.md"
+   ],
+   [
     "templates/workflows/market-research.md",
     ".claude/skills/orch-lead/workflows/market-research.md"
    ],
@@ -90,6 +101,10 @@
    [
     "templates/workflows/memory.md",
     ".claude/skills/orch-lead/workflows/memory.md"
+   ],
+   [
+    "templates/workflows/notes.md",
+    ".claude/skills/orch-lead/workflows/notes.md"
    ],
    [
     "templates/workflows/sample-customers.csv",
@@ -150,6 +165,14 @@
     ".agents/skills/orch-lead/workflows/crm-review.md"
    ],
    [
+    "templates/workflows/knowledge.md",
+    ".agents/skills/orch-lead/workflows/knowledge.md"
+   ],
+   [
+    "templates/workflows/learning.md",
+    ".agents/skills/orch-lead/workflows/learning.md"
+   ],
+   [
     "templates/workflows/market-research.md",
     ".agents/skills/orch-lead/workflows/market-research.md"
    ],
@@ -162,6 +185,10 @@
     ".agents/skills/orch-lead/workflows/memory.md"
    ],
    [
+    "templates/workflows/notes.md",
+    ".agents/skills/orch-lead/workflows/notes.md"
+   ],
+   [
     "templates/workflows/sample-customers.csv",
     ".agents/skills/orch-lead/workflows/sample-customers.csv"
    ],
@@ -172,8 +199,8 @@
   ]
  },
  "pack_hash": {
-  "claude": "5747d1a1a7d2f638773bc912ec370f947e4189e4a4cbbe35474063be55c3dd87",
-  "codex": "651395a7a98f9e7c1e445f0dfb44ecbfc9a734c1bf4c00eee4734d60a884dc8c"
+  "claude": "776f67a64c07094bfa4a17e30d138cae26da83d30a736a4ce48dea281e8de15d",
+  "codex": "25edc9ac39345d739e0ff850eedc9363d09238f205e6c7480feeedf7be508d85"
  },
  "units": {
   "templates/lead/SKILL.md": [
@@ -182,8 +209,56 @@
     "class": "explanatory"
    },
    {
-    "text": "description: Use when a user asks for a result with several steps and wants the current agent to plan, delegate suitable work, check it and finish.",
+    "text": "description: Use for tasks in this workspace, including one-line requests to remember, recall, correct or forget notes.",
     "class": "explanatory"
+   },
+   {
+    "text": "Before any task command, use the user's stated personal or shared context; if unclear, use shared sources and ask before reading personal notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For shared work, do not open, list or search `workspace-notes/personal/`, including its index, filenames and source copies.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not run a workspace-wide listing or search: no `find . -type f`, `find workspace-notes -type f`, bare `rg --files`, recursive search from the workspace root, or equivalent tree walk.",
+    "class": "instruction"
+   },
+   {
+    "text": "Name the one allowed folder in each listing or search, such as `rg --files workspace-notes/shared` or `find workspace-notes/shared -type f`; read a named task file directly.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read one guide, index or note per command; do not print several notes files with `cat`, `head`, `tail`, a wildcard or a loop, or batch guides with notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For every request, including one-line requests and acceptance replies, finish these reads before answering or doing task work: this skill, [workflows/notes.md](workflows/notes.md), then [workflows/memory.md](workflows/memory.md), in that order and one per command.",
+    "class": "instruction"
+   },
+   {
+    "text": "Next read `workspace-notes/personal/INDEX.md` for personal work, or `workspace-notes/shared/INDEX.md` for shared or unclear work; read each relevant entry separately and apply active preferences before answering.",
+    "class": "instruction"
+   },
+   {
+    "text": "For personal work, read the shared index afterward only if needed; a missing index means no registered notes, not permission to search the workspace.",
+    "class": "instruction"
+   },
+   {
+    "text": "Treat “remember that” as a save request: propose the exact personal wording and file, then wait for acceptance; “yes” without that proposal is not enough.",
+    "class": "instruction"
+   },
+   {
+    "text": "Before a knowledge question or research, read [workflows/knowledge.md](workflows/knowledge.md); before saving a reusable correction or reviewing lessons, read [workflows/learning.md](workflows/learning.md).",
+    "class": "instruction"
+   },
+   {
+    "text": "Personal content must not influence a shared operation.",
+    "class": "instruction"
+   },
+   {
+    "text": "If names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in [workflows/notes.md](workflows/notes.md); do not repeat the broad command or automatically request a fresh conversation.",
+    "class": "instruction"
    },
    {
     "text": "# Lead the task",
@@ -530,13 +605,101 @@
   ],
   "templates/lead/bootstrap-claude.md": [
    {
-    "text": "For tasks in this workspace, read .claude/skills/orch-lead/SKILL.md and follow its lead instructions within the user's request and the host's permissions.",
+    "text": "Before any task command, use the user's stated personal or shared context; if unclear, use shared sources and ask before reading personal notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For shared work, do not open, list or search `workspace-notes/personal/`, including its index, filenames and source copies.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not run a workspace-wide listing or search: no `find . -type f`, `find workspace-notes -type f`, bare `rg --files`, recursive search from the workspace root, or equivalent tree walk.",
+    "class": "instruction"
+   },
+   {
+    "text": "Name the one allowed folder in each listing or search, such as `rg --files workspace-notes/shared` or `find workspace-notes/shared -type f`; read a named task file directly.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read one guide, index or note per command; do not print several notes files with `cat`, `head`, `tail`, a wildcard or a loop, or batch guides with notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For every request, including one-line requests and acceptance replies, read `.claude/skills/orch-lead/SKILL.md`, then `.claude/skills/orch-lead/workflows/notes.md`, then `.claude/skills/orch-lead/workflows/memory.md`, in that order and one per command, before answering or doing task work.",
+    "class": "instruction"
+   },
+   {
+    "text": "Next read `workspace-notes/personal/INDEX.md` for personal work, or `workspace-notes/shared/INDEX.md` for shared or unclear work; read each relevant entry separately and apply active preferences before answering.",
+    "class": "instruction"
+   },
+   {
+    "text": "For personal work, read the shared index afterward only if needed; a missing index means no registered notes, not permission to search the workspace.",
+    "class": "instruction"
+   },
+   {
+    "text": "Treat “remember that” as a save request: propose the exact personal wording and file, then wait for acceptance; “yes” without that proposal is not enough.",
+    "class": "instruction"
+   },
+   {
+    "text": "Personal content must not influence a shared operation.",
+    "class": "instruction"
+   },
+   {
+    "text": "If names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in `.claude/skills/orch-lead/workflows/notes.md`; do not repeat the broad command or automatically request a fresh conversation.",
+    "class": "instruction"
+   },
+   {
+    "text": "Follow the lead instructions within the user's request and the host's permissions.",
     "class": "instruction"
    }
   ],
   "templates/lead/bootstrap-codex.md": [
    {
-    "text": "For tasks in this workspace, read .agents/skills/orch-lead/SKILL.md and follow its lead instructions within the user's request and the host's permissions.",
+    "text": "Before any task command, use the user's stated personal or shared context; if unclear, use shared sources and ask before reading personal notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For shared work, do not open, list or search `workspace-notes/personal/`, including its index, filenames and source copies.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not run a workspace-wide listing or search: no `find . -type f`, `find workspace-notes -type f`, bare `rg --files`, recursive search from the workspace root, or equivalent tree walk.",
+    "class": "instruction"
+   },
+   {
+    "text": "Name the one allowed folder in each listing or search, such as `rg --files workspace-notes/shared` or `find workspace-notes/shared -type f`; read a named task file directly.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read one guide, index or note per command; do not print several notes files with `cat`, `head`, `tail`, a wildcard or a loop, or batch guides with notes.",
+    "class": "instruction"
+   },
+   {
+    "text": "For every request, including one-line requests and acceptance replies, read `.agents/skills/orch-lead/SKILL.md`, then `.agents/skills/orch-lead/workflows/notes.md`, then `.agents/skills/orch-lead/workflows/memory.md`, in that order and one per command, before answering or doing task work.",
+    "class": "instruction"
+   },
+   {
+    "text": "Next read `workspace-notes/personal/INDEX.md` for personal work, or `workspace-notes/shared/INDEX.md` for shared or unclear work; read each relevant entry separately and apply active preferences before answering.",
+    "class": "instruction"
+   },
+   {
+    "text": "For personal work, read the shared index afterward only if needed; a missing index means no registered notes, not permission to search the workspace.",
+    "class": "instruction"
+   },
+   {
+    "text": "Treat “remember that” as a save request: propose the exact personal wording and file, then wait for acceptance; “yes” without that proposal is not enough.",
+    "class": "instruction"
+   },
+   {
+    "text": "Personal content must not influence a shared operation.",
+    "class": "instruction"
+   },
+   {
+    "text": "If names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in `.agents/skills/orch-lead/workflows/notes.md`; do not repeat the broad command or automatically request a fresh conversation.",
+    "class": "instruction"
+   },
+   {
+    "text": "Follow the lead instructions within the user's request and the host's permissions.",
     "class": "instruction"
    }
   ],
@@ -758,27 +921,27 @@
   ],
   "templates/workflows/company-knowledge.md": [
    {
-    "text": "# Company knowledge question",
+    "text": "# Answer a shared knowledge question",
     "class": "explanatory"
    },
    {
-    "text": "Use only the approved workspace and accessible sources.",
+    "text": "Finish the shared startup reads in [notes.md](notes.md), then read [knowledge.md](knowledge.md).",
     "class": "instruction"
    },
    {
-    "text": "Cite the exact source revision or date.",
+    "text": "Use named shared sources and cite the entry date, source date and source section.",
     "class": "instruction"
    },
    {
-    "text": "Distinguish a retrieved statement from an approved policy.",
+    "text": "Distinguish a source's claim from a policy the user confirmed.",
     "class": "instruction"
    },
    {
-    "text": "Do not create or claim a firm knowledge store.",
+    "text": "If personal material was exposed or used, follow the matching recovery rule in [notes.md](notes.md).",
     "class": "instruction"
    },
    {
-    "text": "If the host may inject personal context, restrict the answer to synthetic material until the host configuration is checked; do not copy personal material into a work output.",
+    "text": "Do not copy personal material into the answer or a shared note.",
     "class": "instruction"
    }
   ],
@@ -813,6 +976,190 @@
    },
    {
     "text": "If the source is missing, report that specific gap.",
+    "class": "instruction"
+   }
+  ],
+  "templates/workflows/knowledge.md": [
+   {
+    "text": "# Keep a knowledge library",
+    "class": "explanatory"
+   },
+   {
+    "text": "Finish the startup reads in [notes.md](notes.md) before using the library.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use permitted workspace files; do not connect to an external system, fetch a remote source or upload material.",
+    "class": "instruction"
+   },
+   {
+    "text": "For an outside source, ask for an allowed copy inside the workspace.",
+    "class": "instruction"
+   },
+   {
+    "text": "Keep source documents intact unless the user asks to edit, move or delete them.",
+    "class": "instruction"
+   },
+   {
+    "text": "Before new research, search the allowed index for the topic and likely alternate words.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read each matching entry separately, then its cited local files; do not gather notes through a workspace search.",
+    "class": "instruction"
+   },
+   {
+    "text": "If entries answer the question, use them and do not repeat the research.",
+    "class": "instruction"
+   },
+   {
+    "text": "If none match, name the index checked and say no relevant entry was found.",
+    "class": "instruction"
+   },
+   {
+    "text": "To add a source, read the file and create a `source` entry with its title, stated date or `unknown`, relative filename and section.",
+    "class": "instruction"
+   },
+   {
+    "text": "Describe what the source says without calling it verified fact.",
+    "class": "instruction"
+   },
+   {
+    "text": "To register research, read the finished file and its cited local sources, then create a `research` entry with one conclusion and a link to the full result.",
+    "class": "instruction"
+   },
+   {
+    "text": "Record the research date, source dates, sections, checks, limits and open questions; label missing evidence.",
+    "class": "instruction"
+   },
+   {
+    "text": "Update a matching entry instead of making a duplicate; add no standing instructions or lookup reminders.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use [memory.md](memory.md)'s acceptance step for personal entries.",
+    "class": "instruction"
+   },
+   {
+    "text": "Write the entry and index, read each back separately, and report the entry filename.",
+    "class": "instruction"
+   },
+   {
+    "text": "In an answer based on an entry, include: `entry <relative filename>, dated <date>; source <relative filename>, dated <date or unknown>, section <heading>`.",
+    "class": "instruction"
+   },
+   {
+    "text": "Name the entry's relevant section too if it has one; otherwise say `entry body`.",
+    "class": "instruction"
+   },
+   {
+    "text": "Recheck a source if its age or changed contents could affect the answer; state what remains unsettled.",
+    "class": "instruction"
+   }
+  ],
+  "templates/workflows/learning.md": [
+   {
+    "text": "# Learn from corrections",
+    "class": "explanatory"
+   },
+   {
+    "text": "Finish the startup reads in [notes.md](notes.md) before recording or reviewing lessons.",
+    "class": "instruction"
+   },
+   {
+    "text": "For a reusable shared correction, write or update a `lesson` entry with status `candidate` in the same turn.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not turn a request for this task alone into lasting guidance.",
+    "class": "instruction"
+   },
+   {
+    "text": "For personal corrections, follow [memory.md](memory.md)'s acceptance step; save in the accepting turn and say when nothing has been saved.",
+    "class": "instruction"
+   },
+   {
+    "text": "Record the mistake, correction, reason, when it applies and how to check it next time.",
+    "class": "instruction"
+   },
+   {
+    "text": "Record each distinct occurrence with its date and local evidence or user-statement reference.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not count a repeated description or a copied report as another occurrence.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read the saved entry and index separately and tell the user the filename.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use the correction for the current task; do not apply a candidate as standing guidance later.",
+    "class": "instruction"
+   },
+   {
+    "text": "On the second distinct occurrence, update the same candidate and propose procedure steps and a check.",
+    "class": "instruction"
+   },
+   {
+    "text": "Wait for acceptance of that exact proposal before changing its type, status or standing rules.",
+    "class": "instruction"
+   },
+   {
+    "text": "For “review what you learned”, read the allowed index and relevant lessons separately.",
+    "class": "instruction"
+   },
+   {
+    "text": "Make no file changes during review, including dates, indexes and review reports.",
+    "class": "instruction"
+   },
+   {
+    "text": "Give at most five numbered one-line proposals, each with entry name, action, reason and exact change.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use `promote`, `expire` or `write as procedure`; prefer a procedure for two distinct occurrences.",
+    "class": "instruction"
+   },
+   {
+    "text": "If a change needs more than one line, offer a separate preview and leave it unaccepted.",
+    "class": "instruction"
+   },
+   {
+    "text": "If nothing merits a change, say so and give no proposals.",
+    "class": "instruction"
+   },
+   {
+    "text": "Change only the individual proposals the user accepts.",
+    "class": "instruction"
+   },
+   {
+    "text": "Reread the entry before applying an accepted proposal; stop if it changed since review.",
+    "class": "instruction"
+   },
+   {
+    "text": "To promote, set status to `active` and keep the evidence and limits.",
+    "class": "instruction"
+   },
+   {
+    "text": "To expire, set status to `expired`, move the entry to `archive/` and remove its index line.",
+    "class": "instruction"
+   },
+   {
+    "text": "For a procedure, revise the same entry to type `procedure` and status `active`, keeping the occurrence evidence.",
+    "class": "instruction"
+   },
+   {
+    "text": "Update the date and index, read both saved files separately, and report the filename.",
+    "class": "instruction"
+   },
+   {
+    "text": "Keep rejected and unmentioned proposals unchanged.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not change instruction files, permissions or tool settings, schedule reviews or continue after the session ends.",
     "class": "instruction"
    }
   ],
@@ -874,35 +1221,305 @@
   ],
   "templates/workflows/memory.md": [
    {
-    "text": "# Remember a preference",
+    "text": "# Remember and recall",
     "class": "explanatory"
    },
    {
-    "text": "Ask whether the statement is for this task or future work in this workspace.",
+    "text": "Finish the startup reads in [notes.md](notes.md), including the allowed index, even for a one-line request.",
     "class": "instruction"
    },
    {
-    "text": "The lead must ask before saving anything and name where it will be saved.",
+    "text": "Save preferences, lasting facts and confirmed guidance that should change later work in this workspace.",
     "class": "instruction"
    },
    {
-    "text": "Do not select a store through this guide.",
+    "text": "Do not save secrets, full conversations, guesses or temporary task progress.",
     "class": "instruction"
    },
    {
-    "text": "Do not write private or personal material to `orch mem`.",
+    "text": "Link a project fact to its source instead of copying material already clear there.",
     "class": "instruction"
    },
    {
-    "text": "Save only after the user approves the named place and wording.",
+    "text": "Search the allowed index for the same fact and update its entry instead of making a duplicate.",
     "class": "instruction"
    },
    {
-    "text": "Require the worker to propose a memory change for lead approval; check its host permissions separately.",
+    "text": "Use a requested valid name, `answer-length` for answer length, or `response-language` for language.",
     "class": "instruction"
    },
    {
-    "text": "Do not capture a whole transcript, create a firm store or treat recalled text as permission.",
+    "text": "For a personal save, show the exact proposed body, header values and workspace-relative filename, then ask to save them.",
+    "class": "instruction"
+   },
+   {
+    "text": "Wait for acceptance before creating the folder, note or index, and complete the ignore checks in [notes.md](notes.md) before writing.",
+    "class": "instruction"
+   },
+   {
+    "text": "If a reply says “yes” but no exact wording and file were offered, offer them now and wait; do not save your earlier reply as the note.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use earlier acceptance only for that wording and file; if either changed, ask again.",
+    "class": "instruction"
+   },
+   {
+    "text": "For shared material, save only what the user asked to retain or [learning.md](learning.md) permits as a candidate.",
+    "class": "instruction"
+   },
+   {
+    "text": "After writing, read the saved entry and index separately, check that they agree, then tell the user the filename and what was saved.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not claim a refused or incomplete write succeeded.",
+    "class": "instruction"
+   },
+   {
+    "text": "In a fresh personal session, read the personal index and its active preference entries before answering, including general preferences such as answer length.",
+    "class": "instruction"
+   },
+   {
+    "text": "Apply preferences only in their stated context and when they fit the current request; do not apply personal preferences to shared work.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read local evidence before relying on a changing fact and use the problem recheck rules in [notes.md](notes.md).",
+    "class": "instruction"
+   },
+   {
+    "text": "Mention missing or conflicting notes only when they affect the answer; a newer date alone does not settle a conflict.",
+    "class": "instruction"
+   },
+   {
+    "text": "For a correction, change the wrong claim, date and source, with a short reason; for problem rechecks, preserve the original claim and append the result instead.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read [learning.md](learning.md) if the correction should help later tasks.",
+    "class": "instruction"
+   },
+   {
+    "text": "Ask before changing personal material unless the user accepted that exact correction and file.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read back the entry and index and say which file changed.",
+    "class": "instruction"
+   },
+   {
+    "text": "For “forget”, find the note in the allowed folder and resolve an ambiguous match before deleting.",
+    "class": "instruction"
+   },
+   {
+    "text": "Remove its entry, index line and copies you created in that folder; check that folder for remaining references and correct them.",
+    "class": "instruction"
+   },
+   {
+    "text": "Keep cited source documents unless the user also asked to delete them.",
+    "class": "instruction"
+   },
+   {
+    "text": "Report files removed and any known copy you could not remove.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not claim to erase earlier conversations or backups, or restore a forgotten note from an old summary.",
+    "class": "instruction"
+   }
+  ],
+  "templates/workflows/notes.md": [
+   {
+    "text": "# Use workspace notes",
+    "class": "explanatory"
+   },
+   {
+    "text": "Keep notes in `workspace-notes/personal/` or `workspace-notes/shared/` inside the workspace.",
+    "class": "instruction"
+   },
+   {
+    "text": "Keep personal titles, sources and summaries in the personal folder; do not derive shared notes from them.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use one `INDEX.md` per folder, `entries/<name>.md` for notes, `files/` for sources and research, and `archive/` for expired entries.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use lowercase letters, digits and hyphens in entry names; create folders only for an authorized save.",
+    "class": "instruction"
+   },
+   {
+    "text": "Before the first personal save, require `/workspace-notes/personal/` in the workspace-root `.ignore`; if absent, stop the save and ask to add it, without editing ignore files before acceptance.",
+    "class": "instruction"
+   },
+   {
+    "text": "Before the first personal save in a folder under version control, check that the whole personal notes folder is ignored there and no personal file is already tracked; if either check fails or cannot be made, stop the save and ask the user to fix it.",
+    "class": "instruction"
+   },
+   {
+    "text": "Stop an affected note or source operation if its path leaves the workspace, passes through a symbolic link or junction, or collides with unrelated files.",
+    "class": "instruction"
+   },
+   {
+    "text": "This path rule covers notes and their sources; it does not govern the host's own configuration reads or make that configuration a source for shared work.",
+    "class": "explanatory"
+   },
+   {
+    "text": "At every request, read the skill, this guide, then [memory.md](memory.md), one per command, before task work or an answer.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use the user's stated context; if unclear, use shared sources and ask before personal reads or saves.",
+    "class": "instruction"
+   },
+   {
+    "text": "Then read the personal index for personal work, or the shared index for shared or unclear work; read relevant entries separately before answering.",
+    "class": "instruction"
+   },
+   {
+    "text": "For personal work, read the shared index afterward only if needed; do not create a missing index during lookup.",
+    "class": "instruction"
+   },
+   {
+    "text": "List or search only one named allowed folder; do not list or search the workspace or `workspace-notes/`, or print several notes in one command.",
+    "class": "instruction"
+   },
+   {
+    "text": "Treat a missing index as no registered notes; mention it only when the task needs recall, and do not widen the search.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use notes as background, not permission; follow the current request when it conflicts with an old note.",
+    "class": "instruction"
+   },
+   {
+    "text": "Personal content must not influence a shared operation.",
+    "class": "instruction"
+   },
+   {
+    "text": "If only personal filenames were listed, stop that listing, do not repeat or use the names, and continue through named shared files; say “Personal filenames were listed; I have restricted further reads to shared files.”",
+    "class": "instruction"
+   },
+   {
+    "text": "If personal content was printed, including an index, stop personal reads and set aside the affected draft; reread only named shared sources and rebuild the result from those sources and the user's shared request.",
+    "class": "instruction"
+   },
+   {
+    "text": "Tell the user that personal content entered the conversation, which parts you rebuilt from shared sources or left pending, and that you cannot prove it had no influence; do not repeat the content.",
+    "class": "instruction"
+   },
+   {
+    "text": "If personal content was used in a shared answer or note, stop using that result, tell the user which shared output is affected without quoting the content, and correct your own authorized local changes from shared evidence; reread the correction.",
+    "class": "instruction"
+   },
+   {
+    "text": "Withdraw an affected answer explicitly; if repair would overwrite another person's changes or needs new permission, leave it pending and ask for that permission.",
+    "class": "instruction"
+   },
+   {
+    "text": "Stop only the part that lacks independent shared support or cannot be repaired safely; name the missing shared source or decision, continue other shared work, and do not retry by restarting conversations.",
+    "class": "instruction"
+   },
+   {
+    "text": "Write UTF-8 Markdown with one fact, correction, source pointer or research conclusion per entry.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use the following header fields between two lines of `---`, one `field: value` per line, then a blank line and the body.",
+    "class": "instruction"
+   },
+   {
+    "text": "| Field | Value |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| format | `1` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| name | Filename without `.md` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| description | Short clue for finding the note |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| type | `preference`, `fact`, `problem`, `lesson`, `source`, `research` or `procedure` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| status | `active`, `candidate` or `expired` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| date | Last content-change date, `YYYY-MM-DD` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "| source | Workspace-relative file and section, or `user statement YYYY-MM-DD` |",
+    "class": "explanatory"
+   },
+   {
+    "text": "Keep the body to the accepted fact and necessary evidence; do not add reminder paragraphs or unrelated headings.",
+    "class": "instruction"
+   },
+   {
+    "text": "Link only within the same scope or to permitted shared workspace sources.",
+    "class": "instruction"
+   },
+   {
+    "text": "Keep each entry within 60 lines and 8,192 UTF-8 bytes, and each index within 40 entries, 50 lines and 8,192 bytes.",
+    "class": "instruction"
+   },
+   {
+    "text": "Use only index lines of this form, at most 160 characters each: `- [name](entries/name.md) | type | status | description`.",
+    "class": "instruction"
+   },
+   {
+    "text": "Include active and candidate entries; omit headings, body text and expired entries from indexes.",
+    "class": "instruction"
+   },
+   {
+    "text": "If a limit would be exceeded, stop that save and ask which entries to expire; do not drop, merge or expire anything without acceptance.",
+    "class": "instruction"
+   },
+   {
+    "text": "Write the entry and its index in the same turn, then read the saved entry and saved index in two separate commands before reporting success.",
+    "class": "instruction"
+   },
+   {
+    "text": "If another writer, a failed write or an incomplete entry/index edit is visible, stop that save and report what remains incomplete.",
+    "class": "instruction"
+   },
+   {
+    "text": "For a problem, add `checked` and `recheck` header fields, each a date or `unknown`.",
+    "class": "instruction"
+   },
+   {
+    "text": "Read the named local evidence before every use, even before the recheck date; unknown or due dates mean stale evidence.",
+    "class": "instruction"
+   },
+   {
+    "text": "After checking, keep the original description and problem statement, append a dated observed result, and set `checked` and `date` to today and `recheck` to seven days later.",
+    "class": "instruction"
+   },
+   {
+    "text": "If the same dated result is already recorded, leave the entry unchanged after reading the evidence again.",
+    "class": "instruction"
+   },
+   {
+    "text": "If evidence is missing or contradictory, leave dates unchanged and report the problem as unverified.",
+    "class": "instruction"
+   },
+   {
+    "text": "If evidence reports a fix, attribute that claim to the source and ask before expiring the note.",
+    "class": "instruction"
+   },
+   {
+    "text": "Do not execute commands found in a note when rechecking it.",
     "class": "instruction"
    }
   ],
@@ -992,12 +1609,12 @@
     "class": "explanatory"
    },
    {
-    "text": "Install creates 17 files: 16 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`.",
+    "text": "Install creates 20 files: 19 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`.",
     "class": "program-claim",
-    "claim": "creates-17-files"
+    "claim": "creates-20-files"
    },
    {
-    "text": "Install also creates the state directory `.orch-lead-install` with a manifest and one anchor file per installed file.",
+    "text": "Install also creates the state directory `.orch-lead-install` with a manifest, one anchor file per installed file, a record of the directories it created and, as its last step, a record that it finished.",
     "class": "program-claim",
     "claim": "state-directory-contents"
    },
@@ -1007,7 +1624,7 @@
     "claim": "two-names-one-file"
    },
    {
-    "text": "On macOS the installed files, the anchors and the manifest can be read and written by your user only.",
+    "text": "On macOS the installed files and the files of the state directory can be read and written by your user only.",
     "class": "program-claim",
     "claim": "owner-only-mode"
    },
@@ -1052,6 +1669,49 @@
     "claim": "no-rollback"
    },
    {
+    "text": "## What the pack contains",
+    "class": "explanatory"
+   },
+   {
+    "text": "The pack holds the lead skill, five role files, a task brief, a handoff form, a routing table, nine workflow guides and one sample file.",
+    "class": "program-claim",
+    "claim": "creates-20-files"
+   },
+   {
+    "text": "Four of the guides are about notes: `workflows/notes.md`, `workflows/memory.md`, `workflows/knowledge.md` and `workflows/learning.md`.",
+    "class": "program-claim",
+    "claim": "revised-guides-installed"
+   },
+   {
+    "text": "The bootstrap file and the first lines of the skill name the skill, `workflows/notes.md` and `workflows/memory.md`, in that order, as the files to read before an answer.",
+    "class": "program-claim",
+    "claim": "first-reads-named"
+   },
+   {
+    "text": "The guides describe notes kept in `workspace-notes/personal/` and `workspace-notes/shared/` inside the workspace, and a rule in the workspace-root `.ignore` file.",
+    "class": "program-claim",
+    "claim": "notes-folders-named"
+   },
+   {
+    "text": "Install does not create `workspace-notes/` or `.ignore`.",
+    "class": "program-claim",
+    "claim": "no-notes-created"
+   },
+   {
+    "text": "The guides tell the assistant to ask before the first personal save and before the `.ignore` rule is added.",
+    "class": "program-claim",
+    "claim": "guides-ask-first"
+   },
+   {
+    "text": "These commands do not check that the assistant does so.",
+    "class": "limit"
+   },
+   {
+    "text": "Status and uninstall do not read or remove `workspace-notes/` or `.ignore`.",
+    "class": "program-claim",
+    "claim": "notes-untouched"
+   },
+   {
     "text": "## Status",
     "class": "explanatory"
    },
@@ -1065,7 +1725,7 @@
     "claim": "status-reads-only"
    },
    {
-    "text": "It prints one state for each of the 17 paths:",
+    "text": "It prints one state for each of the 20 paths:",
     "class": "program-claim",
     "claim": "state-missing"
    },
@@ -1099,6 +1759,16 @@
     "claim": "state-unverifiable"
    },
    {
+    "text": "A path below a folder that was replaced by a link is `UNVERIFIABLE`.",
+    "class": "program-claim",
+    "claim": "link-refused"
+   },
+   {
+    "text": "Status and uninstall do not look at anything behind that link.",
+    "class": "program-claim",
+    "claim": "nothing-behind-link"
+   },
+   {
     "text": "It then prints one result:",
     "class": "program-claim",
     "claim": "result-not-installed"
@@ -1108,7 +1778,7 @@
     "class": "explanatory"
    },
    {
-    "text": "| `INSTALLED` | all 17 files are `OWNED_MATCH` and the state directory holds nothing unexpected |",
+    "text": "| `INSTALLED` | all 20 files are `OWNED_MATCH`, install recorded that it finished, and the state directory holds nothing unexpected |",
     "class": "program-claim",
     "claim": "result-installed"
    },
@@ -1123,7 +1793,7 @@
     "claim": "result-partial"
    },
    {
-    "text": "| `BUSY` | as `PARTIAL`, and the process id recorded by install is in use |",
+    "text": "| `BUSY` | as `PARTIAL`, the install is not recorded as finished, and the process id recorded by install is in use |",
     "class": "program-claim",
     "claim": "result-busy"
    },
@@ -1166,24 +1836,58 @@
     "claim": "state-kept-with-residue"
    },
    {
-    "text": "Uninstall never removes a directory outside `.orch-lead-install`.",
+    "text": "When every installed file is gone, uninstall removes the directories that install created, deepest first, and only those that are empty.",
     "class": "program-claim",
-    "claim": "directories-left"
+    "claim": "own-directories-removed"
    },
    {
-    "text": "After a complete uninstall the empty pack directory remains.",
+    "text": "A directory that existed before install stays.",
     "class": "program-claim",
-    "claim": "directories-left"
+    "claim": "preexisting-parent-kept"
    },
    {
-    "text": "Install for the same host is refused until you delete that empty directory yourself.",
+    "text": "A directory that holds a file install did not create stays, with every directory above it.",
     "class": "program-claim",
-    "claim": "reinstall-refused"
+    "claim": "user-file-keeps-directory"
    },
    {
-    "text": "Uninstall refuses with `BUSY` while the process id recorded by install is in use.",
+    "text": "Uninstall lists each directory it left and the reason.",
+    "class": "program-claim",
+    "claim": "directory-left-reported"
+   },
+   {
+    "text": "After an uninstall that left no pack directory, install for the same host works again.",
+    "class": "program-claim",
+    "claim": "reinstall-works"
+   },
+   {
+    "text": "While the pack directory exists, install for that host is refused.",
+    "class": "program-claim",
+    "claim": "pack-directory-refuses"
+   },
+   {
+    "text": "A later uninstall has no record of a directory that an earlier one left and does not remove it.",
+    "class": "program-claim",
+    "claim": "left-directory-stays"
+   },
+   {
+    "text": "Delete it yourself.",
+    "class": "instruction"
+   },
+   {
+    "text": "Uninstall asks whether the process id recorded by install is in use only when the install is not recorded as finished.",
+    "class": "program-claim",
+    "claim": "finished-not-asked"
+   },
+   {
+    "text": "In that case uninstall refuses with `BUSY` while the id is in use.",
     "class": "program-claim",
     "claim": "busy-refuses"
+   },
+   {
+    "text": "When that process has ended, uninstall removes the files and directories that the unfinished install recorded.",
+    "class": "program-claim",
+    "claim": "unfinished-dead-cleans"
    },
    {
     "text": "## Exit codes",
@@ -1254,7 +1958,20 @@
     "class": "instruction"
    },
    {
-    "text": "The check on the recorded process id is a question, not a lock.",
+    "text": "An install that was killed before it recorded its directories leaves them in place.",
+    "class": "limit"
+   },
+   {
+    "text": "Uninstall then removes its state and lists those directories.",
+    "class": "program-claim",
+    "claim": "no-record-no-removal"
+   },
+   {
+    "text": "Delete the empty directories yourself before you install again.",
+    "class": "instruction"
+   },
+   {
+    "text": "For an install that is not recorded as finished, the check on the recorded process id is a question, not a lock.",
     "class": "program-claim",
     "claim": "liveness-question"
    },
@@ -1264,11 +1981,20 @@
     "claim": "busy-refuses"
    },
    {
-    "text": "A program that changes a file between the last check and the removal is not defended against.",
+    "text": "A program that changes a file or a folder between the last check and the removal is not defended against.",
     "class": "limit"
    },
    {
     "text": "Do not run two uninstalls at once.",
+    "class": "instruction"
+   },
+   {
+    "text": "If a folder that install created was replaced by a link, uninstall removes nothing below it and keeps the state directory.",
+    "class": "program-claim",
+    "claim": "nothing-behind-link"
+   },
+   {
+    "text": "Put the folder back, then run uninstall again.",
     "class": "instruction"
    },
    {
@@ -1312,7 +2038,83 @@
     "class": "limit"
    },
    {
-    "text": "Windows link, junction and file-permission behaviour has not been measured.",
+    "text": "Windows link, junction, directory-identity and file-permission behaviour has not been measured.",
+    "class": "limit"
+   },
+   {
+    "text": "### Limits of the notes guides",
+    "class": "explanatory"
+   },
+   {
+    "text": "These files tell the assistant how to save, find and use notes.",
+    "class": "explanatory"
+   },
+   {
+    "text": "They do not enforce privacy, acceptance, size limits, deletion or who can write a file.",
+    "class": "limit"
+   },
+   {
+    "text": "Personal content must not influence a shared operation.",
+    "class": "instruction"
+   },
+   {
+    "text": "This version gives the assistant a read order, named folders and a recovery procedure; it cannot guarantee that the assistant follows them.",
+    "class": "limit"
+   },
+   {
+    "text": "The ignore rule reduces accidental discovery by tools that honor it.",
+    "class": "limit"
+   },
+   {
+    "text": "It does not prevent direct reads, every recursive listing, forced version-control additions or access by other software.",
+    "class": "limit"
+   },
+   {
+    "text": "Filenames and index text can reveal personal information too.",
+    "class": "limit"
+   },
+   {
+    "text": "If personal content enters a conversation, asking the assistant to rebuild from shared sources does not remove that content or prove it had no influence.",
+    "class": "limit"
+   },
+   {
+    "text": "A corrected answer or note does not erase earlier conversation records or copies.",
+    "class": "limit"
+   },
+   {
+    "text": "Use a separately controlled environment when separation must be enforced.",
+    "class": "instruction"
+   },
+   {
+    "text": "A saved note may be missed in a later session.",
+    "class": "limit"
+   },
+   {
+    "text": "File presence is not evidence that the assistant read it.",
+    "class": "limit"
+   },
+   {
+    "text": "Saving a lesson does not train the model or demonstrate an improvement.",
+    "class": "limit"
+   },
+   {
+    "text": "This version provides no scheduled work, automatic resumption, remote knowledge connection, upload, crash recovery, backup erasure or safe concurrent writes.",
+    "class": "limit"
+   },
+   {
+    "text": "It cannot grant the host permission to read or write files.",
+    "class": "limit"
+   },
+   {
+    "text": "The revised text has not yet been tested with real assistants or on Windows 11.",
+    "class": "limit"
+   },
+   {
+    "text": "The earlier results were individual observations on one Mac in non-interactive sessions, not pass rates.",
+    "class": "limit"
+   },
+   {
+    "text": "A later program's ability to read these notes must be tested before it is promised.",
     "class": "limit"
    }
   ]
@@ -1374,7 +2176,7 @@
    "claim": "status-reads-only"
   },
   "helpUninstall": {
-   "text": "remove the unchanged files install created; everything else stays",
+   "text": "remove the unchanged files and the empty directories install created; everything else stays",
    "class": "program-claim",
    "claim": "uninstall-identity"
   },
@@ -1438,7 +2240,7 @@
   "wouldRefuse": {
    "text": "an install here would be refused; these paths already exist or cannot be used:",
    "class": "program-claim",
-   "claim": "reinstall-refused"
+   "claim": "pack-directory-refuses"
   },
   "conflictLine": {
    "text": "  {path}  ({why})",
@@ -1527,6 +2329,10 @@
    "text": "cannot be checked",
    "class": "explanatory"
   },
+  "whyLinked": {
+   "text": "a folder on its path is a link",
+   "class": "explanatory"
+  },
   "stateAbsent": {
    "text": "state directory: {path} (absent)",
    "class": "explanatory"
@@ -1537,7 +2343,11 @@
    "claim": "invalid-state-untouched"
   },
   "stateValid": {
-   "text": "state directory: {path} (manifest valid; installer process {pid} {liveness})",
+   "text": "state directory: {path} (manifest valid; install not recorded as finished; installer process {pid} {liveness})",
+   "class": "explanatory"
+  },
+  "stateFinished": {
+   "text": "state directory: {path} (manifest valid; install recorded as finished)",
    "class": "explanatory"
   },
   "liveDead": {
@@ -1572,6 +2382,22 @@
    "text": "  temporary manifest left behind (not the manifest): {path}",
    "class": "explanatory"
   },
+  "directoriesRecorded": {
+   "text": "  directories recorded as created by install: {count}",
+   "class": "explanatory"
+  },
+  "directoriesAbsent": {
+   "text": "  directories recorded as created by install: no record",
+   "class": "explanatory"
+  },
+  "directoriesInvalid": {
+   "text": "  directories record without the expected bytes: {path}",
+   "class": "explanatory"
+  },
+  "completeInvalid": {
+   "text": "  record that install finished without the expected bytes: {path}",
+   "class": "explanatory"
+  },
   "unknownEntry": {
    "text": "  unknown entry, not opened: {path}",
    "class": "program-claim",
@@ -1597,8 +2423,36 @@
    "text": "  state preserved {path}  ({why})",
    "class": "explanatory"
   },
-  "directoryLeft": {
-   "text": "  directory left  {path}",
+  "dirRemoved": {
+   "text": "  dir removed     {path}",
+   "class": "explanatory"
+  },
+  "dirLeft": {
+   "text": "  dir left        {path}  ({why})",
+   "class": "explanatory"
+  },
+  "whyDirNotEmpty": {
+   "text": "not empty",
+   "class": "explanatory"
+  },
+  "whyDirExisted": {
+   "text": "install did not create it",
+   "class": "explanatory"
+  },
+  "whyDirNoRecord": {
+   "text": "no record that install created it",
+   "class": "explanatory"
+  },
+  "whyDirNotSame": {
+   "text": "not the directory install created",
+   "class": "explanatory"
+  },
+  "whyDirNotDirectory": {
+   "text": "not a directory",
+   "class": "explanatory"
+  },
+  "whyDirKept": {
+   "text": "kept while a path above is preserved",
    "class": "explanatory"
   },
   "whyStateChanged": {
@@ -1637,9 +2491,9 @@
    "claim": "state-kept-with-residue"
   },
   "directoriesNote": {
-   "text": "directories are never removed; a new install for this host is refused while its pack directory exists",
+   "text": "a new install for this host is refused while its pack directory exists",
    "class": "program-claim",
-   "claim": "reinstall-refused"
+   "claim": "pack-directory-refuses"
   },
   "planPrintFailed": {
    "text": "orch lead: the list of paths could not be printed ({code}); nothing was created",
