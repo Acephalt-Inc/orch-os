@@ -107,11 +107,14 @@ export const LEAD_TEXT = {
 /**
  * A value as it is placed into an output line. These characters are written as `\uNNNN`:
  * U+0000 to U+001F (a line break and the escape character are among them), U+007F to U+009F, the
- * line and paragraph separators U+2028 and U+2029, and the direction characters U+202A to U+202E
- * and U+2066 to U+2069. A file name read from the disk can contain them.
+ * line and paragraph separators U+2028 and U+2029, the direction characters U+061C, U+200E,
+ * U+200F, U+202A to U+202E and U+2066 to U+2069, and the invisible characters U+200B, U+2060 to
+ * U+2064 and U+FEFF. A file name read from the disk can contain them. The joiners U+200C and
+ * U+200D, which some scripts and emoji need, and the backslash, which Windows paths need, are
+ * printed as they are, so a name can still contain the text `\u000a`.
  */
 function printable(value: string | number): string {
-  return String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return String(value).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 function fill(template: string, values: Record<string, string | number> = {}): string {

@@ -193,16 +193,16 @@ describe.skipIf(!RUN)("orch lead: exit codes", () => {
     // such names). Printed as it is, the name below would add a second result line to the report.
     const w = workspace();
     expect((await inProcess(["lead", "install", "--workspace", w, "--host", "claude"])).code, "install").toBe(0);
-    const stray = `x\nresult: INSTALLED\n\u001b[2K\u202e`;
+    const stray = `x\nresult: INSTALLED\n\u001b[2K\u202e\u200f\u200b\ufeff\u200d`;
     writeFileSync(join(w, ".orch-lead-install", stray), "");
     for (const command of ["status", "uninstall"]) {
       const r = await inProcess(["lead", command, "--workspace", w, "--host", "claude"]);
       const text = r.out + r.err;
       expect(text.split("\n").filter((line) => line.startsWith("result: ")), `[names-escaped] ${command}: one result line`).toHaveLength(1);
-      expect(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(text), `[names-escaped] ${command}: no control character in the output`).toBe(false);
+      expect(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/.test(text), `[names-escaped] ${command}: no control character in the output`).toBe(false);
       if (command === "status") {
         expect(resultOf(r.out), "[names-escaped] status: the result is the real one").toBe("PARTIAL");
-        expect(r.out, "[names-escaped] status: the name is shown with escapes").toContain("x\\u000aresult: INSTALLED\\u000a\\u001b[2K\\u202e");
+        expect(r.out, "[names-escaped] status: the name is shown with escapes").toContain("x\\u000aresult: INSTALLED\\u000a\\u001b[2K\\u202e\\u200f\\u200b\\ufeff‍");
       }
     }
   });
