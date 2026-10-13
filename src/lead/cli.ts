@@ -105,16 +105,20 @@ export const LEAD_TEXT = {
 } as const;
 
 /**
- * A value as it is placed into an output line. These characters are written as `\uNNNN`:
- * U+0000 to U+001F (a line break and the escape character are among them), U+007F to U+009F, the
- * line and paragraph separators U+2028 and U+2029, the direction characters U+061C, U+200E,
- * U+200F, U+202A to U+202E and U+2066 to U+2069, and the invisible characters U+200B, U+2060 to
- * U+2064 and U+FEFF. A file name read from the disk can contain them. The joiners U+200C and
- * U+200D, which some scripts and emoji need, and the backslash, which Windows paths need, are
- * printed as they are, so a name can still contain the text `\u000a`.
+ * A value as it is placed into an output line. Every code point of these kinds is written as
+ * `\uNNNN`, or as `\u{N...}` above U+FFFF: controls (a line break and the escape character are
+ * among them), format characters (direction marks, joiners and tag characters are among them),
+ * surrogates, private-use and unassigned code points, the line and paragraph separators, and the
+ * code points Unicode lists as ignorable in display (variation selectors and filler letters are
+ * among them). A file name read from the disk can contain them, and an assistant may read this
+ * output. The backslash is printed as it is, because Windows paths need it, so a name can still
+ * contain the text `\u000a`.
  */
 function printable(value: string | number): string {
-  return String(value).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return String(value).replace(/[\p{C}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, (c) => {
+    const hex = (c.codePointAt(0) ?? 0).toString(16);
+    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, "0")}`;
+  });
 }
 
 function fill(template: string, values: Record<string, string | number> = {}): string {
