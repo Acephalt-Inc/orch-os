@@ -31,7 +31,7 @@ Recorded in a throwaway HOME with only `/usr/bin:/bin` and `node` on PATH, so no
 # 1. install check + config + handbook
 
 $ orch --version
-orch 2.1.0
+orch 2.2.0-rc.1
 
 $ orch init
 agents: none of claude, codex, gemini, qwen found on PATH (workers still run any command given after --)
@@ -45,7 +45,7 @@ boot: point each agent session at its role file, e.g. $ORCH_HOME/handbook/lead-b
 next: orch doctor
 
 $ orch doctor
-PASS  node>=20                     <version>
+PASS  node>=22                     <version>
 PASS  posix (process groups)       <platform>
 PASS  config                       $ORCH_HOME/config.toml
 PASS  state dir writable           $ORCH_HOME
@@ -57,11 +57,11 @@ PASS  task registry                $ORCH_HOME/tasks
 PASS  mem                          $ORCH_HOME/mem (0/200 index lines)
 PASS  handbook                     $ORCH_HOME/handbook
 PASS  git                          /usr/bin/git
-SKIP  gh (merge-gate live mode)    absent - fixtures still work
+SKIP  gh (live GitHub commands)    absent - fixtures still work
 SKIP  merge repo                   unset - pass --repo or use --fixture
 SKIP  worker command               none configured - use --agent or pass a command after --
 SKIP  timeout (worker time limit)  absent - workers run without a time limit
-SKIP  agent CLIs                   none found (install one, then `orch init --force`)
+SKIP  agent CLIs                   none found (this run looked for claude, codex, gemini, qwen; `orch agents` lists each as found or absent)
 PASS  load state                   no sample yet (run `orch load`)
 doctor: PASS (0 required check(s) failed)
 

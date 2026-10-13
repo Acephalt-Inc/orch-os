@@ -28,6 +28,12 @@ npm i -g orch-os
 # or: npx orch-os init
 ```
 
+Or paste this one sentence to a coding assistant that can run commands on your machine:
+
+```text
+Install ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.
+```
+
 On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 
 ## Why ORCH-os
@@ -190,6 +196,10 @@ The commands above apply a few rules. Each row names the command that applies it
 - [Migration](docs/migration.md) — moving from v1.1 to v2.
 - [Test map](docs/tests-map.md) — correspondence between v1.1 and v2 tests.
 - [Demo](docs/DEMO.md) — a scripted offline walkthrough.
+- [Continuation notes](docs/resume.md) — `orch resume`: a private continuation note for one workspace (save, show, forget).
+- [Display preferences](docs/preferences.md) — `orch preference`: an explicit response language or answer length for one workspace (set, show, unset).
+- [Knowledge demo](docs/knowledge.md) — `orch knowledge`: a synthetic demo that looks up two fixed questions in a built-in corpus; no service is connected.
+- [Learning drafts](docs/learning.md) — `orch learning`: drafts of proposed display settings and quoted notes from one document on standard input (review, show, reject); nothing is applied.
 
 ## License
 

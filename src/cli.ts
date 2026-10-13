@@ -20,8 +20,10 @@ import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
+import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
+import { ignoreClosedPipes } from "./closed-pipe.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -353,7 +355,8 @@ const cmdDoctor: Run = (a, io) => {
   };
   const findCommand = (name: string) => which(name, undefined, a._platform);
   const major = Number(process.versions.node.split(".")[0]);
-  add(major >= 20, "node>=20", process.versions.node);
+  // the same floor as `engines.node` in package.json
+  add(major >= 22, "node>=22", process.versions.node);
   if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
   else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
@@ -423,7 +426,7 @@ const cmdDoctor: Run = (a, io) => {
     if (a._platform === "win32") add(git !== null, "git", git ?? "absent - only worker worktrees use it, and workers are not available on Windows", true);
     else add(git !== null, "git", git ?? "not on PATH");
     const gh = findCommand("gh");
-    add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
+    add(gh !== null, "gh (live GitHub commands)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
     const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
@@ -433,7 +436,8 @@ const cmdDoctor: Run = (a, io) => {
     const to = a._platform === "win32" ? null : findCommand("timeout") ?? findCommand("gtimeout");
     add(to !== null, "timeout (worker time limit)", to ?? (a._platform === "win32" ? "not used - workers are not available on Windows" : "absent - workers run without a time limit"), true);
     const found = D.installed().map((x) => x.name);
-    add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
+    // detected on every run, never read from config.toml: the hint names a command that only reads
+    add(found.length > 0, "agent CLIs", found.join(", ") || `none found (this run looked for ${D.KNOWN.map((k) => k[0]).join(", ")}; \`orch agents\` lists each as found or absent)`, true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
       const b = (ag.command ?? [""])[0] ?? "";
       add(Boolean(b) && findCommand(b) !== null, `agent ${name}`, b || "empty command", true);
@@ -472,6 +476,23 @@ const cmdConfig: Run = (_a, io) => {
   println(io, `# resolved from ${C.configPath()}` + (existsSync(C.configPath()) ? "" : " (absent: defaults)"));
   println(io, dumps(cfg, 2));
   return 0;
+};
+
+/** The only caller of the registry check. One line on stdout; exit 0 for an answer, 1 without one. */
+const cmdUpdateCheck: Run = async (a, io) => {
+  const result = await checkLatest(VERSION, a._updateUrl);
+  try {
+    io.out(updateLine(VERSION, result) + "\n");
+  } catch {
+    // the line did not go out whole: say so where it can still be said, and fail
+    try {
+      io.err("orch update check: output failed\n");
+    } catch {
+      // no stream is left to say it on
+    }
+    return 1;
+  }
+  return result.kind === "unavailable" ? 1 : 0;
 };
 
 const cmdLease: Run = (a, io) => {
@@ -1041,6 +1062,56 @@ const cmdProfile: Run = (a, io) => {
   return showProfile(io, parseToml(next), false);
 };
 
+// ---- learning: its one input document ----------------------------------------------------------
+
+/** How long `orch learning` waits for standard input to end, in milliseconds: the wait of the module's own entry file. */
+const LEARNING_STDIN_DEADLINE_MS = 4500;
+
+/**
+ * All of standard input for `orch learning`, read as the module's own entry file reads it (that file runs a
+ * command when it is loaded, so it cannot be imported here): LIMIT over the cap, TIMEOUT at the deadline.
+ * At the cap or at the deadline the input is closed, so the process ends even when the other side never closes it.
+ */
+async function learningInput(): Promise<Uint8Array> {
+  const { LearningError, MAX_BYTES } = await import("./learning/schema.js");
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.off("error", onError);
+    };
+    // Give up on the input: stop listening and close it. Pausing is not enough, because a
+    // paused stream keeps reading ahead and an input that stays open would keep the process alive.
+    const abandon = (code: "TIMEOUT" | "LIMIT" | "INVALID_INPUT") => {
+      cleanup();
+      stdin.destroy();
+      reject(new LearningError(code));
+    };
+    const timer = setTimeout(() => abandon("TIMEOUT"), LEARNING_STDIN_DEADLINE_MS);
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BYTES) {
+        abandon("LIMIT");
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks));
+    };
+    const onError = () => abandon("INVALID_INPUT");
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+    stdin.resume();
+  });
+}
+
 // ---- the command tree -------------------------------------------------------------------------
 
 const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
@@ -1073,6 +1144,10 @@ export function buildTree(): CmdSpec<Run> {
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
+      {
+        name: "update", help: "ask the npm registry for the latest version",
+        sub: [{ name: "check", help: "one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable", run: cmdUpdateCheck }],
+      },
       {
         name: "lease", help: "single-holder role lease", run: cmdLease,
         pos: [{ dest: "action", choices: ["status", "acquire", "renew", "release"] }],
@@ -1263,13 +1338,40 @@ export function buildTree(): CmdSpec<Run> {
               opt("reason", ["--reason"], "str", "one line: why it no longer holds")] },
         ],
       },
+      {
+        name: "resume", help: "a private continuation note for one workspace: save, show, forget (shown as unverified caller text)",
+        run: async (a) => (await import("./resume/command.js")).main(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "preference", help: "personal display preferences for one workspace: set, show, unset (response language, answer length)",
+        run: async (a) => (await import("./preferences/command.js")).runPreferenceCommand(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "knowledge", help: "synthetic demo; no service connected: looks up one fixed question in the built-in corpus",
+        run: async (a, io) => {
+          const { main: knowledge } = await import("./knowledge/command.js");
+          const { createDemoTransport } = await import("./knowledge/demo.js");
+          return knowledge(a.argv, io, { transport: createDemoTransport(), now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "learning", help: "drafts only; nothing is applied: review, show, reject proposed display settings and quoted notes",
+        run: async (a, io) => {
+          const { main: learning } = await import("./learning/command.js");
+          return learning(a.argv, { read: learningInput, out: (s) => io.out(s), err: (s) => io.err(s) }, { now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
+      },
     ],
   };
 }
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
 export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
-  runtime: { platform?: NodeJS.Platform } = {}): Promise<number> {
+  runtime: { platform?: NodeJS.Platform; updateUrl?: string } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1282,6 +1384,14 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     println(io, `orch ${VERSION}`);
     return 0;
   }
+  // `resume` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "resume") argv = ["resume", "--", ...argv.slice(1)];
+  // `preference` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "preference") argv = ["preference", "--", ...argv.slice(1)];
+  // `knowledge` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
+  // `learning` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "learning") argv = ["learning", "--", ...argv.slice(1)];
   const tree = buildTree();
   let parsed;
   try {
@@ -1299,6 +1409,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   }
   const { args, cmd } = parsed;
   args._platform = runtime.platform ?? process.platform;
+  // only a caller of main() can name another address (the tests' local registry); no option or variable does
+  args._updateUrl = runtime.updateUrl;
   args.cmd = rest;
   if (cmd.name === "add" && args._path[1] === "mem" && (args.description === null || args.description === undefined)) {
     eprintln(io, `usage: ${cmd.usage}\norch: error: the following arguments are required: --description`);
@@ -1340,6 +1452,7 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
+  ignoreClosedPipes();
   main().then((code) => {
     process.exitCode = code;
   }, (e) => {

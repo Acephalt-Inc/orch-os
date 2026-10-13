@@ -2,7 +2,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { DIST_CLI, run, useTmpHome, waitFor } from "./_helpers.js";
+import { DIST_CLI, ROOT, run, useTmpHome, waitFor } from "./_helpers.js";
+import { withClosedReader } from "./fixtures/closed-reader.js";
+
+const LEAK = /EPIPE|node:|at /;
 
 describe("CliTest", () => {
   const ctx = useTmpHome();
@@ -100,7 +103,7 @@ describe("CliV2", () => {
     const [code, out] = await run("lease", "--help");
     expect(code).toBe(0);
     expect(out).toContain("--expected-epoch");
-    expect((await run("--version"))[1]).toMatch(/^orch \d+\.\d+\.\d+\n$/);
+    expect((await run("--version"))[1]).toMatch(/^orch \d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\n$/);
   });
 
   it("lease_json_output_and_expected_epoch_release", async () => {
@@ -141,5 +144,31 @@ describe("CliV2", () => {
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "a"], { env }).status).toBe(0);
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "acquire", "--session", "b"], { env }).status).toBe(3);
     expect(spawnSync(process.execPath, [DIST_CLI, "lease", "renew", "--session", "b"], { env }).status).toBe(4);
+  });
+});
+
+// Reader-gone behavior is unverified on Windows.
+describe.skipIf(process.platform === "win32")("closed output reader", () => {
+  // Closing the FIFO's read/write anchor before spawning leaves its inherited writer with no reader.
+  it.each([
+    ["help", ["--help"], "stdout", 0],
+    ["normal success", ["--version"], "stdout", 0],
+    ["error result", ["nope"], "stderr", 2],
+  ] as const)("preserves the %s result without diagnostics", (_label, args, stream, status) => {
+    const result = withClosedReader([DIST_CLI, ...args], stream);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(status);
+    const other = stream === "stdout" ? result.stderr.toString() : result.stdout.toString();
+    expect(other).toBe("");
+    expect(other).not.toMatch(LEAK);
+    expect(other).not.toContain(ROOT);
+  });
+
+  it("does not swallow another output error", () => {
+    const preload = new URL("./fixtures/output-error.mjs", import.meta.url).pathname;
+    const result = spawnSync(process.execPath, ["--import", preload, DIST_CLI, "--version"], { encoding: "utf8", timeout: 5000 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("synthetic EIO output failure");
+    expect(result.stderr).toContain("EIO");
   });
 });

@@ -1,0 +1,60 @@
+{
+ "owner_approved": true,
+ "note": "Every public sentence block this change added or reworded, with the SHA-256 of its exact text (UTF-8). tests/update-check.test.ts checks each block against the file or the help text it names. The three result lines are in the orch update check section.",
+ "blocks": [
+  {
+   "id": "docs/commands.md: which commands read the config file",
+   "file": "docs/commands.md",
+   "text": "ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `orch init` writes the file and `orch config` prints the values in effect. When the file does not exist yet, `doctor` reports that as a `FAIL  config` row and exits 1, `profile update` exits 2 and asks for `orch init`, and the other commands that read the file start from built-in defaults. `update check`, `resume`, `preference`, `knowledge` and `learning` do not read the file. Every command accepts `-h`/`--help` without reading the file; a usage error exits 2.",
+   "sha256": "215b644e88bb08b580c4995135702ff3efeca8cdc58bd3d91ee85b413f77cf13"
+  },
+  {
+   "id": "docs/commands.md: shared exit codes",
+   "file": "docs/commands.md",
+   "text": "Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a \"no\" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).",
+   "sha256": "f9f85c0143656eabb5921dfd395d3ba32eecbb85ba2aab850ff0f9ade27b9906"
+  },
+  {
+   "id": "docs/commands.md: orch update check section",
+   "file": "docs/commands.md",
+   "text": "## orch update check\n\n```text\norch update check\n```\n\nAsks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. It runs only when you type it: no other command contacts the registry. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.\n\nThe request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.\n\n| Line (`X` is the installed version, `Y` the offered one) | Exit |\n|---|---|\n| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |\n| `update check: no newer version: installed X, latest Y` | 0 |\n| `update check: unavailable (REASON); installed X` | 1 |\n\n`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.\n\n",
+   "sha256": "b8a39144acca0a9199cf659debc26a79d6ddd197340d7b42547d435d5f0d6f48"
+  },
+  {
+   "id": "docs/architecture.md: what calls out to the network",
+   "file": "docs/architecture.md",
+   "text": "- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.",
+   "sha256": "09d76136961a94bbacc0dc84f589a034423fbe88ea01bb1990006ac4735d15f3"
+  },
+  {
+   "id": "help: usage line of orch",
+   "command": "orch --help",
+   "text": "usage: orch {init,agents,doctor,config,update,lease,mailbox,msg,task,merge-gate,profile,review,worker,load,mem,resume,preference,knowledge,learning} ...",
+   "sha256": "f7afb6a72ab5c92fd0a9e85241ad937e88cbcd87c7038a926788cc7c2f93129d"
+  },
+  {
+   "id": "help: update in the command list",
+   "command": "orch --help",
+   "text": "  update       ask the npm registry for the latest version",
+   "sha256": "3799c8fd3bff99640c19ff5c59e7747d2745a9c2184253ef4c289faa89610c93"
+  },
+  {
+   "id": "help: orch update",
+   "command": "orch update --help",
+   "text": "usage: orch update {check} ...\n\nask the npm registry for the latest version\n\ncommands:\n  check        one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable",
+   "sha256": "fad34b95da82f76a9201c6d21361ea1fa0fa5fa558616eb19a3185c4d9566aed"
+  },
+  {
+   "id": "help: orch update check",
+   "command": "orch update check --help",
+   "text": "usage: orch update check\n\none request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable",
+   "sha256": "deaaf382ad1fd8512e25dad3cd6889182f76a337f7ad3e6cf355faafcb9da041"
+  },
+  {
+   "id": "stderr line when the result line cannot be written",
+   "file": "src/cli.ts",
+   "text": "orch update check: output failed",
+   "sha256": "7f2c4d0bfb778d759310422912c976e16b7862f98e4b9441d652122458fcfb05"
+  }
+ ]
+}

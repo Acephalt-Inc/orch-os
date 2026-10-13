@@ -1,0 +1,9 @@
+{
+  "schema_version": 1, "scope": "personal", "revision": 0,
+  "settings": {"schema_version":1,"revision":3,"values":{"answer-length":"normal","response-language":"en"}},
+  "events": [
+    {"event_id":"short-answers","event_revision":1,"state":"active","recorded_at":"2026-10-12T12:00:00.000Z","expires_at":"2026-11-12T12:00:00.000Z","kind":"setting-correction","key":"answer-length","value":"short"},
+    {"event_id":"check-dates","event_revision":1,"state":"active","recorded_at":"2026-10-12T12:00:00.000Z","expires_at":"2026-11-12T12:00:00.000Z","kind":"lesson-note","text":"Check invoice dates before drafting a reminder."}
+  ],
+  "rejections": [], "source_digest": null, "drafts": [], "omitted_event_ids": []
+}

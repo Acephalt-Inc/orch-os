@@ -44,7 +44,7 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 19 `skipIf` markers, 45 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 39 `skipIf` markers, 75 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
 
 | Test file | Skipped | Why |
 |---|---|---|
@@ -66,6 +66,25 @@ The `windows` CI job runs every test file. The tests below are skipped there, ea
 | `tests/windows-portability.test.ts` | `POSIX fallback discovery equals the base over expanded and traversed paths` | native POSIX expansion, symlink traversal and executable-file checks |
 | `tests/windows-portability.test.ts` | `POSIX handbook preserves template bytes for both layouts and force modes` | POSIX keeps template bytes; Windows normalizes CRLF and lone CR to LF |
 | `tests/windows-portability.test.ts` | `POSIX load reads prior state before a sampling command changes it` | a POSIX temperature command runs after the prior state is read; Windows does not run that command |
+| `tests/cli.test.ts` | all of `closed output reader` (4): `preserves the help result without diagnostics`, `preserves the normal success result without diagnostics`, `preserves the error result without diagnostics`, `does not swallow another output error` | the test makes a named pipe with `mkfifo`; what `orch` does on Windows when the reader of its output is gone is not verified |
+| `tests/knowledge-cli.test.ts` | `knowledge help preserves success when its output reader is already gone` | the same named pipe; not verified on Windows |
+| `tests/preferences-cli.test.ts` | all of `a named pipe where the state file should be` (1): `is refused with status 4 without waiting for a writer` | the test makes a named pipe with `mkfifo` |
+| `tests/preferences-store.test.ts` | `an existing folder owned by another user is refused` | the owner and the permission bits of a folder are not checked on Windows |
+| `tests/preferences-store.test.ts` | `a state link installed immediately before open is refused without reading its target` | the open that does not follow a symbolic link is not available on Windows |
+| `tests/resume-cli.test.ts` | `a named pipe where the record should be is refused without waiting for a writer` | the test makes a named pipe with `mkfifo` |
+| `tests/resume-store.test.ts` | `a record replaced by a link immediately before open is refused without reading its target` | the open that does not follow a symbolic link is not available on Windows |
+| `tests/preferences-store.test.ts` | all of `an existing folder that other users can enter` (3): `an existing public %s is refused without changing its mode` (one per folder) | the owner and the permission bits of a folder are not checked on Windows |
+| `tests/preferences-store.test.ts` | all of `a link in place of a preferences folder` (3): `a link in place of %s is refused and nothing is read or written through it` (one per folder) | the test looks for the open that does not follow a symbolic link, which is not available on Windows; what `orch preference` does there with a link in place of one of its folders is not verified |
+| `tests/preferences-store.test.ts` | all of `a state file that is a link` (2): `a state file that is %s is refused and the file behind it is not opened` (a symbolic link, a second hard link) | the test looks for the same open; a state file that is a link is not verified on Windows |
+| `tests/preferences-store.test.ts` | `a directory flush failure after rename is an acknowledged change` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/preferences-cli.test.ts` | `a directory flush failure reports the installed change and permits only its new revision` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/resume-faults.test.ts` | `an existing storage folder owned by another uid is refused without changing it`, `an existing storage folder accessible to a group is refused without changing it` | the owner and the permission bits of a folder are not checked on Windows |
+| `tests/resume-faults.test.ts` | `a folder flush failure after rename is a warning and revisions continue from the written record` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/resume-store.test.ts` | all of `a record that is a link` (2): `a record that is %s is refused and the file behind it is not opened` (a symbolic link, a second hard link) | the test looks for the open that does not follow a symbolic link, which is not available on Windows; a record that is a link is not verified there |
+| `tests/doctor-install-entry.test.ts` | `guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one` | it runs the macOS group's already-installed check of the install guide |
+| `tests/doctor-install-entry.mutations.test.ts` | `mutation_guide_installed_check_restored_to_npm_ls` | it changes that macOS check and reruns the test above |
+| `tests/package-pack.test.ts` | `the publish step keeps a pre-release off the latest tag and stops when the version is unreadable` | it runs the bash text of the release job's publish step with stand-ins for `node` and `npm`; the release job runs on Linux |
+| `tests/learning-probe-attribution.test.ts` | all of `path shapes with a colon` (2): `W1 attributes top-level, dynamic-import, timer and getter reads to the program: %s` (one per shape) | the test makes a directory whose name contains a colon, which Windows does not allow |
 
 Five more tests run on Windows without their `orch review watch` or `orch worker start` part; everything else in them runs:
 

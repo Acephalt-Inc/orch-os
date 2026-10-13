@@ -1,6 +1,6 @@
 # Command reference
 
-All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read-only commands use built-in defaults when the file does not exist yet. A malformed config gives exit 2 with a one-line message. Every command accepts `-h`/`--help`; a usage error exits 2.
+ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `orch init` writes the file and `orch config` prints the values in effect. When the file does not exist yet, `doctor` reports that as a `FAIL  config` row and exits 1, `profile update` exits 2 and asks for `orch init`, and the other commands that read the file start from built-in defaults. `update check`, `resume`, `preference`, `knowledge` and `learning` do not read the file. Every command accepts `-h`/`--help` without reading the file; a usage error exits 2.
 
 | Environment variable | Effect |
 |---|---|
@@ -9,7 +9,7 @@ All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read
 | `ORCH_SESSION_ID` | Default `--session` for `lease`; second fallback for `--as` (then `user@host`) |
 | `ORCH_AGENT_DIRS` | Colon-separated dirs searched for agent CLIs after PATH; empty string = PATH only |
 
-Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
+Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
 
 ## orch init
 
@@ -52,9 +52,11 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 
 | Check | Required |
 |---|---|
-| Node.js ≥ 20, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
-| handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
-| load state | informational |
+| `node>=22`, `config`, `state dir writable`, `lease lockable`, `mailbox`, `mailbox sections`, `messages`, `task registry`, `mem` | yes everywhere |
+| `posix (process groups)`, `git` | yes on macOS and Linux |
+| `windows (no process groups)` | yes on Windows |
+| `handbook`, `gh (live GitHub commands)`, `merge repo`, `worker command`, `timeout (worker time limit)`, `agent CLIs`, each `agent NAME` | no (SKIP) |
+| `load state` | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid or was written for the removed built-in table (no `policy` key); every other profile row is `PASS` or `SKIP` |
 
 With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; no review can grade above single-agent until a second account is added`. A missing capability never lowers the rule. The rows are `profile` (the selected policy, the declared compute and people, and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (only when `required_review` is above `single-agent`: agents on at least two accounts, or two vendors) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.
@@ -62,6 +64,24 @@ With a `[profile]`, doctor adds one row per profile check. A missing capability 
 ## orch config
 
 Prints the resolved configuration as JSON, with the file it came from.
+
+## orch update check
+
+```text
+orch update check
+```
+
+Asks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. It runs only when you type it: no other command contacts the registry. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.
+
+The request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.
+
+| Line (`X` is the installed version, `Y` the offered one) | Exit |
+|---|---|
+| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |
+| `update check: no newer version: installed X, latest Y` | 0 |
+| `update check: unavailable (REASON); installed X` | 1 |
+
+`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.
 
 ## orch lease
 
@@ -304,6 +324,70 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 **`--json` keys changed with the removal of the built-in table (a wire compatibility change).** `merge-gate --json`: the `profile` object loses `cell`, `declared_cell` and `degraded` and gains `policy` (the policy name); `authority` is never `auto`. `profile show --json`: `cell`, `declared_cell`, `effective_compute`, `workers_per_account` and `degraded` are gone; `policy` was an object with a rule per tier and is now the policy name, the per-tier rules are under the new key `rules`, and `required_review` is added. `review watch --json`: `choice.cell` is now `choice.policy` (the policy name, or `null` without a `[profile]`). The table and a before/after example are in [docs/profiles.md](profiles.md), section 6.
 
 `update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
+
+## orch resume
+
+```text
+orch resume save --workspace PATH --expected-revision N
+orch resume show --workspace PATH
+orch resume forget --workspace PATH --expected-revision N
+```
+
+One private continuation note per workspace; `save` reads the note, one JSON object, from stdin. [resume.md](resume.md) describes the note, where it is stored and what is refused. `orch resume` does not load `config.toml`. It reads its own arguments: `orch resume --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Saved, shown or forgotten. `show` also exits 0 when there is no note |
+| `2` | Invalid arguments, an invalid note, or a note that did not arrive on stdin in time |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the note store cannot be used |
+
+## orch preference
+
+```text
+orch preference set KEY VALUE --workspace PATH --expected-revision N
+orch preference show --workspace PATH
+orch preference unset KEY --workspace PATH --expected-revision N
+```
+
+Personal display preferences for one workspace: `response-language` (`en` or `zh`) and `answer-length` (`short` or `normal`). [preferences.md](preferences.md) describes what the settings are and are not, where they are stored and what is refused. `orch preference` does not load `config.toml`. It reads its own arguments: `orch preference --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Set, shown or unset |
+| `2` | Invalid arguments, or a key or value other than the ones above |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the settings store cannot be used |
+
+## orch knowledge
+
+```text
+orch knowledge query --connection demo --question-id invoice-terms|approval-threshold
+```
+
+A synthetic demo; no service is connected. It looks up one of two fixed questions in a corpus that is compiled into the program and prints the stored passage with its citation as one JSON line. [knowledge.md](knowledge.md) describes the arguments, the output and the limits. `orch knowledge` does not load `config.toml`. It reads its own arguments: `orch knowledge --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The passage and its citation, or the help, were printed |
+| `1` | No passage was printed; stderr holds `{"status":"ERROR","code":"<code>"}` |
+| `2` | The arguments were refused; stderr holds `{"status":"ERROR","code":"USAGE"}` |
+
+## orch learning
+
+```text
+orch learning review < DOCUMENT
+orch learning show < DOCUMENT
+orch learning reject ID --expected-revision N < DOCUMENT
+```
+
+Drafts only; nothing is applied, and there is no accept or apply command. Each command reads one JSON document from stdin and prints one JSON line on stdout: `review` writes the drafts again from the events of the document, `show` prints the drafts, and `reject` removes one draft and keeps its ID as a marker. [learning.md](learning.md) describes the document, the errors and the limits. `orch learning` does not load `config.toml`. It reads its own arguments: `orch learning --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The document or the drafts were printed |
+| `1` | `CONFLICT`, `STALE`, `NOT_FOUND`, `LIMIT` or `TIMEOUT`; stderr holds `{"code":"<code>","status":"ERROR"}` |
+| `2` | `USAGE` or `INVALID_INPUT`; stderr holds the same object with that code |
 
 ## Config keys
 

@@ -1,0 +1,16 @@
+{
+  "invoice-terms": {
+    "answer": "Invoices are due in 45 days.",
+    "document_id": "invoice-policy",
+    "revision": 2,
+    "fragment": "terms",
+    "sha256": "8510033480b28305f4fa09b137ad6222e702a2fcb15ff849d705879029cb2b72"
+  },
+  "approval-threshold": {
+    "answer": "Approval is required above 500 synthetic units.",
+    "document_id": "approval-policy",
+    "revision": 1,
+    "fragment": "threshold",
+    "sha256": "b2d6d2138125d0c40b6c912f09e43c479e9e65053b88c0807e3839bb30e3c0d9"
+  }
+}

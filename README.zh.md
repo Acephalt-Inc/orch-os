@@ -28,6 +28,12 @@ npm i -g orch-os
 # 或：npx orch-os init
 ```
 
+也可以把下面这一句话粘贴给能在你机器上运行命令的编程助手：
+
+```text
+请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装 ORCH-os，文件要求停下时就停下并告诉我。
+```
+
 在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。详见 [docs/windows.md](docs/windows.md)。
 
 ## 为什么选择 ORCH-os
@@ -190,6 +196,10 @@ orch mem search review                      # 搜索长期笔记
 - [迁移](docs/migration.md) — 从 v1.1 迁移到 v2。
 - [测试对应表](docs/tests-map.md) — v1.1 与 v2 测试的对应关系。
 - [演示](docs/DEMO.md) — 离线演示脚本。
+- [续接笔记](docs/resume.md) — `orch resume`：一个工作区一条私有续接笔记（保存、显示、忘记）。
+- [显示偏好](docs/preferences.md) — `orch preference`：为一个工作区明确设置回答语言或回答长度（设置、显示、取消）。
+- [知识查询演示](docs/knowledge.md) — `orch knowledge`：合成演示，在内置语料中查询两个固定问题；没有连接任何服务。
+- [学习草稿](docs/learning.md) — `orch learning`：根据标准输入的一份文档，生成显示设置建议和引用笔记的草稿（review、show、reject）；不会应用任何内容。
 
 ## 许可证
 
