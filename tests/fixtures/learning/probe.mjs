@@ -61,23 +61,41 @@ function freezeClock(ms) {
   };
 }
 
-/** A stack frame located in a file: `at name (file:///x.js:1:2)` or `at /x.js:1:2`. */
-const IN_FILE = /(?:\(|\s)((?:file:\/\/|[A-Za-z]:[\\/]|[\\/])[^()]*):\d+:\d+\)?$/;
+/**
+ * Read frame file names as the engine reports them, without parsing stack text.
+ * Code created by `eval` or `new Function` has no file name. An environment read from
+ * such code with no program file on the stack is recorded as the runtime's.
+ */
+function sites() {
+  const prepareStackTrace = Error.prepareStackTrace;
+  const limit = Error.stackTraceLimit;
+  try {
+    Error.prepareStackTrace = (_, frames) => frames;
+    Error.stackTraceLimit = 200;
+    const frames = new Error().stack;
+    return Array.isArray(frames) ? frames.slice(1) : [];
+  } finally {
+    Error.prepareStackTrace = prepareStackTrace;
+    Error.stackTraceLimit = limit;
+  }
+}
+
+function fileName(site) {
+  const file = site.getFileName();
+  return typeof file === "string" && file.length > 0 ? file : null;
+}
 
 /**
- * Who made the current call: "program" when any frame is code from a file other than this
- * one, otherwise "loader" when the runtime's module loader is on the stack, otherwise "runtime".
+ * Who made the current call: "program" when a frame names a file other than this one
+ * or a `node:` id, otherwise "loader" when the module loader is on the stack, otherwise "runtime".
  */
 function origin() {
-  const limit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 200;
-  const frames = String(new Error().stack).split("\n").slice(1);
-  Error.stackTraceLimit = limit;
   let loaderFrame = false;
-  for (const frame of frames) {
-    const file = IN_FILE.exec(frame);
-    if (file && !file[1].startsWith(SELF)) return "program";
-    if (frame.includes("node:internal/modules/")) loaderFrame = true;
+  for (const site of sites()) {
+    const file = fileName(site);
+    if (file === SELF) continue;
+    if (file && !file.startsWith("node:")) return "program";
+    if (file && file.startsWith("node:internal/modules/")) loaderFrame = true;
   }
   return loaderFrame ? "loader" : "runtime";
 }
@@ -199,12 +217,12 @@ syncBuiltinESMExports();
  * so the loader's own reads would otherwise look like the program's.
  */
 function madeByLoader() {
-  for (const frame of String(new Error().stack).split("\n").slice(1)) {
-    const file = IN_FILE.exec(frame);
-    if (file && file[1].startsWith(SELF)) continue;
-    // A frame located in a file is program code, whatever its path contains.
-    if (file) return false;
-    return frame.includes("node:internal/modules/");
+  for (const site of sites()) {
+    const file = fileName(site);
+    if (file === SELF) continue;
+    // A file outside this probe and the runtime identifies the program.
+    if (file && !file.startsWith("node:")) return false;
+    return !!(file && file.startsWith("node:internal/modules/"));
   }
   return false;
 }
