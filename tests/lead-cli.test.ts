@@ -188,6 +188,36 @@ describe.skipIf(!RUN)("orch lead: exit codes", () => {
     expect.soft([output.code, resultOf(output.out), readdirSync(w)], "[file-error-exit-one] output failure exits 1 before mutation").toEqual([1, "", []]);
   });
 
+  it("lead_generic_errors_are_escaped_and_exit_one", async () => {
+    const w = workspace();
+    expect((await inProcess(["lead", "install", "--workspace", w, "--host", "claude"])).code, "install").toBe(0);
+    let hits = 0;
+    const faulty = {
+      ...fs,
+      readdirSync: (...args: Parameters<typeof fs.readdirSync>) => {
+        if (String(args[0]).endsWith(".orch-lead-install")) {
+          hits += 1;
+          throw new Error("injected disk error\nresult: INSTALLED\u200d");
+        }
+        return fs.readdirSync(...args);
+      },
+    };
+    for (const command of ["status", "uninstall"]) {
+      const r = await inProcess(["lead", command, "--workspace", w, "--host", "claude"], { fs: faulty })
+        .catch((e) => ({ code: -1, out: "", err: String(e?.stack ?? e) }));
+      const text = r.out + r.err;
+      expect.soft(r.code, `[generic-error-escaped] ${command}: exit 1`).toBe(1);
+      expect.soft(text.split("\n").filter((line) => line.startsWith("result: ")),
+        `[generic-error-escaped] ${command}: no forged result line`).toEqual([]);
+      expect.soft(/(?!\n)[\p{C}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u.test(text),
+        `[generic-error-escaped] ${command}: no raw control or invisible character`).toBe(false);
+      expect.soft(r.err, `[generic-error-escaped] ${command}: lead error prefix`).toMatch(/^orch lead: error:/);
+      expect.soft(r.err, `[generic-error-escaped] ${command}: escaped error text`)
+        .toContain("injected disk error\\u000aresult: INSTALLED\\u200d");
+    }
+    expect(hits, "both commands reached the fault").toBe(2);
+  });
+
   it.skipIf(WINDOWS)("lead_names_from_disk_are_printed_with_control_characters_escaped", async () => {
     // A file name can hold a line break and terminal control codes (not on Windows, which refuses
     // such names). Printed as it is, the name below would add a second result line to the report.

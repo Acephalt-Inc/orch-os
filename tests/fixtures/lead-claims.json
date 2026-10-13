@@ -426,6 +426,24 @@
    "test": "lead_stopped_install_uninstall_can_retain_state_files",
    "marker": "stopped-state-files-retained",
    "mutant": "unverifiable-temporary-file-deleted"
+  },
+  "generic-error-escaped": {
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_generic_errors_are_escaped_and_exit_one",
+   "marker": "generic-error-escaped",
+   "mutant": "generic-error-rethrown"
+  },
+  "late-parent-used": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_late_ordinary_parent_is_used",
+   "marker": "late-parent-used",
+   "mutant": "late-parent-not-adopted"
+  },
+  "stalled-output-ends": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_stalled_output_ends_within_budget",
+   "marker": "stalled-output-ends",
+   "mutant": "stalled-output-guard-removed"
   }
  },
  "mutants": [
@@ -2134,6 +2152,51 @@
      "file": "src/lead/uninstall.ts",
      "find": "  if (before.state === \"INVALID\" || !before.manifest || !before.manifestFile) return outcome;",
      "replace": "  if (before.state === \"INVALID\" || !before.manifest || !before.manifestFile) { const tmp = at(MANIFEST_TMP); if (!isAbsent(env, tmp)) env.fs.unlinkSync(tmp); return outcome; }"
+    }
+   ]
+  },
+  {
+   "id": "generic-error-rethrown",
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_generic_errors_are_escaped_and_exit_one",
+   "markers": [
+    "generic-error-escaped"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "    if (code === \"ERROR\") {\n      err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + \"\\n\");\n      return 1;\n    }",
+     "replace": "    if (code === \"ERROR\") throw e;"
+    }
+   ]
+  },
+  {
+   "id": "late-parent-not-adopted",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_late_ordinary_parent_is_used",
+   "markers": [
+    "late-parent-used"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "          if (errorCode(e) !== \"EEXIST\" || !env.fs.lstatSync(step, BIG).isDirectory()) throw e;",
+     "replace": "          throw e;"
+    }
+   ]
+  },
+  {
+   "id": "stalled-output-guard-removed",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_stalled_output_ends_within_budget",
+   "markers": [
+    "stalled-output-ends"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "    process.exit(1);",
+     "replace": "    process.exitCode = 1;"
     }
    ]
   }

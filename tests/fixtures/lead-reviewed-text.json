@@ -1631,7 +1631,7 @@
    {
     "text": "Install first checks every path it would create.",
     "class": "program-claim",
-    "claim": "preflight-zero-writes"
+    "claim": "preflight-covers-bootstrap"
    },
    {
     "text": "If any of them exists, install stops and creates nothing.",
@@ -1666,7 +1666,7 @@
    {
     "text": "If a missing parent directory appears as an ordinary directory after the check, install uses it and continues.",
     "class": "program-claim",
-    "claim": "stops-at-collision"
+    "claim": "late-parent-used"
    },
    {
     "text": "If a file appears at one of the paths install reserves inside `.orch-lead-install` before install creates that path, install stops.",

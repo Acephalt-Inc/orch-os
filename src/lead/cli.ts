@@ -9,6 +9,7 @@
  * partial, busy or unverifiable. 1: wrong usage or a file or output error.
  */
 import nodePath, { type PlatformPath } from "node:path";
+import { writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type CmdSpec, HelpRequested, parse, UsageError } from "../args.js";
 import { install, preflight, resolveWorkspace, type Conflict } from "./install.js";
@@ -158,13 +159,28 @@ export function leadSpec(): CmdSpec<any> {
 
 let stdoutErrorHandled = false;
 
+function pendingWriteGuard(deadline: number, now: () => number): NodeJS.Timeout {
+  const guard = setTimeout(() => {
+    try {
+      writeSync(2, "orch lead: the command deadline was reached\n");
+    } catch {}
+    process.exit(1);
+  }, Math.max(0, deadline - now()));
+  guard.unref();
+  return guard;
+}
+
 /** Write to standard output and report completion. Without the listener a closed pipe would end the process before the callback is seen. */
-function processWrite(bytes: Buffer, done: (error?: Error | null) => void): void {
+function processWrite(bytes: Buffer, done: (error?: Error | null) => void, deadline: number, now: () => number): void {
   if (!stdoutErrorHandled) {
     process.stdout.on("error", () => {});
     stdoutErrorHandled = true;
   }
-  process.stdout.write(bytes, (error) => done(error ?? null));
+  const guard = pendingWriteGuard(deadline, now);
+  process.stdout.write(bytes, (error) => {
+    clearTimeout(guard);
+    done(error ?? null);
+  });
 }
 
 const WHY: Readonly<Record<Exclude<RowWhy, "">, string>> = {
@@ -225,10 +241,16 @@ function preservedLine(env: LeadEnv, workspace: string, p: Preserved): string {
 
 /** Run one `orch lead` command line (without the leading `lead`). Returns the exit code. */
 export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<number> {
-  const err = deps.err ?? ((text: string) => void process.stderr.write(text));
-  const write = deps.write ?? (deps.out ? (bytes: Buffer, done: (error?: Error | null) => void) => { deps.out!(bytes.toString("utf8")); done(null); } : processWrite);
   const now = deps.now ?? (() => performance.now());
   const deadline = now() + COMMAND_BUDGET_MS;
+  const err = deps.err ?? ((text: string) => {
+    const guard = pendingWriteGuard(deadline, now);
+    process.stderr.write(text, () => clearTimeout(guard));
+  });
+  const write = deps.write ?? (deps.out ? (bytes: Buffer, done: (error?: Error | null) => void) => {
+    deps.out!(bytes.toString("utf8"));
+    done(null);
+  } : (bytes: Buffer, done: (error?: Error | null) => void) => processWrite(bytes, done, deadline, now));
   const emit = (lines: string[]) => new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new LeadError("the command deadline was reached", "io", "DEADLINE")), Math.max(0, deadline - now()));
     timer.unref();
@@ -256,7 +278,8 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
       err(`${e.usage}\norch lead: error: ${printable(e.message)}\n`);
       return 1;
     }
-    throw e;
+    err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + "\n");
+    return 1;
   }
   const { args, cmd } = parsed;
   const missing = [args.workspace === null ? "--workspace" : "", args.host === null ? "--host" : ""].filter(Boolean);
@@ -359,7 +382,10 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
       return 1;
     }
     const code = errorCode(e);
-    if (code === "ERROR") throw e;
+    if (code === "ERROR") {
+      err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + "\n");
+      return 1;
+    }
     const where = (e as { path?: unknown }).path;
     if (typeof where === "string") err(fill(LEAD_TEXT.errorLine, { message: fill(LEAD_TEXT.fileError, { code, path: where }) }) + "\n");
     else err(fill(LEAD_TEXT.outputFailed, { code }) + "\n");

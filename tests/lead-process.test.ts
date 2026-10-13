@@ -19,6 +19,7 @@ import { delimiter, dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
+import { COMMAND_BUDGET_MS } from "../src/lead/pack.js";
 import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
 import { candidate, npmCommand, pack } from "./_pack.js";
 
@@ -381,6 +382,48 @@ function orch(p: Packed, args: string[]): Promise<Result> {
 }
 
 describe.skipIf(!RUN)("orch lead: real processes", () => {
+  it("lead_stalled_output_ends_within_budget", async () => {
+    const out = workspace();
+    const err = workspace();
+    mkdirSync(at(out.w, ".orch-lead-install"));
+    for (let i = 0; i < 1_800; i++) {
+      writeFileSync(at(out.w, `.orch-lead-install/${String(i).padStart(4, "0")}-${"x".repeat(180)}`), "");
+    }
+    const unread = (stream: "stdout" | "stderr", w: string, host: string) => {
+      const traceFile = join(tmp("orch-lead-stall-"), "trace.jsonl");
+      const began = performance.now();
+      const child = spawn(process.execPath, ["--import", preload(), DIST_CLI, "lead", "status", "--workspace", w, "--host", host], {
+        cwd: isolated, stdio: ["ignore", "pipe", "pipe"],
+        env: childEnv({ LEAD_TEST_TRACE: traceFile }),
+      });
+      child[stream === "stdout" ? "stderr" : "stdout"]!.on("data", () => {});
+      return new Promise<{ code: number | null; signal: NodeJS.Signals | null; elapsed: number; trace: Ev[] }>((resolve, reject) => {
+        const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_BUDGET_MS + 8_000);
+        child.on("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.on("close", (code, signal) => {
+          clearTimeout(timer);
+          const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Ev) : [];
+          resolve({ code, signal, elapsed: performance.now() - began, trace });
+        });
+      });
+    };
+    const results = await Promise.all([
+      unread("stdout", out.w, "codex"),
+      unread("stderr", err.w, "x" + "\u200d".repeat(60_000)),
+    ]);
+    for (const [i, r] of results.entries()) {
+      const stream = i === 0 ? "stdout" : "stderr";
+      console.log(`[observation] stalled ${stream}: code=${r.code}, signal=${r.signal}, elapsed_ms=${Math.round(r.elapsed)}`);
+      expect(r.trace[0]?.op, `${stream}: the child was instrumented`).toBe("preload");
+      expect.soft([r.code, r.signal], `[stalled-output-ends] unread ${stream}: exits 1 without a signal`).toEqual([1, null]);
+      expect.soft(r.elapsed, `[stalled-output-ends] unread ${stream}: ends within the budget plus 5 seconds`).toBeLessThan(COMMAND_BUDGET_MS + 5_000);
+      expect.soft(r.trace.filter((ev) => ev.mutating), `[stalled-output-ends] unread ${stream}: no mutating call`).toEqual([]);
+    }
+  }, 45_000);
+
   it("lead_real_cli_has_install_status_uninstall", async () => {
     const p = packed();
     const { w } = workspace();
@@ -706,6 +749,32 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
         `[stopped-state-files-retained] ${host}: uninstall leaves the file for inspection\n${uninstall.stdout}`)
         .toEqual([2, "UNVERIFIABLE_PREPARATION", retained, identity, []]);
       expect.soft(uninstall.stdout, "[stopped-state-files-retained] the state directory to inspect is listed").toContain(at(w, ".orch-lead-install"));
+    }
+  });
+
+  it("lead_late_ordinary_parent_is_used", async () => {
+    for (const host of ["claude", "codex"] as const) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      const parent = PARENTS[host][0];
+      const s = lead(["install", ...args], [{ op: "mkdirSync", when: "before", match: parent, action: "block", name: "BEFORE_PARENT" }]);
+      expect(await s.phase("BEFORE_PARENT"), `${host}: reached the parent mkdir barrier`).toBe(true);
+      mkdirSync(at(w, parent));
+      const identity = idOf(at(w, parent));
+      s.release();
+      s.child.stdin!.end();
+      const r = await s.done;
+      expect.soft([r.code, resultOf(r.stdout)], `[late-parent-used] ${host}: install uses the late ordinary parent`).toEqual([0, "INSTALLED"]);
+      expect.soft(idOf(at(w, parent)), `[late-parent-used] ${host}: parent identity is unchanged`).toBe(identity);
+      expect.soft(dests(host).filter((dest) => existsSync(at(w, dest))),
+        `[late-parent-used] ${host}: all 20 destinations exist`).toEqual(dests(host));
+      const status = await run(["status", ...args]);
+      expect.soft([status.code, resultOf(status.stdout)], `[late-parent-used] ${host}: status confirms the install`).toEqual([0, "INSTALLED"]);
+      const uninstall = await run(["uninstall", ...args]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout), idOf(at(w, parent))],
+        `[late-parent-used] ${host}: uninstall leaves the adopted parent`).toEqual([0, "NOT_INSTALLED", identity]);
+      expect.soft(uninstall.stdout, `[late-parent-used] ${host}: parent is listed as left because install did not create it`)
+        .toContain(`dir left        ${at(w, parent)}  (install did not create it)`);
     }
   });
 

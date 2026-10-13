@@ -20,6 +20,8 @@ export const MANIFEST_CAP = 64 * 1024;
  * The byte loops of file reads and writes (`readDescriptor`, `writeAll` below) and the wait for
  * each standard-output write (`emit` in cli.ts) check this budget (milliseconds, monotonic
  * clock). Other loops do not check it. A single file-system call is not interrupted.
+ * When a real standard-output or standard-error write is still pending at the deadline, the
+ * process ends with exit 1 (measured on macOS; see lead_stalled_output_ends_within_budget).
  */
 export const COMMAND_BUDGET_MS = 30_000;
 
