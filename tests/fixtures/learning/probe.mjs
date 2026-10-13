@@ -9,10 +9,11 @@
 //
 // The runtime itself goes through the same functions: its module loader reads the program's
 // own files, and it looks at a few environment variables of its own. Those calls are kept
-// apart under `runtime`. A file read counts as the loader's only when the call stack has a
-// loader frame and no frame of program code, and its path is recorded so that the test can
-// check it lies inside the program's own directory. An environment read counts as the
-// runtime's only when no frame of program code is on the stack.
+// apart under `runtime`. A file read counts as the loader's when the loader itself made it, or
+// when the call stack has a loader frame and no frame of program code; its path is recorded so
+// that the test can check it lies inside the program's own directory. An environment read
+// counts as the runtime's when no frame of program code is on the stack, or when the module
+// loader itself made the read while loading a module the program imports lazily.
 //
 // LEARNING_PROBE_NOW, when set, freezes the clock of the child at that instant. The variable is
 // read and removed here, before the program starts, so the program cannot see it.
@@ -92,7 +93,7 @@ let depth = 0;
 
 function note(kind, label, args) {
   if (depth > 0) return;
-  if (kind === "fs_read" && origin() === "loader") runtime.loaded.push(pathOf(args[0]) ?? label);
+  if (kind === "fs_read" && (madeByLoader() || origin() === "loader")) runtime.loaded.push(pathOf(args[0]) ?? label);
   else record[kind].push(label);
 }
 
@@ -187,9 +188,23 @@ wrap(os, "userInfo", "home", "os.userInfo");
 // wrappers only after this call.
 syncBuiltinESMExports();
 
+/**
+ * True when the code that made the current call is the runtime's module loader itself. A newer
+ * runtime starts loading a lazily imported module on the stack of the program that imports it,
+ * so the loader's own reads would otherwise look like the program's.
+ */
+function madeByLoader() {
+  for (const frame of String(new Error().stack).split("\n").slice(1)) {
+    const file = IN_FILE.exec(frame);
+    if (file && file[1].startsWith(SELF)) continue;
+    return frame.includes("node:internal/modules/");
+  }
+  return false;
+}
+
 function noteEnv(key) {
   if (typeof key !== "string" || depth > 0) return;
-  (origin() === "program" ? record.env : runtime.env).push(key);
+  (!madeByLoader() && origin() === "program" ? record.env : runtime.env).push(key);
 }
 
 // Every read of an environment variable by name, and every listing of the environment ("*").
