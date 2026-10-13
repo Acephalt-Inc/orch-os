@@ -1,6 +1,6 @@
 # Command reference
 
-Apart from `--version` (`-V`), a `--help` request and a usage error, all commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `review approve`, `review changes` and `review reject` skip it when `--repo` is given, and on Windows `review watch`, `worker start` and `worker stop` are refused before it is read. Read-only commands use built-in defaults when the file does not exist yet. A command that reads a malformed config exits 2 with a one-line message; `doctor` instead prints a `FAIL  config` row and exits 1. Every command accepts `-h`/`--help`; a usage error exits 2.
+ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `orch init` writes the file and `orch config` prints the values in effect. When the file does not exist yet, `doctor` reports that as a `FAIL  config` row and exits 1, `profile update` exits 2 and asks for `orch init`, and the other commands that read the file start from built-in defaults. `update check`, `resume`, `preference`, `knowledge` and `learning` do not read the file. Every command accepts `-h`/`--help` without reading the file; a usage error exits 2.
 
 | Environment variable | Effect |
 |---|---|

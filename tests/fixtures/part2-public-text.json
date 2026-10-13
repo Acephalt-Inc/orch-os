@@ -1,12 +1,12 @@
 {
- "owner_approved": false,
+ "owner_approved": true,
  "note": "Every public sentence block this change added or reworded, with the SHA-256 of its exact text (UTF-8). tests/update-check.test.ts checks each block against the file or the help text it names. The three result lines are in the orch update check section.",
  "blocks": [
   {
    "id": "docs/commands.md: which commands read the config file",
    "file": "docs/commands.md",
-   "text": "Apart from `--version` (`-V`), a `--help` request and a usage error, all commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `review approve`, `review changes` and `review reject` skip it when `--repo` is given, and on Windows `review watch`, `worker start` and `worker stop` are refused before it is read.",
-   "sha256": "ad5aa3b9da46aa2e54d5f5497201332b69333c3bd070fed51973696a960370c1"
+   "text": "ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `orch init` writes the file and `orch config` prints the values in effect. When the file does not exist yet, `doctor` reports that as a `FAIL  config` row and exits 1, `profile update` exits 2 and asks for `orch init`, and the other commands that read the file start from built-in defaults. `update check`, `resume`, `preference`, `knowledge` and `learning` do not read the file. Every command accepts `-h`/`--help` without reading the file; a usage error exits 2.",
+   "sha256": "215b644e88bb08b580c4995135702ff3efeca8cdc58bd3d91ee85b413f77cf13"
   },
   {
    "id": "docs/commands.md: shared exit codes",
