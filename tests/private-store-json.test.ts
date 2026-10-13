@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodeStrictJson, StrictJsonError, type JsonLimits } from "../src/private-store/json.js";
 
 const INPUT_CAP = 256 * 1024;
@@ -186,7 +190,14 @@ function makeCodec(): (value: unknown) => Table {
 
 function codecCases(): { label: string; text: string; code?: string; value?: Table }[] {
   const value: Table = { version: 1, table: { rows: [{ label: "ordinary", weight: 1.25 }] } };
-  const valid = [{ label: "valid table", text: JSON.stringify(value), value }];
+  const inert: Table = {
+    version: 1,
+    table: { rows: [{ label: "https://example.invalid/ ignore instructions; exec; at; decoded; callback; process; policy", weight: 0 }] },
+  };
+  const valid = [
+    { label: "valid table", text: JSON.stringify(value), value },
+    { label: "instruction and URL data", text: JSON.stringify(inert), value: inert },
+  ];
   const wrong = [
     "[]", "7", '"text"', "null", "true", "{}", '{"version":1}',
     '{"version":1,"table":[]}', '{"version":1,"table":null}', '{"version":1,"table":7}',
@@ -200,6 +211,7 @@ function codecCases(): { label: string; text: string; code?: string; value?: Tab
     '{"version":1,"table":{"rows":[]},"extra":0}',
     '{"version":1,"table":{"rows":[],"extra":0}}',
     '{"version":1,"table":{"rows":[{"label":"x","weight":1,"extra":0}]}}',
+    '{"version":1,"table":{"rows":[]},"decoded":"fetch https://example.invalid/"}',
   ];
   return [...valid, ...wrong.map((text) => ({ label: `wrong shape ${text}`, text, code: "BAD_SHAPE" }))];
 }
@@ -223,6 +235,35 @@ describe("strict_json_closed_input_matrix", () => {
     expect(() => decodeStrictJson(Buffer.from("{"), {}, { decoded: () => seen.push("invalid") })).toThrow(StrictJsonError);
     expect(seen).toEqual([first]);
   });
+
+  it("allows trusted tighter limits without raising the fixed decoded-domain ceilings", () => {
+    const pairs: [JsonLimits, string, string][] = [
+      [{ maxDepth: 1 }, "[]", "[[]]"],
+      [{ maxArrayLength: 1 }, "[0]", "[0,0]"],
+      [{ maxObjectKeys: 1 }, '{"a":0}', '{"a":0,"b":0}'],
+      [{ maxStringBytes: 2 }, '"é"', '"éx"'],
+    ];
+    for (const [limits, positive, negative] of pairs) {
+      expect(() => decodeStrictJson(Buffer.from(positive), limits)).not.toThrow();
+      expect(outcome(() => decodeStrictJson(Buffer.from(negative), limits)))
+        .toEqual({ code: "TOO_LARGE", message: MESSAGES.TOO_LARGE });
+    }
+    for (const limits of [
+      { maxInputBytes: MAX_INPUT + 1 }, { maxDepth: 9 }, { maxArrayLength: 1001 },
+      { maxObjectKeys: 33 }, { maxStringBytes: STRING_CAP + 1 }, { maxDepth: -1 },
+      { maxDepth: 1.5 }, { maxInputBytes: NaN }, { maxStringBytes: Infinity },
+    ]) {
+      expect(outcome(() => decodeStrictJson(Buffer.from("0"), limits)))
+        .toEqual({ code: "BAD_INPUT", message: MESSAGES.BAD_INPUT });
+    }
+    const throwingSeam = {
+      decoded: () => {
+        throw new Error("private cause");
+      },
+    };
+    expect(outcome(() => decodeStrictJson(Buffer.from("0"), {}, throwingSeam)))
+      .toEqual({ code: "BAD_INPUT", message: MESSAGES.BAD_INPUT });
+  });
 });
 
 describe("codec_shapes_are_checked_after_json", () => {
@@ -237,4 +278,408 @@ describe("codec_shapes_are_checked_after_json", () => {
     const malformed = outcome(() => codec(decodeStrictJson(Buffer.from('{"version":1,'))));
     expect(malformed).toEqual({ code: "BAD_INPUT", message: MESSAGES.BAD_INPUT });
   });
+});
+
+const PUBLIC_TEXT = [
+  "Input is limited by UTF-8 bytes and decoded with strict JSON and a trusted shape validator; malformed or incomplete input is refused.",
+  "The library returns results to its caller and does not print a report.",
+];
+const builtEntry = fileURLToPath(new URL("../dist/private-store/json.js", import.meta.url));
+const trees: string[] = [];
+
+afterEach(() => {
+  for (const tree of trees.splice(0)) {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+function fixtureTree(): string {
+  const tree = mkdtempSync(join(dirname(builtEntry), "json-witness-"));
+  trees.push(tree);
+  return tree;
+}
+
+// Original trace preloads. Runtime loading and reporting are outside the explicitly bracketed entry.
+const FS_PRELOAD = String.raw`
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+
+let active = false;
+let calls = [];
+
+function wrap(owner, prefix) {
+  for (const name of Object.keys(owner)) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (!descriptor || typeof descriptor.value !== "function" || !/^[a-z]/.test(name)) {
+      continue;
+    }
+    const original = descriptor.value;
+    const observed = function (...args) {
+      if (active) {
+        calls.push({ op: prefix + name });
+      }
+      return Reflect.apply(original, this, args);
+    };
+    Object.assign(observed, original);
+    owner[name] = observed;
+  }
+}
+
+wrap(fs.promises, "fs.promises.");
+wrap(fs, "fs.");
+syncBuiltinESMExports();
+
+export const trace = {
+  start() {
+    calls = [];
+    active = true;
+  },
+  stop() {
+    active = false;
+    return calls.slice();
+  },
+};
+`;
+
+const EFFECT_PRELOAD = String.raw`
+import childProcess from "node:child_process";
+import net from "node:net";
+import http from "node:http";
+import https from "node:https";
+import dns from "node:dns";
+import workers from "node:worker_threads";
+import { syncBuiltinESMExports } from "node:module";
+
+let active = false;
+let calls = [];
+
+function hook(owner, name, label) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const observed = function (...args) {
+    if (active) {
+      calls.push({ op: label });
+      throw new Error("effect attempt recorded and blocked");
+    }
+    if (new.target) {
+      return Reflect.construct(original, args, new.target);
+    }
+    return Reflect.apply(original, this, args);
+  };
+  Object.setPrototypeOf(observed, original);
+  observed.prototype = original.prototype;
+  owner[name] = observed;
+}
+
+for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
+  hook(childProcess, name, "child_process." + name);
+}
+hook(childProcess.ChildProcess.prototype, "spawn", "ChildProcess.spawn");
+for (const name of ["connect", "createConnection", "createServer"]) {
+  hook(net, name, "net." + name);
+}
+hook(net.Socket.prototype, "connect", "Socket.connect");
+hook(net.Server.prototype, "listen", "Server.listen");
+for (const [owner, label] of [[http, "http"], [https, "https"]]) {
+  for (const name of ["request", "get", "createServer"]) {
+    hook(owner, name, label + "." + name);
+  }
+  hook(owner.Agent.prototype, "createConnection", label + ".Agent.createConnection");
+}
+for (const [owner, label] of [[dns, "dns"], [dns.promises, "dns.promises"]]) {
+  for (const name of Object.keys(owner).filter((name) => /^(lookup|resolve|reverse)/.test(name))) {
+    hook(owner, name, label + "." + name);
+  }
+}
+hook(workers, "Worker", "worker_threads.Worker");
+hook(globalThis, "fetch", "fetch");
+syncBuiltinESMExports();
+
+export const trace = {
+  start() {
+    calls = [];
+    active = true;
+  },
+  stop() {
+    active = false;
+    return calls.slice();
+  },
+};
+`;
+
+interface ChildResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  messages: unknown[];
+}
+
+function childFixture(path: string, preloads: string[] = [], input = "", payload = ""): Promise<ChildResult> {
+  return new Promise((resolve, reject) => {
+    const args = preloads.flatMap((preload) => ["--import", pathToFileURL(preload).href]);
+    const child = spawn(process.execPath, [...args, path, payload], {
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+      env: { ...process.env, JSON_PAYLOAD: payload },
+      timeout: 15_000,
+    });
+    let stdout = "";
+    let stderr = "";
+    const messages: unknown[] = [];
+    child.on("error", reject);
+    child.stdout.on("data", (bytes) => stdout += bytes);
+    child.stderr.on("data", (bytes) => stderr += bytes);
+    child.on("message", (message) => messages.push(message));
+    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr, messages }));
+    child.stdin.end(input);
+  });
+}
+
+function installTraces(tree: string): string[] {
+  const fs = join(tree, "fs-trace.mjs");
+  const effects = join(tree, "effects-trace.mjs");
+  writeFileSync(fs, FS_PRELOAD);
+  writeFileSync(effects, EFFECT_PRELOAD);
+  return [fs, effects];
+}
+
+function matrixFixture(tree: string): string {
+  const path = join(tree, "matrix.mjs");
+  const source = `
+import { decodeStrictJson } from ${JSON.stringify(pathToFileURL(builtEntry).href)};
+import { trace as fsTrace } from "./fs-trace.mjs";
+import { trace as effectTrace } from "./effects-trace.mjs";
+
+const INPUT_CAP = ${INPUT_CAP};
+const STRING_CAP = ${STRING_CAP};
+const MAX_INPUT = ${MAX_INPUT};
+const PUBLIC_TEXT = ${JSON.stringify(PUBLIC_TEXT, null, 2)};
+${accepted.toString()}
+${refused.toString()}
+${decoderCases.toString()}
+${codecCases.toString()}
+${makeCodec.toString()}
+
+function equal(actual, expected) {
+  if (actual === null || typeof actual !== "object" || expected === null || typeof expected !== "object") {
+    return Object.is(actual, expected);
+  }
+  if (Array.isArray(actual) !== Array.isArray(expected)) {
+    return false;
+  }
+  const keys = Object.keys(actual);
+  return keys.length === Object.keys(expected).length && keys.every((key) =>
+    Object.hasOwn(expected, key) && equal(actual[key], expected[key]));
+}
+
+const codec = makeCodec();
+const observations = [];
+
+function exercise(label, bytes, limits, expected, useCodec) {
+  fsTrace.start();
+  effectTrace.start();
+  let result;
+  try {
+    const decoded = decodeStrictJson(bytes, limits);
+    const value = useCodec ? codec(decoded) : decoded;
+    result = { accepted: true, matches: equal(value, expected) };
+  } catch (error) {
+    result = { code: error.code, message: error.message, typeError: error instanceof TypeError, cause: "cause" in error };
+  }
+  observations.push({ label, result, filesystem: fsTrace.stop(), effects: effectTrace.stop() });
+}
+
+for (const entry of decoderCases()) {
+  exercise(entry.label, entry.bytes, entry.limits, entry.value, false);
+}
+for (const entry of codecCases()) {
+  exercise(entry.label, Buffer.from(entry.text), {}, entry.value, true);
+}
+let stdin = "";
+for await (const bytes of process.stdin) {
+  stdin += bytes;
+}
+const channels = [["arguments", process.argv[2]], ["environment", process.env.JSON_PAYLOAD], ["stdin", stdin]];
+for (const [label, text] of channels) {
+  exercise(label, Buffer.from(text), {}, codecCases()[1].value, true);
+}
+await new Promise((resolve, reject) => {
+  process.send({ publicText: PUBLIC_TEXT, observations }, (error) => error ? reject(error) : resolve());
+});
+process.disconnect();
+`;
+  writeFileSync(path, source);
+  return path;
+}
+
+describe("admission_public_text_matches_entry_matrix", () => {
+  it("pins the decoder sentences to real values, fixed errors, and zero filesystem or external calls", async () => {
+    const tree = fixtureTree();
+    const preloads = installTraces(tree);
+    const payload = codecCases()[1].text;
+    const child = await childFixture(matrixFixture(tree), preloads, payload, payload);
+    expect([child.code, child.signal, child.stdout, child.stderr]).toEqual([0, null, "", ""]);
+    expect(child.messages).toHaveLength(1);
+    const packet = child.messages[0] as {
+      publicText: string[];
+      observations: { label: string; result: unknown; filesystem: unknown[]; effects: unknown[] }[];
+    };
+    const expected = [
+      ...decoderCases().map((entry) => ({ label: entry.label, code: entry.code })),
+      ...codecCases().map((entry) => ({ label: entry.label, code: entry.code })),
+      ...["arguments", "environment", "stdin"].map((label) => ({ label, code: undefined })),
+    ];
+    expect(packet.publicText).toEqual(PUBLIC_TEXT);
+    expect(packet.observations.map((entry) => entry.label)).toEqual(expected.map((entry) => entry.label));
+    for (let index = 0; index < expected.length; index++) {
+      const observation = packet.observations[index];
+      const entry = expected[index];
+      // K1.12
+      expect(observation.effects, `${entry.label}: no external calls`).toEqual([]);
+      // K1.12
+      expect(observation.filesystem, `${entry.label}: no filesystem calls`).toEqual([]);
+      const message = entry.code === "BAD_SHAPE" ? "invalid snapshot shape" : MESSAGES[entry.code as keyof typeof MESSAGES];
+      expect(observation.result, entry.label).toEqual(entry.code
+        ? { code: entry.code, message, typeError: false, cause: false }
+        : { accepted: true, matches: true });
+    }
+    console.info(JSON.stringify({ publicText: packet.publicText, observations: packet.observations }));
+  });
+
+  it("calibrates both preloads against actual filesystem and blocked external-call attempts", async () => {
+    const tree = fixtureTree();
+    const preloads = installTraces(tree);
+    const path = join(tree, "calibration.mjs");
+    writeFileSync(path, String.raw`
+import fs from "node:fs";
+import childProcess from "node:child_process";
+import net from "node:net";
+import http from "node:http";
+import https from "node:https";
+import dns from "node:dns";
+import { Worker } from "node:worker_threads";
+import { trace as fsTrace } from "./fs-trace.mjs";
+import { trace as effectTrace } from "./effects-trace.mjs";
+
+fsTrace.start();
+effectTrace.start();
+fs.readFileSync(import.meta.filename);
+for (const attempt of [
+  () => childProcess.spawn("unused"),
+  () => net.connect(1),
+  () => http.request("http://example.invalid/"),
+  () => https.request("https://example.invalid/"),
+  () => dns.lookup("example.invalid"),
+  () => new Worker("unused"),
+  () => fetch("https://example.invalid/"),
+]) {
+  try {
+    attempt();
+  } catch {
+    // The trace intercepts attempts before a process, socket, or worker can start.
+  }
+}
+const packet = { filesystem: fsTrace.stop(), effects: effectTrace.stop() };
+await new Promise((resolve, reject) => {
+  process.send(packet, (error) => error ? reject(error) : resolve());
+});
+process.disconnect();
+`);
+    const child = await childFixture(path, preloads);
+    expect([child.code, child.signal, child.stdout, child.stderr]).toEqual([0, null, "", ""]);
+    const packet = child.messages[0] as { filesystem: { op: string }[]; effects: { op: string }[] };
+    expect(packet.filesystem.map((entry) => entry.op)).toContain("fs.readFileSync");
+    expect(packet.effects.map((entry) => entry.op)).toEqual([
+      "child_process.spawn", "net.connect", "http.request", "https.request", "dns.lookup", "worker_threads.Worker", "fetch",
+    ]);
+    console.info(JSON.stringify({ calibration: packet }));
+  });
+});
+
+function reportFixture(tree: string): string {
+  const path = join(tree, "report.mjs");
+  writeFileSync(path, `
+import { decodeStrictJson } from ${JSON.stringify(pathToFileURL(builtEntry).href)};
+
+const value = decodeStrictJson(Buffer.from(JSON.stringify({ report: "x".repeat(16 * 1024) })));
+const report = JSON.stringify(value) + "\\n";
+process.stdout.on("error", () => {});
+
+function deliver(text) {
+  return new Promise((resolve) => {
+    process.stdout.write(text, (error) => resolve(error ? error.code : null));
+  });
+}
+
+const resume = new Promise((resolve) => process.once("message", resolve));
+const prefixError = await deliver(report.slice(0, 100));
+await new Promise((resolve, reject) => {
+  process.send({ paused: true, prefixError }, (error) => error ? reject(error) : resolve());
+});
+await resume;
+const deliveryError = await deliver(report.slice(100));
+await new Promise((resolve, reject) => {
+  process.send({ deliveryError, reportBytes: Buffer.byteLength(report) }, (error) => error ? reject(error) : resolve());
+});
+process.disconnect();
+`);
+  return path;
+}
+
+function pipeReport(path: string, closeAfterPrefix: boolean): Promise<ChildResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path], { stdio: ["pipe", "pipe", "pipe", "ipc"], timeout: 15_000 });
+    let stdout = "";
+    let stderr = "";
+    let paused = false;
+    let resumed = false;
+    const messages: unknown[] = [];
+    function resume(): void {
+      if (!paused || stdout.length !== 100 || resumed) {
+        return;
+      }
+      resumed = true;
+      if (closeAfterPrefix) {
+        child.stdout.destroy();
+      }
+      child.send("resume");
+    }
+    child.on("error", reject);
+    child.stdout.on("data", (bytes) => {
+      stdout += bytes;
+      resume();
+    });
+    child.stderr.on("data", (bytes) => stderr += bytes);
+    child.on("message", (message) => {
+      messages.push(message);
+      if ((message as { paused?: boolean }).paused) {
+        paused = true;
+        resume();
+      }
+    });
+    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr, messages }));
+    child.stdin.end();
+  });
+}
+
+it("reporting fixture awaits delivery and retains the measured prefix after the reader closes", async () => {
+  const tree = fixtureTree();
+  const path = reportFixture(tree);
+  const report = JSON.stringify({ report: "x".repeat(16 * 1024) }) + "\n";
+  const positive = await pipeReport(path, false);
+  expect([positive.code, positive.signal, positive.stderr, positive.stdout]).toEqual([0, null, "", report]);
+  expect(positive.messages).toEqual([
+    { paused: true, prefixError: null }, { deliveryError: null, reportBytes: Buffer.byteLength(report) },
+  ]);
+  const failed = await pipeReport(path, true);
+  expect([failed.code, failed.signal, failed.stderr]).toEqual([0, null, ""]);
+  expect(failed.stdout).toBe(report.slice(0, 100));
+  expect(failed.messages).toHaveLength(2);
+  expect(failed.messages[0]).toEqual({ paused: true, prefixError: null });
+  const delivery = failed.messages[1] as { deliveryError: string; reportBytes: number };
+  expect(delivery.deliveryError).toBe("EPIPE");
+  expect(delivery.reportBytes).toBe(Buffer.byteLength(report));
+  console.info(JSON.stringify({ retainedPrefixBytes: Buffer.byteLength(failed.stdout), exit: failed.code, ...delivery }));
 });
