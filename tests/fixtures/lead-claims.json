@@ -2238,7 +2238,7 @@
     {
      "file": "src/lead/cli.ts",
      "find": "    process.exit(1);",
-     "replace": "    process.getBuiltinModule(\"node:fs\").writeSync(2, \"orch lead: the command deadline was reached\\n\");\n    process.exit(1);"
+     "replace": "    process.stderr.write(\"orch lead: the command deadline was reached\\n\", () => process.exit(1));"
     }
    ]
   }
