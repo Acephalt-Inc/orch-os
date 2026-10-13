@@ -20,6 +20,7 @@ import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
+import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 
@@ -474,6 +475,23 @@ const cmdConfig: Run = (_a, io) => {
   println(io, `# resolved from ${C.configPath()}` + (existsSync(C.configPath()) ? "" : " (absent: defaults)"));
   println(io, dumps(cfg, 2));
   return 0;
+};
+
+/** The only caller of the registry check. One line on stdout; exit 0 for an answer, 1 without one. */
+const cmdUpdateCheck: Run = async (a, io) => {
+  const result = await checkLatest(VERSION, a._updateUrl);
+  try {
+    io.out(updateLine(VERSION, result) + "\n");
+  } catch {
+    // the line did not go out whole: say so where it can still be said, and fail
+    try {
+      io.err("orch update check: output failed\n");
+    } catch {
+      // no stream is left to say it on
+    }
+    return 1;
+  }
+  return result.kind === "unavailable" ? 1 : 0;
 };
 
 const cmdLease: Run = (a, io) => {
@@ -1076,6 +1094,10 @@ export function buildTree(): CmdSpec<Run> {
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
       {
+        name: "update", help: "ask the npm registry for the latest version",
+        sub: [{ name: "check", help: "one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable", run: cmdUpdateCheck }],
+      },
+      {
         name: "lease", help: "single-holder role lease", run: cmdLease,
         pos: [{ dest: "action", choices: ["status", "acquire", "renew", "release"] }],
         opts: [
@@ -1271,7 +1293,7 @@ export function buildTree(): CmdSpec<Run> {
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
 export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
-  runtime: { platform?: NodeJS.Platform } = {}): Promise<number> {
+  runtime: { platform?: NodeJS.Platform; updateUrl?: string } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1301,6 +1323,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   }
   const { args, cmd } = parsed;
   args._platform = runtime.platform ?? process.platform;
+  // only a caller of main() can name another address (the tests' local registry); no option or variable does
+  args._updateUrl = runtime.updateUrl;
   args.cmd = rest;
   if (cmd.name === "add" && args._path[1] === "mem" && (args.description === null || args.description === undefined)) {
     eprintln(io, `usage: ${cmd.usage}\norch: error: the following arguments are required: --description`);

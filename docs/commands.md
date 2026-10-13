@@ -1,6 +1,6 @@
 # Command reference
 
-All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read-only commands use built-in defaults when the file does not exist yet. A malformed config gives exit 2 with a one-line message. Every command accepts `-h`/`--help`; a usage error exits 2.
+All commands except `update check` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read-only commands use built-in defaults when the file does not exist yet. A malformed config gives exit 2 with a one-line message. Every command accepts `-h`/`--help`; a usage error exits 2.
 
 | Environment variable | Effect |
 |---|---|
@@ -9,7 +9,7 @@ All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read
 | `ORCH_SESSION_ID` | Default `--session` for `lease`; second fallback for `--as` (then `user@host`) |
 | `ORCH_AGENT_DIRS` | Colon-separated dirs searched for agent CLIs after PATH; empty string = PATH only |
 
-Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
+Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
 
 ## orch init
 
@@ -62,6 +62,24 @@ With a `[profile]`, doctor adds one row per profile check. A missing capability 
 ## orch config
 
 Prints the resolved configuration as JSON, with the file it came from.
+
+## orch update check
+
+```text
+orch update check
+```
+
+Asks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. It runs only when you type it: no other command contacts the registry. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.
+
+The request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.
+
+| Line (`X` is the installed version, `Y` the offered one) | Exit |
+|---|---|
+| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |
+| `update check: no newer version: installed X, latest Y` | 0 |
+| `update check: unavailable (REASON); installed X` | 1 |
+
+`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.
 
 ## orch lease
 
