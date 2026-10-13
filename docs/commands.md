@@ -340,6 +340,23 @@ One private continuation note per workspace; `save` reads the note, one JSON obj
 | `3` | `--expected-revision` is not the current revision |
 | `4` | The workspace or the note store cannot be used |
 
+## orch preference
+
+```text
+orch preference set KEY VALUE --workspace PATH --expected-revision N
+orch preference show --workspace PATH
+orch preference unset KEY --workspace PATH --expected-revision N
+```
+
+Personal display preferences for one workspace: `response-language` (`en` or `zh`) and `answer-length` (`short` or `normal`). [preferences.md](preferences.md) describes what the settings are and are not, where they are stored and what is refused. `orch preference` does not load `config.toml`. It reads its own arguments: `orch preference --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Set, shown or unset |
+| `2` | Invalid arguments, or a key or value other than the ones above |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the settings store cannot be used |
+
 ## Config keys
 
 | Key | Default | Meaning |

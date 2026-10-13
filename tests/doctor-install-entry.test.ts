@@ -221,7 +221,11 @@ describe("InstallEntry", () => {
 
   it("the_guide_is_the_one_docs_file_in_the_package_file_list", () => {
     expect(existsSync(join(ROOT, GUIDE)), `${GUIDE} exists`).toBe(true);
-    expect(pkg.files.filter((f: string) => f.startsWith("docs")), "docs entries in package.json files").toEqual([GUIDE, "docs/resume.md"]);
+    expect(pkg.files.filter((f: string) => f.startsWith("docs")), "docs entries in package.json files").toEqual([
+      GUIDE,
+      "docs/preferences.md",
+      "docs/resume.md",
+    ]);
   });
 
   it("packed_tarball_contains_the_guide_at_the_path_the_readme_names", () => {
@@ -229,7 +233,11 @@ describe("InstallEntry", () => {
     try {
       const copy = candidate(dirs);
       const files = copy.run("tar", ["-tzf", pack(copy)]).trim().split("\n");
-      expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([`package/${GUIDE}`, "package/docs/resume.md"]);
+      expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([
+        `package/${GUIDE}`,
+        "package/docs/preferences.md",
+        "package/docs/resume.md",
+      ]);
       expect(files, "the READMEs are in the tarball").toEqual(expect.arrayContaining(["package/README.md", "package/README.zh.md"]));
     } finally {
       for (const dir of dirs) rmSync(dir, { recursive: true, force: true });

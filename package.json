@@ -21,6 +21,7 @@
     "fixtures/",
     "templates/",
     "docs/INSTALL-WITH-AGENT.md",
+    "docs/preferences.md",
     "docs/resume.md",
     "README.md",
     "README.zh.md",

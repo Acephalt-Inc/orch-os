@@ -1,6 +1,6 @@
 # Personal display preferences
 
-The `orch preference` command is available after registration in the packaged command.
+`orch preference` is a command of the packaged `orch` program.
 
 It stores an explicit response language or answer length for one canonical workspace under the OS user's private home directory.
 

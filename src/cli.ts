@@ -1292,6 +1292,11 @@ export function buildTree(): CmdSpec<Run> {
         run: async (a) => (await import("./resume/command.js")).main(a.argv),
         pos: [{ dest: "argv", variadic: true }],
       },
+      {
+        name: "preference", help: "personal display preferences for one workspace: set, show, unset (response language, answer length)",
+        run: async (a) => (await import("./preferences/command.js")).runPreferenceCommand(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
     ],
   };
 }
@@ -1313,6 +1318,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   }
   // `resume` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
   if (argv[0] === "resume") argv = ["resume", "--", ...argv.slice(1)];
+  // `preference` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "preference") argv = ["preference", "--", ...argv.slice(1)];
   const tree = buildTree();
   let parsed;
   try {

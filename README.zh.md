@@ -197,6 +197,7 @@ orch mem search review                      # 搜索长期笔记
 - [测试对应表](docs/tests-map.md) — v1.1 与 v2 测试的对应关系。
 - [演示](docs/DEMO.md) — 离线演示脚本。
 - [续接笔记](docs/resume.md) — `orch resume`：一个工作区一条私有续接笔记（保存、显示、忘记）。
+- [显示偏好](docs/preferences.md) — `orch preference`：为一个工作区明确设置回答语言或回答长度（设置、显示、取消）。
 
 ## 许可证
 
