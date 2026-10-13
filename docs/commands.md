@@ -52,9 +52,11 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 
 | Check | Required |
 |---|---|
-| Node.js ≥ 22, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
-| handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
-| load state | informational |
+| `node>=22`, `config`, `state dir writable`, `lease lockable`, `mailbox`, `mailbox sections`, `messages`, `task registry`, `mem` | yes everywhere |
+| `posix (process groups)`, `git` | yes on macOS and Linux |
+| `windows (no process groups)` | yes on Windows |
+| `handbook`, `gh (merge-gate live mode)`, `merge repo`, `worker command`, `timeout (worker time limit)`, `agent CLIs`, each `agent NAME` | no (SKIP) |
+| `load state` | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid or was written for the removed built-in table (no `policy` key); every other profile row is `PASS` or `SKIP` |
 
 With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; no review can grade above single-agent until a second account is added`. A missing capability never lowers the rule. The rows are `profile` (the selected policy, the declared compute and people, and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (only when `required_review` is above `single-agent`: agents on at least two accounts, or two vendors) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.

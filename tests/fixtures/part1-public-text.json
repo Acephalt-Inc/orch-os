@@ -53,14 +53,14 @@
   {
    "id": "docs/commands.md: doctor required checks",
    "file": "docs/commands.md",
-   "text": "| Node.js ≥ 22, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |",
-   "sha256": "e7f2f13e8faa1422c24c0ec0371d078498e8c672952eca586bc666f9398fe4c6"
+   "text": "| `node>=22`, `config`, `state dir writable`, `lease lockable`, `mailbox`, `mailbox sections`, `messages`, `task registry`, `mem` | yes everywhere |\n| `posix (process groups)`, `git` | yes on macOS and Linux |\n| `windows (no process groups)` | yes on Windows |",
+   "sha256": "c26a38fa0d1f13b6813aadbe76a5da243a564dfc66d443ad69cc01a7cf69441b"
   },
   {
    "id": "docs/faq.md: doctor prerequisites",
    "file": "docs/faq.md",
-   "text": "No. With Node.js ≥ 22 and git on a POSIX system, the doctor passes.",
-   "sha256": "428e8b7a55f2f4a166948da9a03c3e7192492fc0b318eacb17560ff242f05654"
+   "text": "No. After `orch init` has created the home, the doctor passes with Node.js 22 or newer. `git` is required on macOS and Linux and optional on Windows.",
+   "sha256": "09b7130619e5f62de14ed8fb3d91d90536ee53229c5b4d61dcecfb1cd08413be"
   },
   {
    "id": "doctor row snapshot: note on the changed row",

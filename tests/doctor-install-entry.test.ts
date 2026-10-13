@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { main } from "../src/cli.js";
 import * as C from "../src/config.js";
 import * as D from "../src/detect.js";
 import { parseToml } from "../src/toml.js";
@@ -28,6 +29,19 @@ function rowsOf(out: string): [string, string, string][] {
   return out.split("\n").filter((l) => /^(PASS|FAIL|SKIP) {2}/.test(l)).map((l) => {
     const [name, ...detail] = l.slice(6).split(/\s{2,}/);
     return [l.slice(0, 4), name.trim(), detail.join("  ")];
+  });
+}
+
+/** Doctor row names that the commands table marks as required on `platform`. */
+function documentedRequired(platform: "linux" | "win32"): string[] {
+  const table = section(read("docs/commands.md"), "orch doctor");
+  return table.split("\n").flatMap((line) => {
+    const cells = line.split("|").map((cell) => cell.trim());
+    const required = cells[2] ?? "";
+    if (required === "yes everywhere" || required === "yes on Windows" && platform === "win32" || required === "yes on macOS and Linux" && platform === "linux") {
+      return [...(cells[1] ?? "").matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+    }
+    return [];
   });
 }
 
@@ -206,6 +220,9 @@ function nodeStep(group: string): { block: string; cases: Record<string, string>
 }
 
 describe("InstallEntry", () => {
+  useTmpHome();
+  keepEnv(["PATH"]);
+
   it("each_readme_has_one_paste_sentence_that_names_the_guide", () => {
     for (const [file, title, end] of [["README.md", "Install", "."], ["README.zh.md", "安装", "。"]] as const) {
       const blocks = [...section(read(file), title).matchAll(/^```text\n([\s\S]*?)\n```$/gm)].map((m) => m[1]);
@@ -379,8 +396,34 @@ describe("InstallEntry", () => {
     for (const file of ["README.md", "README.zh.md", ...readdirSync(join(ROOT, "docs")).filter((f) => f.endsWith(".md") && f !== "migration.md").map((f) => `docs/${f}`)]) {
       expect(read(file).includes("node>=20"), `${file}: states the old node row`).toBe(false);
     }
-    expect(read("docs/commands.md"), "docs/commands.md: doctor required checks").toContain(`| Node.js ≥ ${FLOOR}, POSIX platform, config readable,`);
-    expect(read("docs/faq.md"), "docs/faq.md: doctor prerequisites").toContain(`With Node.js ≥ ${FLOOR} and git on a POSIX system, the doctor passes.`);
+    expect(read("docs/faq.md"), "docs/faq.md: doctor prerequisites name init").toContain("After `orch init` has created the home");
+    expect(read("docs/faq.md"), "docs/faq.md: doctor prerequisites name the node floor").toContain(`Node.js ${FLOOR} or newer`);
+  });
+
+  it("doctor_prerequisite_docs_match_real_doctor_behaviour", async () => {
+    const fresh = tmp("orch-doctor-uninitialised-");
+    const child = spawnSync(process.execPath, [DIST_CLI, "doctor"], { env: { ...process.env, ORCH_HOME: fresh }, encoding: "utf8", timeout: 30_000 });
+    rmSync(fresh, { recursive: true, force: true });
+    expect(child.status, `doctor in a fresh uninitialised home\n${child.stdout}`).toBe(1);
+    expect(child.stdout, "doctor config failure names orch init").toMatch(/FAIL {2}config .*missing - run `orch init`/);
+    expect(documentedRequired("linux"), "linux: docs mark git required").toContain("git");
+    expect(documentedRequired("win32"), "win32: docs do not mark git required").not.toContain("git");
+
+    expect((await run("init", "--no-profile", "--no-handbook"))[0]).toBe(0);
+    const bins = tmp("orch-doctor-empty-path-");
+    process.env.PATH = bins;
+    for (const platform of ["linux", "win32"] as const) {
+      let out = "";
+      await main(["doctor"], { out: (s) => { out += s; }, err() {}, stdin: () => "" }, { platform });
+      const rows = rowsOf(out);
+      for (const name of documentedRequired(platform)) {
+        expect(rows.find((row) => row[1] === name)?.[0], `${platform}: documented required row ${name}`).not.toBe("SKIP");
+        expect(rows.some((row) => row[1] === name), `${platform}: doctor prints documented required row ${name}`).toBe(true);
+      }
+      expect(rows.find((row) => row[1] === (platform === "win32" ? "windows (no process groups)" : "posix (process groups)"))?.[0], `${platform}: documented platform row`).toBe("PASS");
+      if (platform === "win32") expect(rows.find((row) => row[1] === "git")?.[0], "win32: git is optional").toBe("SKIP");
+    }
+    rmSync(bins, { recursive: true, force: true });
   });
 });
 

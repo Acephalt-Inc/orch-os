@@ -261,10 +261,16 @@ describe("DoctorInstallEntryMutations", () => {
       /README\.md: the sentence names docs\/INSTALL-WITH-AGENT\.md once: expected \+0 to be 1/);
   });
 
-  it("mutation_docs_keep_the_old_node_floor", () => {
+  it("mutation_faq_restores_the_old_doctor_prerequisite", () => {
     row("docs_state_the_doctor_node_floor_the_cli_applies",
-      [{ file: "docs/faq.md", from: "With Node.js ≥ 22 and git", to: "With Node.js ≥ 20 and git" }],
-      /docs\/faq\.md: doctor prerequisites: expected .+ to contain 'With Node\.js ≥ 22 and git on a POSIX/);
+      [{ file: "docs/faq.md", from: "After `orch init` has created the home, the doctor passes with Node.js 22 or newer. `git` is required on macOS and Linux and optional on Windows.", to: "With Node.js ≥ 22 and git on a POSIX system, the doctor passes." }],
+      /docs\/faq\.md: doctor prerequisites name init: expected .+ to contain 'After `orch init` has created the home'/);
+  });
+
+  it("mutation_commands_marks_git_required_on_windows", () => {
+    row("doctor_prerequisite_docs_match_real_doctor_behaviour",
+      [{ file: "docs/commands.md", from: "| `windows (no process groups)` | yes on Windows |", to: "| `windows (no process groups)`, `git` | yes on Windows |" }],
+      /win32: docs do not mark git required: expected .+ to not include 'git'/);
   });
 
   it("mutation_demo_keeps_the_old_agent_hint", () => {
