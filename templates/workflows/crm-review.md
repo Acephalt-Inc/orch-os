@@ -1,0 +1,2 @@
+# Customer follow-up review
+Ask for a permitted customer export or an already-authorized read connector. Do not infer login or open a CRM account. Record source date and allowed workspace. Find overdue follow-ups against the user's stated date and timezone; show source row IDs, order by due date, and check the count. Save a local review and optional message draft. Do not update CRM or send the draft. If the source is missing, report that specific gap.

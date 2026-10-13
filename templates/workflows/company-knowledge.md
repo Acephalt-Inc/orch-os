@@ -1,0 +1,2 @@
+# Company knowledge question
+Use only the approved workspace and accessible sources. Cite the exact source revision or date. Distinguish a retrieved statement from an approved policy. Do not create or claim a firm knowledge store. If the host may inject personal context, restrict the answer to synthetic material until the host configuration is checked; do not copy personal material into a work output.

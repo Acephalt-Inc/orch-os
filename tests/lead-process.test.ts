@@ -1,0 +1,848 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
+// `orch lead` as real processes: the compiled CLI (dist/cli.js, built by `npm test`) and the CLI
+// installed from a packed tarball. A preload module, written to a temporary directory at run time,
+// records every file, process and network call of the child in order, can hold the child at a
+// named point (a barrier: the child blocks on its standard input until the test releases or kills
+// it) and can shorten one write. Every child has a kill deadline below 60 seconds; there is no
+// sleep and no polling loop.
+//
+// Measured on macOS. On Windows these tests are skipped unless ORCH_LEAD_UNMEASURED=1 is set:
+// nothing in this file is native Windows proof.
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+import { main } from "../src/cli.js";
+import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
+import { candidate, npmCommand, pack } from "./_pack.js";
+
+const RUN = !WINDOWS || process.env.ORCH_LEAD_UNMEASURED === "1";
+const FROZEN = JSON.parse(readFileSync(join(ROOT, "tests", "fixtures", "lead-reviewed-text.json"), "utf8"));
+const CHILD_DEADLINE_MS = 25_000;
+
+type Host = "claude" | "codex";
+const sha = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+const dests = (host: Host): string[] => FROZEN.inventory[host].map((row: string[]) => row[1]);
+const sourceOf = (host: Host, dest: string): string => FROZEN.inventory[host].find((row: string[]) => row[1] === dest)[0];
+const reviewedBytes = (host: Host, dest: string) => readFileSync(join(ROOT, ...sourceOf(host, dest).split("/")));
+const anchorOf = (host: Host, dest: string) => `.orch-lead-install/objects/${String(dests(host).indexOf(dest)).padStart(2, "0")}`;
+const BOOT: Record<Host, string> = { claude: "CLAUDE.md", codex: "AGENTS.md" };
+const ROOT_OF: Record<Host, string> = { claude: ".claude/skills/orch-lead", codex: ".agents/skills/orch-lead" };
+const at = (workspace: string, rel: string) => join(workspace, ...rel.split("/"));
+
+const scratch: string[] = [];
+afterAll(() => {
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function tmp(prefix = "orch-lead-p-"): string {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  scratch.push(dir);
+  return dir;
+}
+/** A fresh empty workspace inside its own scratch directory, with room beside it for other files. */
+function workspace(): { base: string; w: string } {
+  const base = tmp();
+  const w = join(base, "work space");
+  mkdirSync(w);
+  return { base, w };
+}
+
+/** Every entry below `dir`: kind, relative path and content hash (or link target). Sorted. */
+function tree(dir: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(join(dir, rel)).sort()) {
+    const r = rel ? `${rel}/${name}` : name;
+    const st = lstatSync(join(dir, r));
+    if (st.isSymbolicLink()) out.push(`link ${r} -> ${readlinkSync(join(dir, r))}`);
+    else if (st.isDirectory()) out.push(`dir ${r}`, ...tree(dir, r));
+    else if (st.isFile()) out.push(`file ${r} ${sha(readFileSync(join(dir, r)))}`);
+    else out.push(`other ${r}`);
+  }
+  return out;
+}
+/** Device and inode of a path, or "absent". */
+const idOf = (path: string) => {
+  try {
+    const st = lstatSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return "absent";
+  }
+};
+/** Content hash of a file, or "absent". */
+const hashOf = (path: string) => {
+  try {
+    return sha(readFileSync(path));
+  } catch {
+    return "absent";
+  }
+};
+
+// ---- the preload module ------------------------------------------------------------------------
+
+const PRELOAD = String.raw`
+import fs from "node:fs";
+import cp from "node:child_process";
+import net from "node:net";
+import dns from "node:dns";
+import dgram from "node:dgram";
+import { syncBuiltinESMExports } from "node:module";
+
+const real = { openSync: fs.openSync, writeSync: fs.writeSync, readSync: fs.readSync };
+const traceFd = process.env.LEAD_TEST_TRACE ? real.openSync(process.env.LEAD_TEST_TRACE, "a") : -1;
+const rules = JSON.parse(process.env.LEAD_TEST_RULES || "[]");
+const hits = new Map();
+const fdPath = new Map();
+let seq = 0;
+function log(op, detail) {
+  if (traceFd >= 0) real.writeSync(traceFd, JSON.stringify({ seq: ++seq, op, ...detail }) + "\n");
+}
+function norm(p) { return String(p).split("\\").join("/"); }
+function matching(when, op, path) {
+  const out = [];
+  for (const rule of rules) {
+    if (rule.op !== op || (rule.when || "before") !== when) continue;
+    if (rule.match && !norm(path).endsWith(rule.match)) continue;
+    const key = JSON.stringify(rule);
+    const n = (hits.get(key) || 0) + 1;
+    hits.set(key, n);
+    if (n === (rule.nth || 1)) out.push(rule);
+  }
+  return out;
+}
+// A barrier: say where we are on stderr, then block until the test writes one byte to stdin.
+// End of input without a byte means the test gave up: leave with a code no command uses.
+function barrier(when, op, path) {
+  for (const rule of matching(when, op, path)) {
+    if (rule.action !== "block") continue;
+    real.writeSync(2, "PHASE " + rule.name + "\n");
+    const one = Buffer.alloc(1);
+    let got = 0;
+    try { got = real.readSync(0, one, 0, 1, null); } catch (e) { got = 0; }
+    if (got !== 1) process.exit(97);
+  }
+}
+
+const TWO_PATHS = new Set(["linkSync", "renameSync", "copyFileSync", "symlinkSync", "cpSync"]);
+const MUTATING = ["mkdirSync", "linkSync", "unlinkSync", "rmdirSync", "rmSync", "renameSync", "writeFileSync", "appendFileSync",
+  "copyFileSync", "cpSync", "symlinkSync", "truncateSync", "chmodSync", "lchmodSync", "chownSync", "lchownSync", "utimesSync", "lutimesSync", "mkdtempSync"];
+const READING = ["lstatSync", "statSync", "readFileSync", "readdirSync", "readlinkSync", "existsSync", "accessSync", "opendirSync"];
+for (const name of [...MUTATING, ...READING]) {
+  const original = fs[name];
+  if (typeof original !== "function") continue;
+  const mutating = MUTATING.includes(name);
+  fs[name] = function (...args) {
+    const path = norm(args[0]);
+    const path2 = TWO_PATHS.has(name) ? norm(args[1]) : undefined;
+    barrier("before", name, path2 ?? path);
+    let code = "OK";
+    try {
+      return original.apply(this, args);
+    } catch (e) {
+      code = (e && e.code) || "THROW";
+      throw e;
+    } finally {
+      log(name, { path, path2, mutating, code });
+      if (code === "OK") barrier("after", name, path2 ?? path);
+    }
+  };
+}
+const nativeRealpath = fs.realpathSync.native;
+fs.realpathSync.native = function (...args) {
+  log("realpathSync.native", { path: norm(args[0]), mutating: false, code: "OK" });
+  return nativeRealpath.apply(this, args);
+};
+const WRITE_BITS = fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_APPEND;
+fs.openSync = function (...args) {
+  const path = norm(args[0]);
+  const flags = args[1];
+  const mutating = typeof flags === "number" ? (flags & WRITE_BITS) !== 0 : flags !== undefined && flags !== "r";
+  barrier("before", "openSync", path);
+  let code = "OK";
+  try {
+    const fd = real.openSync.apply(this, args);
+    fdPath.set(fd, path);
+    return fd;
+  } catch (e) {
+    code = (e && e.code) || "THROW";
+    throw e;
+  } finally {
+    log("openSync", { path, mutating, code });
+  }
+};
+fs.writeSync = function (fd, buffer, offset, length, ...rest) {
+  if (fd === 1 || fd === 2 || fd === traceFd || !fdPath.has(fd)) return real.writeSync.call(this, fd, buffer, offset, length, ...rest);
+  const path = fdPath.get(fd);
+  barrier("before", "writeSync", path);
+  for (const rule of matching("short", "writeSync", path)) length = Math.min(length, rule.bytes);
+  const n = real.writeSync.call(this, fd, buffer, offset, length, ...rest);
+  log("writeSync", { path, mutating: true, code: "OK", bytes: n });
+  return n;
+};
+for (const name of ["ftruncateSync", "fchmodSync", "fchownSync", "futimesSync"]) {
+  const original = fs[name];
+  fs[name] = function (fd, ...rest) {
+    log(name, { path: fdPath.get(fd) || "fd:" + fd, mutating: true, code: "OK" });
+    return original.call(this, fd, ...rest);
+  };
+}
+// Callback and promise forms: the commands under test use none, so any call is recorded as is.
+const ASYNC = ["mkdir", "link", "unlink", "rmdir", "rm", "rename", "writeFile", "appendFile", "copyFile", "cp", "symlink", "truncate",
+  "chmod", "chown", "utimes", "mkdtemp", "open", "write", "createWriteStream"];
+for (const holder of [fs, fs.promises]) {
+  for (const name of ASYNC) {
+    const original = holder[name];
+    if (typeof original !== "function") continue;
+    holder[name] = function (...args) {
+      log("async:" + name, { path: norm(args[0]), mutating: true, code: "CALLED" });
+      return original.apply(this, args);
+    };
+  }
+}
+for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
+  const original = cp[name];
+  cp[name] = function (...args) {
+    log("process", { path: String(args[0]), call: name });
+    return original.apply(this, args);
+  };
+}
+// Network: recorded and refused, so a test never opens a connection.
+const refuse = (what) => function (...args) {
+  log("network", { call: what, path: "" });
+  throw new Error("network use is blocked in this test: " + what);
+};
+net.Socket.prototype.connect = refuse("net.connect");
+dgram.createSocket = refuse("dgram.createSocket");
+for (const name of ["lookup", "resolve", "resolve4", "resolve6"]) dns[name] = refuse("dns." + name);
+globalThis.fetch = refuse("fetch");
+const realKill = process.kill;
+process.kill = function (pid, signal) {
+  log("kill", { path: "", pid, signal: signal === undefined ? "SIGTERM" : signal });
+  return realKill.call(this, pid, signal);
+};
+const out = process.stdout;
+const realOut = out.write;
+out.write = function (chunk, encoding, callback) {
+  if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
+  log("stdout.write", { path: "", text: String(chunk) });
+  return realOut.call(out, chunk, encoding, (error) => {
+    log("stdout.done", { path: "", code: error ? error.code || "ERROR" : "OK" });
+    if (callback) callback(error);
+  });
+};
+syncBuiltinESMExports();
+log("preload", { path: "" });
+barrier("before", "start", "");
+`;
+
+let preloadUrl = "";
+function preload(): string {
+  if (!preloadUrl) {
+    const dir = tmp("orch-lead-preload-");
+    writeFileSync(join(dir, "preload.mjs"), PRELOAD);
+    preloadUrl = pathToFileURL(join(dir, "preload.mjs")).href;
+  }
+  return preloadUrl;
+}
+
+interface Ev { seq: number; op: string; path: string; path2?: string; mutating?: boolean; code?: string; text?: string; signal?: unknown; pid?: number; call?: string }
+interface Result { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; trace: Ev[] }
+interface Rule { op: string; when?: "before" | "after" | "short"; match?: string; nth?: number; action?: "block"; name?: string; bytes?: number }
+interface Session {
+  child: ChildProcess;
+  /** True once the child printed this phase; false if it ended first. */
+  phase(name: string): Promise<boolean>;
+  release(): void;
+  kill(): void;
+  done: Promise<Result>;
+}
+
+const isolated = tmp("orch-lead-env-");
+/** Environment of every child: a home and an ORCH home that do not exist and must stay that way. */
+function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: join(isolated, "home"), USERPROFILE: join(isolated, "home"), ORCH_HOME: join(isolated, "orch-home") };
+  for (const key of ["SystemRoot", "TEMP", "TMP", "TMPDIR", "PATHEXT", "ComSpec"]) if (process.env[key]) env[key] = process.env[key];
+  return { ...env, ...extra };
+}
+
+/** Start `command args` with the preload; rules are barriers and short writes. */
+function start(command: string, args: string[], rules: Rule[] = [], extraEnv: Record<string, string> = {}, cwd = isolated): Session {
+  const traceFile = join(tmp("orch-lead-trace-"), "trace.jsonl");
+  const viaNode = command === process.execPath;
+  const child = spawn(command, viaNode ? ["--import", preload(), ...args] : args, {
+    cwd, stdio: ["pipe", "pipe", "pipe"], timeout: CHILD_DEADLINE_MS, killSignal: "SIGKILL",
+    env: childEnv({ LEAD_TEST_TRACE: traceFile, LEAD_TEST_RULES: JSON.stringify(rules), ...(viaNode ? {} : { NODE_OPTIONS: `--import=${preload()}` }), ...extraEnv }),
+  });
+  let stdout = "";
+  let stderr = "";
+  const waiting: (() => void)[] = [];
+  let ended = false;
+  child.stdout!.on("data", (chunk) => (stdout += chunk));
+  child.stderr!.on("data", (chunk) => {
+    stderr += chunk;
+    for (const wake of waiting.splice(0)) wake();
+  });
+  child.stdin!.on("error", () => {});
+  const done = new Promise<Result>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      ended = true;
+      for (const wake of waiting.splice(0)) wake();
+      const trace = existsSync(traceFile) ? readFileSync(traceFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Ev) : [];
+      // Without the first line of the trace nothing was observed, and "no call was seen" would mean nothing.
+      if (trace[0]?.op !== "preload") reject(new Error(`the child was not instrumented: no trace\n${stderr}`));
+      else resolve({ code, signal, stdout, stderr, trace });
+    });
+  });
+  if (!rules.some((rule) => rule.action === "block")) child.stdin!.end();
+  return {
+    child, done,
+    async phase(name) {
+      for (;;) {
+        if (stderr.includes(`PHASE ${name}\n`)) return true;
+        if (ended) return false;
+        await new Promise<void>((wake) => waiting.push(wake));
+      }
+    },
+    release: () => void child.stdin!.write("x"),
+    kill: () => void child.kill("SIGKILL"),
+  };
+}
+const lead = (args: string[], rules: Rule[] = [], env: Record<string, string> = {}) => start(process.execPath, [DIST_CLI, "lead", ...args], rules, env);
+const run = (args: string[], env: Record<string, string> = {}) => lead(args, [], env).done;
+const mutations = (r: Result) => r.trace.filter((ev) => ev.mutating);
+const describeMutations = (r: Result) => mutations(r).map((ev) => `${ev.op} ${ev.path2 ?? ev.path} ${ev.code}`);
+/** Row states printed by status, keyed by workspace-relative path with `/`. */
+function rowStates(stdout: string, w: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of stdout.split("\n")) {
+    const m = /^ {2}(OWNED_MATCH|OWNED_CHANGED|MISSING|FOREIGN|UNVERIFIABLE)\s+(.+?)(?: {2}\(.*\))?$/.exec(line);
+    if (m && m[2].startsWith(w + sep)) out[m[2].slice(w.length + 1).split(sep).join("/")] = m[1];
+  }
+  return out;
+}
+const resultOf = (stdout: string) => /^result: (\w+)$/m.exec(stdout)?.[1] ?? "";
+
+/** The manifest text, written here independently of the implementation. */
+function manifestText(host: Host, w: string, pid: number, rows?: { path: string; sha256: string; anchor: string }[]): string {
+  const list = rows ?? dests(host).map((dest, i) => ({ path: dest, sha256: FROZEN.sources[sourceOf(host, dest)] as string, anchor: `objects/${String(i).padStart(2, "0")}` }));
+  return `{"schema":1,"host":${JSON.stringify(host)},"workspace":${JSON.stringify(w)},"pack":"${FROZEN.pack_hash[host]}","pid":${pid},"rows":[\n`
+    + list.map((r) => `    {"path":${JSON.stringify(r.path)},"sha256":"${r.sha256}","anchor":"${r.anchor}"}`).join(",\n") + "\n]}\n";
+}
+/** The id of a process that has already ended. */
+function deadPid(): number {
+  const r = spawnSync(process.execPath, ["-e", ""], { timeout: 10_000 });
+  return r.pid;
+}
+
+// ---- the packed CLI ----------------------------------------------------------------------------
+
+interface Packed { dir: string; tarball: string; tarballSha: string; files: string[]; prefix: string; shim: string; env: Record<string, string>; outside: string; extracted: string }
+let packedMemo: Packed | undefined;
+/** Pack a disposable copy of this source, install the tarball offline into a private prefix. Once per file. */
+function packed(): Packed {
+  if (packedMemo) return packedMemo;
+  const copy = candidate(scratch);
+  const tarball = pack(copy);
+  const files = copy.run("tar", ["-tzf", tarball]).trim().split("\n").sort();
+  const extracted = join(copy.dir, "extracted");
+  mkdirSync(extracted);
+  copy.run("tar", ["-xzf", tarball, "-C", extracted]);
+  const prefix = join(copy.dir, "prefix");
+  const temp = join(copy.dir, "tmp");
+  const outside = join(copy.dir, "elsewhere");
+  for (const dir of [temp, outside]) mkdirSync(dir);
+  const env = { HOME: copy.home, USERPROFILE: copy.home, ORCH_HOME: join(copy.dir, "orch-home"), TMPDIR: temp, TEMP: temp, TMP: temp, GIT_DIR: join(copy.dir, "no-such-git-dir") };
+  const installed = spawnSync(npmCommand, ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix, "-g", tarball],
+    { cwd: outside, env: { ...copy.env, ...env }, encoding: "utf8", timeout: 50_000, shell: WINDOWS });
+  expect(installed.status, `npm install -g of the tarball\n${installed.stdout}\n${installed.stderr}`).toBe(0);
+  packedMemo = {
+    dir: copy.dir, tarball, tarballSha: sha(readFileSync(tarball)), files, prefix, shim: WINDOWS ? join(prefix, "orch.cmd") : join(prefix, "bin", "orch"),
+    env: { ...env, PATH: [dirname(process.execPath), ...(WINDOWS ? [join(process.env.SystemRoot ?? "C:\\Windows", "System32")] : ["/usr/bin", "/bin"])].join(delimiter) },
+    outside, extracted,
+  };
+  return packedMemo;
+}
+/** Run the installed `orch` entry: the real shim, from a directory outside the checkout. */
+function orch(p: Packed, args: string[]): Promise<Result> {
+  return start(p.shim, args, [], p.env, p.outside).done;
+}
+
+describe.skipIf(!RUN)("orch lead: real processes", () => {
+  it("lead_real_cli_has_install_status_uninstall", async () => {
+    const p = packed();
+    const { w } = workspace();
+    const help = await orch(p, ["lead", "--help"]);
+    expect.soft(help.code, `[real-cli] the packed orch has the lead command\n${help.stderr}`).toBe(0);
+    for (const name of ["install", "status", "uninstall"]) expect.soft(help.stdout, `[real-cli] help lists ${name}`).toMatch(new RegExp(`^  ${name} `, "m"));
+    const args = ["--workspace", w, "--host", "claude"];
+
+    const usage = await orch(p, ["lead", "install", "--workspace", w]);
+    expect.soft([usage.code, tree(w)], `[exit-codes] wrong usage exits 1 and creates nothing\n${usage.stderr}`).toEqual([1, []]);
+
+    const install = await orch(p, ["lead", "install", ...args]);
+    expect.soft([install.code, resultOf(install.stdout)], `[real-cli] install runs\n${install.stdout}\n${install.stderr}`).toEqual([0, "INSTALLED"]);
+    expect.soft(install.code, "[exit-codes] a complete install exits 0").toBe(0);
+    const status = await orch(p, ["lead", "status", ...args]);
+    expect.soft([status.code, resultOf(status.stdout)], `[real-cli] status runs\n${status.stdout}\n${status.stderr}`).toEqual([0, "INSTALLED"]);
+    expect.soft(status.stdout.trimEnd().split("\n").pop(), "[activation-unverified] status ends with the activation line").toBe("host activation: unverified");
+
+    const again = await orch(p, ["lead", "install", ...args]);
+    expect.soft([again.code, resultOf(again.stdout)], `[exit-codes] a conflict exits 2\n${again.stdout}`).toEqual([2, "CONFLICT"]);
+
+    const uninstall = await orch(p, ["lead", "uninstall", ...args]);
+    expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[real-cli] uninstall runs\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+    // Directories on the host side stay; nothing else does.
+    expect.soft(tree(w), "[directories-left] uninstall leaves the host directories and nothing else")
+      .toEqual(["dir .claude", "dir .claude/skills", "dir .claude/skills/orch-lead", "dir .claude/skills/orch-lead/agents", "dir .claude/skills/orch-lead/workflows"]);
+    const after = await orch(p, ["lead", "status", ...args]);
+    expect.soft([after.code, resultOf(after.stdout)], "[real-cli] status after uninstall").toEqual([0, "NOT_INSTALLED"]);
+    const reinstall = await orch(p, ["lead", "install", ...args]);
+    expect.soft([reinstall.code, resultOf(reinstall.stdout), describeMutations(reinstall)],
+      `[reinstall-refused] the empty pack directory refuses a new install\n${reinstall.stdout}`).toEqual([2, "CONFLICT", []]);
+  });
+
+  it("lead_packed_tarball_runs_without_checkout", async () => {
+    const p = packed();
+    // The tarball carries exactly the 18 reviewed text files of the pack, byte for byte.
+    const packedTemplates = p.files.filter((f) => /^package\/templates\/(lead|workflows)\//.test(f)).map((f) => f.slice("package/".length));
+    expect.soft(packedTemplates, "[packed-inventory] template files in the tarball").toEqual(Object.keys(FROZEN.sources).sort());
+    const installedRoot = WINDOWS ? join(p.prefix, "node_modules", "orch-os") : join(p.prefix, "lib", "node_modules", "orch-os");
+    for (const [source, hash] of Object.entries(FROZEN.sources as Record<string, string>)) {
+      expect.soft([sha(readFileSync(join(p.extracted, "package", ...source.split("/")))), sha(readFileSync(join(installedRoot, ...source.split("/")))), sha(readFileSync(join(ROOT, ...source.split("/"))))],
+        `[packed-inventory] ${source}: tarball, installed package and source all have the reviewed hash`).toEqual([hash, hash, hash]);
+    }
+    expect(p.shim.startsWith(ROOT + sep), "the installed entry is outside the checkout").toBe(false);
+    const homeBefore = [tree(p.env.HOME), existsSync(p.env.ORCH_HOME), existsSync(p.env.GIT_DIR)];
+    const all: Result[] = [];
+    for (const host of ["claude", "codex"] as Host[]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      const install = await orch(p, ["lead", "install", ...args]);
+      expect.soft([install.code, resultOf(install.stdout)], `[packed-install] ${host}: install from the packed CLI\n${install.stdout}\n${install.stderr}`).toEqual([0, "INSTALLED"]);
+      const expected = dests(host).map((dest) => `file ${dest} ${FROZEN.sources[sourceOf(host, dest)]}`).sort();
+      expect.soft(tree(w).filter((line) => line.startsWith("file ") && !line.includes(".orch-lead-install/")).sort(), `[packed-install] ${host}: installed files and their hashes`).toEqual(expected);
+      expect.soft(install.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").length, `[packed-install] ${host}: the packed command was observed making its 18 links`).toBe(18);
+      const status = await orch(p, ["lead", "status", ...args]);
+      expect.soft([status.code, resultOf(status.stdout)], `[packed-install] ${host}: status`).toEqual([0, "INSTALLED"]);
+      const conflict = await orch(p, ["lead", "install", ...args]);
+      expect.soft([conflict.code, resultOf(conflict.stdout), describeMutations(conflict)], `[packed-install] ${host}: a second install is a conflict without writes`).toEqual([2, "CONFLICT", []]);
+      const uninstall = await orch(p, ["lead", "uninstall", ...args]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[packed-install] ${host}: uninstall\n${uninstall.stdout}`).toEqual([0, "NOT_INSTALLED"]);
+      expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), `[packed-install] ${host}: no file is left`).toEqual([]);
+      all.push(install, status, conflict, uninstall);
+      // Every write of every command was inside the workspace.
+      for (const r of all.slice(-4)) {
+        expect.soft(mutations(r).filter((ev) => !(ev.path2 ?? ev.path).startsWith(w.split(sep).join("/") + "/")).map((ev) => `${ev.op} ${ev.path}`), "[packed-no-outside-writes]").toEqual([]);
+      }
+    }
+    const events = all.flatMap((r) => r.trace);
+    expect.soft(events.filter((ev) => ev.op === "process").map((ev) => `${ev.call} ${ev.path}`), "[packed-no-process] the installed commands start no program").toEqual([]);
+    expect.soft(events.filter((ev) => ev.op === "network").map((ev) => ev.call), "[packed-no-network] the installed commands make no network call").toEqual([]);
+    expect.soft(events.filter((ev) => ev.op === "kill" && ev.signal !== 0).map((ev) => String(ev.signal)), "[packed-no-process] no signal is sent").toEqual([]);
+    const checkout = ROOT.split(sep).join("/") + "/";
+    expect.soft(events.filter((ev) => typeof ev.path === "string" && ev.path.startsWith(checkout)).map((ev) => `${ev.op} ${ev.path}`), "[packed-no-checkout] nothing in the checkout is touched").toEqual([]);
+    expect.soft([tree(p.env.HOME), existsSync(p.env.ORCH_HOME), existsSync(p.env.GIT_DIR)], "[packed-no-home-writes] home, ORCH home and git directory are untouched").toEqual(homeBefore);
+    console.log(`[observation] ${process.platform}: packed tarball sha256 ${p.tarballSha}; entry ${WINDOWS ? "orch.cmd" : "bin/orch"}`);
+  });
+
+  it("lead_loader_and_cli_have_no_unrequested_effects", async () => {
+    const { base, w } = workspace();
+    const { w: taken } = workspace();
+    writeFileSync(join(taken, "CLAUDE.md"), "mine\n");
+    const linked = join(base, "link-to-workspace");
+    symlinkSync(w, linked, "dir");
+    const templatesBefore = tree(join(ROOT, "templates"));
+    const args = ["--workspace", w, "--host", "claude"];
+    const inside = (r: Result, root: string) => mutations(r).filter((ev) => !(ev.path2 ?? ev.path).startsWith(root.split(sep).join("/") + "/")).map((ev) => `${ev.op} ${ev.path}`);
+
+    // Refusals and read-only commands: no mutating call at all.
+    const quiet: [string, Result, number][] = [
+      ["wrong usage", await run(["install", "--workspace", w]), 1],
+      ["conflict", await run(["install", "--workspace", taken, "--host", "claude"]), 2],
+      ["dry run", await run(["install", ...args, "--dry-run"]), 0],
+      ["status", await run(["status", ...args]), 0],
+      ["uninstall with nothing installed", await run(["uninstall", ...args]), 0],
+    ];
+    for (const [name, r, code] of quiet) {
+      expect.soft([r.code, describeMutations(r)], `[no-unrequested-writes] ${name}: exit code and mutating calls\n${r.stderr}`).toEqual([code, []]);
+    }
+    const absent = await run(["install", "--workspace", join(base, "absent"), "--host", "claude"]);
+    expect.soft([absent.code, describeMutations(absent), existsSync(join(base, "absent"))], `[workspace-must-exist] a workspace that does not exist is refused and not created\n${absent.stderr}`).toEqual([1, [], false]);
+    const viaLink = await run(["install", "--workspace", linked, "--host", "claude"]);
+    expect.soft([viaLink.code, describeMutations(viaLink), tree(w)], `[workspace-refused] a workspace given as a link is refused\n${viaLink.stdout}`).toEqual([1, [], []]);
+
+    const install = await run(["install", ...args]);
+    expect.soft(install.code, install.stdout + install.stderr).toBe(0);
+    expect.soft(inside(install, w), "[no-unrequested-writes] install writes only inside the workspace").toEqual([]);
+    // The loader opens exactly the 17 packaged files of this host, read-only.
+    const templates = join(ROOT, "templates").split(sep).join("/") + "/";
+    expect.soft(install.trace.filter((ev) => ev.op === "openSync" && ev.path.startsWith(templates)).map((ev) => `${ev.path.slice(templates.length - "templates/".length)} ${ev.mutating}`).sort(),
+      "[loader-reads-only-inventory]").toEqual(FROZEN.inventory.claude.map((row: string[]) => `${row[0]} false`).sort());
+    const status = await run(["status", ...args]);
+    expect.soft([status.code, describeMutations(status)], "[status-reads-only] status makes no mutating call").toEqual([0, []]);
+    expect.soft(status.trace.filter((ev) => ev.path.startsWith(templates)).map((ev) => ev.path), "status does not read the packaged text").toEqual([]);
+    const uninstall = await run(["uninstall", ...args]);
+    expect.soft(uninstall.code, uninstall.stdout + uninstall.stderr).toBe(0);
+    expect.soft(inside(uninstall, w), "[no-unrequested-writes] uninstall writes only inside the workspace").toEqual([]);
+
+    const everything = [...quiet.map(([, r]) => r), absent, viaLink, install, status, uninstall];
+    const events = everything.flatMap((r) => r.trace);
+    expect.soft(events.filter((ev) => ev.op === "process").map((ev) => `${ev.call} ${ev.path}`), "[no-process] no program is started").toEqual([]);
+    expect.soft(events.filter((ev) => ev.op === "kill" && ev.signal !== 0).map((ev) => String(ev.signal)), "[no-process] no signal is sent").toEqual([]);
+    expect.soft(events.filter((ev) => ev.op === "network").map((ev) => ev.call), "[no-network] no network call is made").toEqual([]);
+    expect.soft(events.filter((ev) => ev.op.startsWith("async:")).map((ev) => ev.op), "no callback or promise file call is made").toEqual([]);
+    const orchHome = join(isolated, "orch-home").split(sep).join("/");
+    expect.soft(events.filter((ev) => typeof ev.path === "string" && ev.path.startsWith(orchHome)).map((ev) => `${ev.op} ${ev.path}`), "[no-orch-home] the ORCH home is never touched").toEqual([]);
+    expect.soft([existsSync(join(isolated, "orch-home")), existsSync(join(isolated, "home"))], "[no-orch-home] neither home was created").toEqual([false, false]);
+    expect.soft(tree(join(ROOT, "templates")), "[no-unrequested-writes] the packaged text is unchanged").toEqual(templatesBefore);
+  });
+
+  it("lead_preflight_conflict_has_zero_mutations", async () => {
+    const cases: { host: Host; label: string; place(w: string): string }[] = [];
+    const file = (host: Host, dest: string, kind: "other bytes" | "identical bytes" | "dangling link") => cases.push({
+      host, label: `${host}: ${kind} at ${dest}`,
+      place(w) {
+        mkdirSync(dirname(at(w, dest)), { recursive: true });
+        if (kind === "dangling link") symlinkSync(join(w, "nowhere"), at(w, dest));
+        else writeFileSync(at(w, dest), kind === "identical bytes" ? reviewedBytes(host, dest) : "the user's own text\n");
+        return at(w, dest);
+      },
+    });
+    for (const dest of dests("claude")) for (const kind of ["other bytes", "identical bytes", "dangling link"] as const) file("claude", dest, kind);
+    for (const dest of [BOOT.codex, `${ROOT_OF.codex}/SKILL.md`, `${ROOT_OF.codex}/workflows/memory.md`]) for (const kind of ["other bytes", "identical bytes", "dangling link"] as const) file("codex", dest, kind);
+    const other = (host: Host, label: string, place: (w: string) => string) => cases.push({ host, label: `${host}: ${label}`, place });
+    other("claude", "state directory exists", (w) => (mkdirSync(at(w, ".orch-lead-install")), at(w, ".orch-lead-install")));
+    other("claude", "state path is a file", (w) => (writeFileSync(at(w, ".orch-lead-install"), "x"), at(w, ".orch-lead-install")));
+    other("claude", "state path is a dangling link", (w) => (symlinkSync(join(w, "nowhere"), at(w, ".orch-lead-install")), at(w, ".orch-lead-install")));
+    other("claude", "empty pack directory exists", (w) => (mkdirSync(at(w, ROOT_OF.claude), { recursive: true }), at(w, ROOT_OF.claude)));
+    other("codex", "empty pack directory exists", (w) => (mkdirSync(at(w, ROOT_OF.codex), { recursive: true }), at(w, ROOT_OF.codex)));
+    other("claude", "shared parent is a file", (w) => (writeFileSync(at(w, ".claude"), "x"), at(w, ".claude")));
+    other("claude", "shared parent is a link to a directory", (w) => {
+      mkdirSync(join(w, "real-skills"));
+      mkdirSync(at(w, ".claude"));
+      symlinkSync(join(w, "real-skills"), at(w, ".claude/skills"), "dir");
+      return at(w, ".claude/skills");
+    });
+    expect(cases.length).toBe(17 * 3 + 9 + 7);
+    for (const c of cases) {
+      const { w } = workspace();
+      const obstacle = c.place(w);
+      const before = tree(w);
+      const r = await run(["install", "--workspace", w, "--host", c.host]);
+      expect.soft([r.code, resultOf(r.stdout), r.stdout.includes(`  ${obstacle}  (`)], `[conflict-reported] ${c.label}: exit 2, CONFLICT, the path is named\n${r.stdout}\n${r.stderr}`).toEqual([2, "CONFLICT", true]);
+      expect.soft(describeMutations(r), `[zero-mutations] ${c.label}: mutating file calls`).toEqual([]);
+      expect.soft(tree(w), `[user-bytes-remain] ${c.label}: the workspace is unchanged`).toEqual(before);
+    }
+    // The other host in the same workspace is a conflict too: one workspace, one host.
+    const { w } = workspace();
+    expect((await run(["install", "--workspace", w, "--host", "claude"])).code).toBe(0);
+    const before = tree(w);
+    const second = await run(["install", "--workspace", w, "--host", "codex"]);
+    expect.soft([second.code, resultOf(second.stdout), describeMutations(second), tree(w)], "[conflict-reported] the other host in the same workspace").toEqual([2, "CONFLICT", [], before]);
+  });
+
+  it("lead_prints_every_path_before_first_mutation", async () => {
+    const { w } = workspace();
+    const expected = [
+      ".claude", ".claude/skills", ".claude/skills/orch-lead", ".claude/skills/orch-lead/agents", ".claude/skills/orch-lead/workflows",
+      ".orch-lead-install", ".orch-lead-install/manifest.json", ".orch-lead-install/manifest.tmp", ".orch-lead-install/objects",
+      ...dests("claude"), ...dests("claude").map((dest) => anchorOf("claude", dest)),
+    ].map((rel) => at(w, rel)).sort();
+    const printedPaths = (text: string) => text.split("\n").map((line) => /^ {2}(?:directory|file|state|temporary)\s+(.+)$/.exec(line)?.[1]).filter(Boolean);
+
+    const dry = await run(["install", "--workspace", w, "--host", "claude", "--dry-run"]);
+    expect.soft([dry.code, describeMutations(dry), tree(w)], `[dry-run-creates-nothing] exit code, mutating calls, workspace\n${dry.stderr}`).toEqual([0, [], []]);
+    expect.soft([...printedPaths(dry.stdout)].sort(), "[print-before-mutation] the dry run prints every path").toEqual(expected);
+    expect.soft(printedPaths(dry.stdout), "[code-point-order] the printed paths are in code-point order").toEqual([...printedPaths(dry.stdout)].sort());
+
+    const r = await run(["install", "--workspace", w, "--host", "claude"]);
+    expect.soft(r.code, r.stdout + r.stderr).toBe(0);
+    const firstMutation = r.trace.findIndex((ev) => ev.mutating);
+    const earlier = r.trace.slice(0, Math.max(firstMutation, 0));
+    const printedBefore = printedPaths(earlier.filter((ev) => ev.op === "stdout.write").map((ev) => ev.text).join(""));
+    expect.soft(firstMutation, "the install makes mutating calls").toBeGreaterThan(0);
+    expect.soft([...printedBefore].sort(), "[print-before-mutation] every path is printed before the first mutating call").toEqual(expected);
+    expect.soft(earlier.filter((ev) => ev.op === "stdout.done").map((ev) => ev.code), "[print-before-mutation] the list was written successfully before the first mutating call").toEqual(["OK"]);
+    expect.soft(r.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").map((ev) => ev.path2).pop(), "[bootstrap-last] the bootstrap file is the last file published").toBe(at(w, BOOT.claude).split(sep).join("/"));
+    const created = new Set(mutations(r).filter((ev) => ev.code === "OK" && ev.op !== "unlinkSync").map((ev) => (ev.path2 ?? ev.path).split("/").join(sep)));
+    expect.soft([...created].sort(), "[print-before-mutation] nothing is created that was not printed").toEqual(expected);
+
+    // Standard output is closed before the command starts printing: no mutation, exit 1.
+    const { w: closed } = workspace();
+    const s = lead(["install", "--workspace", closed, "--host", "claude"], [{ op: "start", action: "block", name: "START" }]);
+    expect(await s.phase("START"), "the child reached its first line").toBe(true);
+    const closedEvent = new Promise<void>((resolve) => s.child.stdout!.once("close", () => resolve()));
+    s.child.stdout!.destroy();
+    await closedEvent;
+    s.release();
+    s.child.stdin!.end();
+    const result = await s.done;
+    expect.soft([result.code, describeMutations(result), tree(closed)], `[closed-pipe-no-mutation] exit code, mutating calls, workspace\n${result.stderr}`).toEqual([1, [], []]);
+    expect.soft(result.trace.filter((ev) => ev.op === "stdout.done").map((ev) => ev.code), "the write to the closed pipe failed").toEqual(["EPIPE"]);
+    expect.soft(result.stderr, "the reason is reported").toContain("nothing was created");
+  });
+
+  it("lead_second_process_wins_late_destination", async () => {
+    const late = `${ROOT_OF.claude}/workflows/memory.md`;
+    for (const kind of ["other bytes", "identical bytes"] as const) {
+      const { w } = workspace();
+      expect(tree(w), "clean setup").toEqual([]);
+      const bytes = kind === "identical bytes" ? reviewedBytes("claude", late) : Buffer.from("written by the second process\n");
+      const s = lead(["install", "--workspace", w, "--host", "claude"], [{ op: "linkSync", when: "before", match: late, action: "block", name: "BEFORE_LATE" }]);
+      expect(await s.phase("BEFORE_LATE"), `${kind}: the installer reached the barrier`).toBe(true);
+      expect.soft(existsSync(at(w, `${ROOT_OF.claude}/SKILL.md`)) && !existsSync(at(w, late)), `${kind}: the first publication happened, the late one did not`).toBe(true);
+      // A real second process creates the late destination with an exclusive open.
+      const second = spawnSync(process.execPath, ["-e", `
+        const fs = require("node:fs");
+        const fd = fs.openSync(process.argv[1], "wx");
+        fs.writeSync(fd, Buffer.from(process.argv[2], "base64"));
+        fs.closeSync(fd);
+        process.stdout.write("READY\\n");
+      `, at(w, late), bytes.toString("base64")], { encoding: "utf8", timeout: 15_000 });
+      expect([second.status, second.stdout], `${kind}: the second process created the file and exited\n${second.stderr}`).toEqual([0, "READY\n"]);
+      const foreign = [idOf(at(w, late)), hashOf(at(w, late))];
+      s.release();
+      s.child.stdin!.end();
+      const r = await s.done;
+      expect.soft([r.code, resultOf(r.stdout), r.stdout.includes(`stopped at: ${at(w, late)} `)], `[stops-at-collision] ${kind}: exit 2, PARTIAL, the path is named\n${r.stdout}\n${r.stderr}`).toEqual([2, "PARTIAL", true]);
+      expect.soft([idOf(at(w, late)), hashOf(at(w, late))], `[late-file-preserved] ${kind}: the second process's file is the same file with the same bytes`).toEqual(foreign);
+      const order = dests("claude");
+      const laterRows = order.slice(order.indexOf(late) + 1);
+      expect.soft(laterRows.filter((dest) => existsSync(at(w, dest))), `[stops-at-collision] ${kind}: no later payload was created`).toEqual([]);
+      const earlierRows = order.slice(0, order.indexOf(late));
+      expect.soft(earlierRows.filter((dest) => !existsSync(at(w, dest))), `[no-rollback] ${kind}: files created before the stop are still there`).toEqual([]);
+
+      const status = await run(["status", "--workspace", w, "--host", "claude"]);
+      const states = rowStates(status.stdout, w);
+      expect.soft([status.code, resultOf(status.stdout), states[late]], `${kind}: status after the collision\n${status.stdout}`).toEqual([2, "PARTIAL", "FOREIGN"]);
+      const uninstall = await run(["uninstall", "--workspace", w, "--host", "claude"]);
+      expect.soft(uninstall.code, `${kind}: uninstall reports the residue\n${uninstall.stdout}`).toBe(2);
+      expect.soft([idOf(at(w, late)), hashOf(at(w, late))], `[foreign-preserved-by-uninstall] ${kind}: uninstall leaves the second process's file alone`).toEqual(foreign);
+      expect.soft(earlierRows.filter((dest) => existsSync(at(w, dest))), `[collision-cleanable] ${kind}: uninstall removed the files install created`).toEqual([]);
+      expect.soft(uninstall.stdout, `${kind}: the preserved path is listed`).toContain(`preserved       ${at(w, late)}  (FOREIGN`);
+    }
+  });
+
+  it("lead_sigkill_between_publications_is_visible_and_cleanable", async () => {
+    const { w } = workspace();
+    writeFileSync(join(w, "notes.txt"), "the user's own notes\n");
+    const order = dests("claude");
+    const first = order[0];
+    const second = order[1];
+    const s = lead(["install", "--workspace", w, "--host", "claude"], [{ op: "linkSync", when: "before", match: second, action: "block", name: "BETWEEN_PUBLICATIONS" }]);
+    expect(await s.phase("BETWEEN_PUBLICATIONS"), "[phase-reached] the installer stopped between publication 1 and 2").toBe(true);
+    s.kill();
+    const killed = await s.done;
+    console.log(`[observation] ${process.platform}: abrupt termination by child.kill("SIGKILL"): exit code ${killed.code}, signal ${killed.signal}`);
+    expect([killed.code, killed.signal], "the process was killed, it did not exit by itself").toEqual(WINDOWS ? [1, null] : [null, "SIGKILL"]);
+    expect.soft(killed.stdout, "the killed process never reported a result").not.toMatch(/^result:/m);
+
+    // No cleanup ran: the manifest, all 17 anchors and exactly the first payload are on disk.
+    expect.soft(readFileSync(at(w, ".orch-lead-install/manifest.json"), "utf8"), "[kill-visible] the manifest is complete and names the killed installer").toBe(manifestText("claude", w, s.child.pid!));
+    expect.soft(order.map((dest) => existsSync(at(w, dest))), "[kill-visible] exactly the first payload exists").toEqual(order.map((dest) => dest === first));
+    expect.soft(order.map((dest) => hashOf(at(w, anchorOf("claude", dest)))), "[kill-visible] every anchor is complete").toEqual(order.map((dest) => FROZEN.sources[sourceOf("claude", dest)]));
+    expect.soft(existsSync(at(w, ".orch-lead-install/manifest.tmp")), "no temporary manifest is left").toBe(false);
+
+    const status = await run(["status", "--workspace", w, "--host", "claude"]);
+    expect.soft([status.code, resultOf(status.stdout)], `[kill-visible] status after the kill\n${status.stdout}`).toEqual([2, "PARTIAL"]);
+    expect.soft(rowStates(status.stdout, w), "[kill-visible] status names the one owned file and the 16 missing ones")
+      .toEqual(Object.fromEntries(order.map((dest) => [dest, dest === first ? "OWNED_MATCH" : "MISSING"])));
+
+    const uninstall = await run(["uninstall", "--workspace", w, "--host", "claude"]);
+    expect.soft([uninstall.code, resultOf(uninstall.stdout)], `[kill-cleanable] uninstall after the kill\n${uninstall.stdout}\n${uninstall.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+    expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), "[kill-cleanable] only the user's file is left").toEqual([`file notes.txt ${sha("the user's own notes\n")}`]);
+    expect.soft(status.stdout + uninstall.stdout, "nothing ever reported a complete install").not.toContain("INSTALLED\n".replace("INSTALLED", "result: INSTALLED"));
+  });
+
+  it("lead_kill_during_preparation_reports_retained_state", async () => {
+    // (a) Killed while the temporary manifest is half written.
+    {
+      const { w } = workspace();
+      const s = lead(["install", "--workspace", w, "--host", "claude"], [
+        { op: "writeSync", when: "short", match: ".orch-lead-install/manifest.tmp", bytes: 20 },
+        { op: "writeSync", when: "before", match: ".orch-lead-install/manifest.tmp", nth: 2, action: "block", name: "IN_MANIFEST" },
+      ]);
+      expect(await s.phase("IN_MANIFEST"), "[phase-reached] stopped inside the manifest write").toBe(true);
+      s.kill();
+      await s.done;
+      const residue = tree(w);
+      expect.soft(residue, "[no-payload-after-preparation-kill] only the reserved directory with 20 bytes of manifest").toEqual([
+        "dir .orch-lead-install", `file .orch-lead-install/manifest.tmp ${sha(manifestText("claude", w, s.child.pid!).slice(0, 20))}`, "dir .orch-lead-install/objects",
+      ]);
+      const status = await run(["status", "--workspace", w, "--host", "claude"]);
+      expect.soft([status.code, resultOf(status.stdout)], `[preparation-reported] status\n${status.stdout}`).toEqual([2, "UNVERIFIABLE_PREPARATION"]);
+      const uninstall = await run(["uninstall", "--workspace", w, "--host", "claude"]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout), describeMutations(uninstall)], `[preparation-residue-retained] uninstall removes nothing\n${uninstall.stdout}`).toEqual([2, "UNVERIFIABLE_PREPARATION", []]);
+      expect.soft(tree(w), "[preparation-residue-retained] the residue is still there, byte for byte").toEqual(residue);
+      expect.soft(uninstall.stdout, "the directory to look at is named").toContain(at(w, ".orch-lead-install"));
+    }
+    // (b) Killed while an anchor is half written. This shows what is retained and reported; it
+    // does not show, and nothing here claims, that every interrupted byte is removed.
+    {
+      const { w } = workspace();
+      const partial = ".orch-lead-install/objects/05";
+      const s = lead(["install", "--workspace", w, "--host", "claude"], [
+        { op: "writeSync", when: "short", match: partial, bytes: 7 },
+        { op: "writeSync", when: "before", match: partial, nth: 2, action: "block", name: "IN_ANCHOR" },
+      ]);
+      expect(await s.phase("IN_ANCHOR"), "[phase-reached] stopped inside an anchor write").toBe(true);
+      s.kill();
+      await s.done;
+      const partialBytes = readFileSync(at(w, partial));
+      expect.soft(partialBytes.length, "the anchor holds 7 of its bytes").toBe(7);
+      expect.soft(dests("claude").filter((dest) => existsSync(at(w, dest))), "[no-payload-after-preparation-kill] no payload was published").toEqual([]);
+      const status = await run(["status", "--workspace", w, "--host", "claude"]);
+      expect.soft([status.code, resultOf(status.stdout), status.stdout.includes(`anchor without the reviewed text: ${at(w, partial)}`)], `[preparation-reported] status names the partial anchor\n${status.stdout}`).toEqual([2, "PARTIAL", true]);
+      const uninstall = await run(["uninstall", "--workspace", w, "--host", "claude"]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], `uninstall reports residue\n${uninstall.stdout}`).toEqual([2, "PARTIAL"]);
+      expect.soft(tree(w), "[partial-anchor-retained] the partial anchor and the manifest stay; complete anchors are gone").toEqual([
+        "dir .orch-lead-install", `file .orch-lead-install/manifest.json ${sha(manifestText("claude", w, s.child.pid!))}`,
+        "dir .orch-lead-install/objects", `file ${partial} ${sha(partialBytes)}`,
+      ]);
+      expect.soft(uninstall.stdout, "the retained anchor is listed").toContain(`state preserved ${at(w, partial)}`);
+    }
+  });
+
+  it("lead_uninstall_retry_after_kill_is_idempotent", async () => {
+    const points: { name: string; rule: Rule }[] = [
+      { name: "after the first unlink", rule: { op: "unlinkSync", when: "after", nth: 1, action: "block", name: "KILL_HERE" } },
+      { name: "after the payload files", rule: { op: "unlinkSync", when: "before", match: ".orch-lead-install/objects/00", action: "block", name: "KILL_HERE" } },
+      { name: "after one anchor", rule: { op: "unlinkSync", when: "after", match: ".orch-lead-install/objects/00", action: "block", name: "KILL_HERE" } },
+      { name: "before the manifest", rule: { op: "unlinkSync", when: "before", match: ".orch-lead-install/manifest.json", action: "block", name: "KILL_HERE" } },
+    ];
+    const args = (w: string) => ["--workspace", w, "--host", "claude"];
+    const lines = (stdout: string, w: string, word: string) => stdout.split("\n").filter((line) => line.startsWith(`  ${word}`)).map((line) => line.slice(18).replace(/ {2}\(.*$/, "").slice(w.length + 1).split(sep).join("/"));
+    for (const point of points) {
+      const { w } = workspace();
+      expect((await run(["install", ...args(w)])).code, `${point.name}: install`).toBe(0);
+      const s = lead(["uninstall", ...args(w)], [point.rule]);
+      expect(await s.phase("KILL_HERE"), `[phase-reached] ${point.name}`).toBe(true);
+      s.kill();
+      await s.done;
+      const goneBefore = dests("claude").filter((dest) => !existsSync(at(w, dest)));
+      const retry = await run(["uninstall", ...args(w)]);
+      expect.soft([retry.code, resultOf(retry.stdout)], `[retry-completes] ${point.name}: the retry finishes\n${retry.stdout}\n${retry.stderr}`).toEqual([0, "NOT_INSTALLED"]);
+      expect.soft(tree(w).filter((line) => !line.startsWith("dir ")), `[retry-completes] ${point.name}: no file is left`).toEqual([]);
+      expect.soft(lines(retry.stdout, w, "already absent ").sort(), `[all-paths-accounted] ${point.name}: paths removed by the killed run are reported as already absent`).toEqual([...goneBefore].sort());
+      expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        ")].sort(), `[all-paths-accounted] ${point.name}: all 17 paths are accounted for`).toEqual([...dests("claude")].sort());
+    }
+    // With an edited file: the retry keeps it, with its anchor and the manifest, and says so.
+    const { w } = workspace();
+    expect((await run(["install", ...args(w)])).code).toBe(0);
+    const edited = `${ROOT_OF.claude}/brief.md`;
+    appendFileSync(at(w, edited), "my own line\n");
+    const editedBytes = readFileSync(at(w, edited));
+    const s = lead(["uninstall", ...args(w)], [points[0].rule]);
+    expect(await s.phase("KILL_HERE")).toBe(true);
+    s.kill();
+    await s.done;
+    const retry = await run(["uninstall", ...args(w)]);
+    expect.soft([retry.code, resultOf(retry.stdout)], `[retry-retains-mismatch] the retry reports residue\n${retry.stdout}`).toEqual([2, "PARTIAL"]);
+    expect.soft(tree(w).filter((line) => line.startsWith("file ")), "[retry-retains-mismatch] the edited file, its anchor and the manifest stay").toEqual([
+      `file ${edited} ${sha(editedBytes)}`, `file .orch-lead-install/manifest.json ${hashOf(at(w, ".orch-lead-install/manifest.json"))}`, `file ${anchorOf("claude", edited)} ${sha(editedBytes)}`,
+    ].sort());
+    expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        "), ...lines(retry.stdout, w, "preserved      ")].sort(), "[all-paths-accounted] with an edited file").toEqual([...dests("claude")].sort());
+  });
+
+  it("lead_corrupt_manifest_never_opens_outside", async () => {
+    const good = (w: string) => dests("claude").map((dest, i) => ({ path: dest, sha256: FROZEN.sources[sourceOf("claude", dest)] as string, anchor: `objects/${String(i).padStart(2, "0")}` }));
+    const withRow = (w: string, index: number, change: Record<string, string>) => good(w).map((row, i) => (i === index ? { ...row, ...change } : row));
+    const pid = deadPid();
+    const cases: { name: string; manifest(w: string, outside: string): string | { linkTo: string } }[] = [
+      { name: "a row path that climbs out", manifest: (w) => manifestText("claude", w, pid, withRow(w, 3, { path: "../outside/secret.txt" })) },
+      { name: "an absolute row path", manifest: (w, outside) => manifestText("claude", w, pid, withRow(w, 3, { path: join(outside, "secret.txt") })) },
+      { name: "a row path with backslashes", manifest: (w) => manifestText("claude", w, pid, withRow(w, 3, { path: "..\\outside\\secret.txt" })) },
+      { name: "an anchor that climbs out", manifest: (w) => manifestText("claude", w, pid, withRow(w, 3, { anchor: "../../outside/secret.txt" })) },
+      { name: "a repeated row", manifest: (w) => manifestText("claude", w, pid, good(w).map((row, i, all) => (i === 4 ? all[3] : row))) },
+      { name: "another host", manifest: (w) => manifestText("codex", w, pid) },
+      { name: "another workspace", manifest: (w, outside) => manifestText("claude", outside, pid) },
+      { name: "another hash", manifest: (w) => manifestText("claude", w, pid, withRow(w, 3, { sha256: "0".repeat(64) })) },
+      { name: "more than 64 KiB", manifest: (w) => manifestText("claude", w, pid).replace("\n]}\n", `\n]}${" ".repeat(70_000)}\n`) },
+      { name: "another schema", manifest: (w) => manifestText("claude", w, pid).replace('"schema":1', '"schema":2') },
+      { name: "a completion flag", manifest: (w) => manifestText("claude", w, pid).replace('"schema":1', '"schema":1,"complete":true') },
+      { name: "a repeated key", manifest: (w) => manifestText("claude", w, pid).replace('"schema":1', '"schema":1,"schema":1') },
+      { name: "not JSON", manifest: () => "{" },
+      { name: "a manifest that is a link to a valid one outside", manifest: (w, outside) => {
+        writeFileSync(join(outside, "manifest.json"), manifestText("claude", w, pid));
+        return { linkTo: join(outside, "manifest.json") };
+      } },
+    ];
+    for (const c of cases) {
+      const { base, w } = workspace();
+      const outside = join(base, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret.txt"), "not part of the workspace\n");
+      mkdirSync(at(w, ".orch-lead-install/objects"), { recursive: true });
+      writeFileSync(at(w, ".orch-lead-install/notes-from-someone"), "unknown entry\n");
+      writeFileSync(at(w, "CLAUDE.md"), "the user's file\n");
+      const m = c.manifest(w, outside);
+      if (typeof m === "string") writeFileSync(at(w, ".orch-lead-install/manifest.json"), m);
+      else symlinkSync(m.linkTo, at(w, ".orch-lead-install/manifest.json"));
+      const before = [tree(w), tree(outside)];
+      const outsidePrefix = outside.split(sep).join("/");
+      for (const command of ["status", "uninstall"]) {
+        const r = await run([command, "--workspace", w, "--host", "claude"]);
+        expect.soft([r.code, resultOf(r.stdout)], `[corrupt-manifest-refused] ${c.name}: ${command}\n${r.stdout}\n${r.stderr}`).toEqual([2, "UNVERIFIABLE_PREPARATION"]);
+        expect.soft(r.trace.filter((ev) => [ev.path, ev.path2].some((p) => typeof p === "string" && p.startsWith(outsidePrefix))).map((ev) => `${ev.op} ${ev.path}`),
+          `[no-outside-access] ${c.name}: ${command} touches nothing outside the workspace`).toEqual([]);
+        expect.soft(r.trace.filter((ev) => ev.op === "openSync" && ev.path.endsWith("notes-from-someone")).length, `[unknown-not-opened] ${c.name}: ${command} does not open the unknown entry`).toBe(0);
+        expect.soft([describeMutations(r), r.trace.filter((ev) => ev.op === "process").length], `[corrupt-no-mutation] ${c.name}: ${command} makes no mutating call and starts nothing`).toEqual([[], 0]);
+      }
+      expect.soft([tree(w), tree(outside)], `[corrupt-no-mutation] ${c.name}: everything is retained, including the unknown entry`).toEqual(before);
+    }
+  });
+
+  it("lead_concurrent_install_reservation_and_busy_cleanup", async () => {
+    const { w } = workspace();
+    const args = ["--workspace", w, "--host", "claude"];
+    const reserve: Rule = { op: "mkdirSync", when: "before", match: ".orch-lead-install", action: "block", name: "BEFORE_RESERVE" };
+    const a = lead(["install", ...args], [reserve, { op: "linkSync", when: "before", match: dests("claude")[1], action: "block", name: "A_HELD" }]);
+    const b = lead(["install", ...args], [reserve]);
+    expect([await a.phase("BEFORE_RESERVE"), await b.phase("BEFORE_RESERVE")], "both installers passed the check and stand before the reservation").toEqual([true, true]);
+    a.release();
+    expect(await a.phase("A_HELD"), "A reserved the workspace and is held, alive, after its first publication").toBe(true);
+    b.release();
+    b.child.stdin!.end();
+    const loser = await b.done;
+    expect.soft([loser.code, resultOf(loser.stdout)], `[no-adoption] the second installer refuses\n${loser.stdout}\n${loser.stderr}`).toEqual([2, "CONFLICT"]);
+    expect.soft(mutations(loser).map((ev) => `${ev.op} ${ev.code}`), "[no-adoption] its only mutating call is the refused reservation").toEqual(["mkdirSync EEXIST"]);
+    expect.soft(readFileSync(at(w, ".orch-lead-install/manifest.json"), "utf8"), "[no-adoption] the manifest is the winner's").toBe(manifestText("claude", w, a.child.pid!));
+
+    // A is alive: uninstall and status say BUSY, change nothing, and only ask about the process.
+    const before = tree(w);
+    const uninstall = await run(["uninstall", ...args]);
+    expect.soft([uninstall.code, resultOf(uninstall.stdout), describeMutations(uninstall)], `[busy-refuses] uninstall while the installer lives\n${uninstall.stdout}`).toEqual([2, "BUSY", []]);
+    expect.soft(uninstall.trace.filter((ev) => ev.op === "kill").map((ev) => [ev.pid, ev.signal]), "[liveness-query-only] the only signal call is the question (signal 0) about the installer").toEqual([[a.child.pid, 0]]);
+    expect.soft([a.child.exitCode, a.child.signalCode, tree(w)], "[busy-refuses] the installer is still running and nothing changed").toEqual([null, null, before]);
+    const status = await run(["status", ...args]);
+    expect.soft([status.code, resultOf(status.stdout)], "[status-busy] status while the installer lives").toEqual([2, "BUSY"]);
+    a.release();
+    a.child.stdin!.end();
+    const winner = await a.done;
+    expect.soft([winner.code, resultOf(winner.stdout)], `the winner completes\n${winner.stdout}\n${winner.stderr}`).toEqual([0, "INSTALLED"]);
+
+    // The recorded id answers as alive, as not ours to ask, or with an unknown error: BUSY each
+    // time, nothing removed. Only "no such process" lets uninstall work.
+    const installed = tree(w);
+    const probes: [string, (pid: number) => void, number, string][] = [
+      ["a live process has the id", () => {}, 2, "BUSY"],
+      ["asking is not permitted", () => { throw Object.assign(new Error("EPERM"), { code: "EPERM" }); }, 2, "BUSY"],
+      ["the answer is an unknown error", () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); }, 2, "BUSY"],
+    ];
+    for (const [name, probe, code, result] of probes) {
+      let out = "";
+      const asked: number[] = [];
+      const exit = await main(["lead", "uninstall", ...args], { out: (s) => (out += s), err: () => {}, stdin: () => "" },
+        { lead: { probe: (pid: number) => { asked.push(pid); probe(pid); } } } as never);
+      expect.soft([exit, resultOf(out), asked, tree(w)], `[busy-refuses] ${name}`).toEqual([code, result, [a.child.pid], installed]);
+    }
+    const finish = await run(["uninstall", ...args]);
+    expect.soft([finish.code, resultOf(finish.stdout)], "uninstall works once the installer is gone").toEqual([0, "NOT_INSTALLED"]);
+  });
+});

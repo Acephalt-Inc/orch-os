@@ -159,6 +159,7 @@ orch worker list                            # Show workers
 orch merge-gate 101 --fixture approved      # Try the gate with an offline fixture
 orch load                                   # Sample machine load
 orch mem search review                      # Search durable notes
+orch lead install --workspace PATH --host claude  # Create the lead text pack in a new workspace
 ```
 
 Full flags and exit codes: [Command reference](docs/commands.md).
@@ -184,6 +185,7 @@ The commands above apply a few rules. Each row names the command that applies it
 
 - [Concepts](docs/concepts.md) — roles, leases, messages, claims, workers, and notes.
 - [Commands](docs/commands.md) — subcommands, flags, exit codes, and configuration.
+- [Lead pack](docs/lead-install.md) — `orch lead install`, `status` and `uninstall`: instruction files for a lead assistant in one new workspace. Install never changes a file that already exists. Measured on macOS; unverified on Windows.
 - [Profiles](docs/profiles.md) — declared review context, the `human-merge` example policy, the review label each verdict reports, and migrating a profile written for the removed built-in table.
 - [FAQ](docs/faq.md) — Claude Code and Codex CLI setup, GitHub identity, and common questions.
 - [Architecture](docs/architecture.md) — modules, local state files, and process model.

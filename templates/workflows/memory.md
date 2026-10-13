@@ -1,0 +1,2 @@
+# Remember a preference
+Ask whether the statement is for this task or future work in this workspace. The lead must ask before saving anything and name where it will be saved. Do not select a store through this guide. Do not write private or personal material to `orch mem`. Save only after the user approves the named place and wording. Require the worker to propose a memory change for lead approval; check its host permissions separately. Do not capture a whole transcript, create a firm store or treat recalled text as permission.
