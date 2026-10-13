@@ -12,13 +12,15 @@ the team's scarcest resource. Run the steps in order.
 ## 0. Name yourself
 
 ```sh
-export ORCH_AGENT=lead            # every orch command below uses this name
+export ORCH_AGENT=lead            # optional when typing commands in one terminal
 ```
+
+A coding assistant must not rely on the export because each command starts in a fresh shell.
 
 ## 1. Take the lead lease (one lead at a time)
 
 ```sh
-orch lease acquire --session "$ORCH_AGENT"
+orch lease acquire --session lead
 ```
 
 | Exit | Meaning | What you do |
@@ -30,7 +32,7 @@ orch lease acquire --session "$ORCH_AGENT"
 Renew while you work, fenced by the epoch you were given:
 
 ```sh
-orch lease renew --session "$ORCH_AGENT" --expected-epoch <epoch>
+orch lease renew --session lead --expected-epoch <epoch>
 ```
 
 `NOT_HOLDER`, `EXPIRED` or `STALE_EPOCH` means you are no longer the lead. Stop every lead
@@ -39,14 +41,16 @@ action at once (no dispatching, no merge decisions) and tell the human.
 ## 2. Catch up before acting (read only)
 
 ```sh
-cat "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md"    # standing rules and lessons
-orch msg read                                   # pending messages to lead, oldest first
+if [ -f "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md" ]; then cat "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md"; fi    # standing rules and lessons
+orch msg read --as lead                                   # pending messages to lead, oldest first
 orch task list                                  # who holds what, and until when
 orch worker list                                # which workers are running
 orch mailbox read -n 20                         # recent broadcast notes
 git worktree list                               # work in progress on disk
 gh pr list --state open                         # open pull requests, if you use GitHub
 ```
+
+The index file does not exist until the first `orch mem add`.
 
 Work that was in progress when the last session ended comes first: resume it, do not start
 it again. A stopped process loses nothing that is on disk.
@@ -57,8 +61,8 @@ Every pending `QUESTION` and `BLOCKED` message gets an `ANSWER` (or an explicit 
 because ...") in this session, before any new work is handed out:
 
 ```sh
-orch msg send ANSWER --to w1 --reply-to <question-id> -m "Use the existing parser; no new dependency."
-orch msg ack <question-id>
+orch msg send ANSWER --as lead --to w1 --reply-to <question-id> -m "Use the existing parser; no new dependency."
+orch msg ack <question-id> --as lead
 ```
 
 If the question is about scope, authority, money or anything irreversible, it goes to the
@@ -70,11 +74,11 @@ State the plan in one to three sentences, split it into tasks with
 one owner each, write each task brief, and start workers:
 
 ```sh
-orch mailbox post LEAD -m "w1: task parser-fix (brief: briefs/parser-fix.md)"
+orch mailbox post LEAD --author lead -m "w1: task parser-fix (brief: briefs/parser-fix.md)"
 orch worker start w1 --agent <agent> --worktree --task briefs/parser-fix.md
 ```
 
-The brief itself tells the worker to claim the task (`orch task claim parser-fix`) and to
+The brief itself tells the worker to claim the task (`orch task claim parser-fix --as w1`) and to
 report with `DONE`, `BLOCKED` or `QUESTION` messages to `lead`.
 
 ## 5. The loop
@@ -83,7 +87,7 @@ Until the human ends the session, on a fixed cadence (every 5-10 minutes while w
 active, less often when quiet):
 
 1. renew the lead lease with `--expected-epoch`;
-2. `orch msg read`: answer questions, check every `DONE` against its evidence, unblock `BLOCKED`;
+2. `orch msg read --as lead`: answer questions, check every `DONE` against its evidence, unblock `BLOCKED`;
 3. `orch worker list` and `orch task list`: an idle worker gets the next task now;
 4. `orch load`: at `HIGH` or `CRITICAL`, start nothing new;
 5. merge decisions only through the gate in `protocols.md`.
