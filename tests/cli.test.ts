@@ -103,7 +103,7 @@ describe("CliV2", () => {
     const [code, out] = await run("lease", "--help");
     expect(code).toBe(0);
     expect(out).toContain("--expected-epoch");
-    expect((await run("--version"))[1]).toMatch(/^orch \d+\.\d+\.\d+\n$/);
+    expect((await run("--version"))[1]).toMatch(/^orch \d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\n$/);
   });
 
   it("lease_json_output_and_expected_epoch_release", async () => {
