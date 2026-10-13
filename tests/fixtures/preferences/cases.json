@@ -1,0 +1,6 @@
+{
+  "valid": {
+    "response-language": ["en", "zh"],
+    "answer-length": ["short", "normal"]
+  }
+}
