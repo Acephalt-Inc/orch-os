@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, realpath, statfs } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, parse, sep } from "node:path";
-import { guarded, PrivateStoreError } from "./errors.js";
+import { guarded, normalize, PrivateStoreError } from "./errors.js";
 import { Budget, gate, type TestSeam } from "./limits.js";
 declare const brand: unique symbol;
 export type Binding = Readonly<{ [brand]: true }>;
@@ -45,7 +45,11 @@ export async function bindWorkspace(workspace: string, namespace: string, deadli
   });
 }
 export function partitionPaths(binding: Binding, seam: TestSeam = {}): PartitionPaths {
-  gate(seam);
+  try {
+    gate(seam);
+  } catch (error) {
+    throw normalize(error);
+  }
   if (!binding || typeof binding !== "object" || !bindings.has(binding)) throw new PrivateStoreError("BAD_BINDING");
   return locations.get(binding)!;
 }

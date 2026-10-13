@@ -53,11 +53,14 @@ function run(scenario: string, options: { home?: string; workspace?: string; uma
   const args = ["--import", preload];
   if (options.umask) {
     args.push("--input-type=module", "-e",
-      `process.umask(parseInt(process.argv[1], 8)); await import(process.argv[2]);`, options.umask, pathToFileURL(fixture).href,
+      `process.umask(parseInt(process.argv[1], 8));
+await import(process.argv[2]);`, options.umask, pathToFileURL(fixture).href,
       workspace, scenario);
     // The inline launcher supplies a normal fixture argv, without a global environment assignment.
-    args[args.indexOf("-e") + 1] = "process.umask(parseInt(process.argv[1], 8)); "
-      + "const fixture = process.argv[2]; process.argv = [process.argv[0], fixture, ...process.argv.slice(3)]; await import(fixture);";
+    args[args.indexOf("-e") + 1] = "process.umask(parseInt(process.argv[1], 8));\n"
+      + "const fixture = process.argv[2];\n"
+      + "process.argv = [process.argv[0], fixture, ...process.argv.slice(3)];\n"
+      + "await import(fixture);";
   } else args.push(fixture, workspace, scenario);
   const child = spawnSync(process.execPath, args, {
     env: { ...process.env, HOME: home, USERPROFILE: home, ORCH_HOME: join(made.home, "ignored"),
@@ -107,6 +110,7 @@ it("binding_uses_canonical_workspace_and_fixed_namespace", () => {
   expect(result.unicode).not.toBe(result.paths.directory);
   fixedFailure(result.linkedResult, "BAD_BINDING");
   fixedFailure(result.traversal, "BAD_BINDING");
+  fixedFailure(result.fileWorkspace, "BAD_BINDING");
   expect(submissions(calls).filter((call) => call.label.startsWith("linked-") && /open|realpath|mkdir/.test(call.op))).toEqual([]);
   expect(writes(calls)).toEqual([]);
   expect(result.namespaces).toEqual(["memory-v1", "knowledge-v1", "tasks-v1"].map((namespace) =>
@@ -115,6 +119,7 @@ it("binding_uses_canonical_workspace_and_fixed_namespace", () => {
   else {
     expect(result.alias.same).toBe(true);
     expect(result.alias.digests[0]).toBe(result.alias.digests[1]);
+    expect(result.alias.bound).toEqual(Array(2).fill(join(dirname(result.paths.directory), result.alias.digests[0])));
   }
   expect(result.ancestorsAfter).toEqual(result.ancestorsBefore);
   const made = setup();
@@ -131,6 +136,7 @@ it("binding_uses_canonical_workspace_and_fixed_namespace", () => {
 it("outside_values_cannot_select_store_authority", () => {
   const { result, calls, home } = run("authority");
   // K1.03
+  fixedFailure(result.rawSeam, "IO_UNAVAILABLE");
   for (const value of result.cases.slice(0, 16)) fixedFailure(value, "BAD_BINDING");
   for (const value of result.cases.slice(16, -1)) fixedFailure(value, "BAD_INPUT");
   fixedFailure(result.cases.at(-1), "DEADLINE");
@@ -144,6 +150,9 @@ it("posix_directory_admission_checks_opened_object", () => {
   for (const umask of ["022", "0277"]) {
     const { result, calls } = run("prepare", { umask });
     const first = calls.filter((call) => call.label === "prepare");
+    for (const call of submissions(first).filter((call) => call.op === "fs.promises.open")) {
+      expect(call.flags! & constants.O_DIRECTORY).toBe(constants.O_DIRECTORY);
+    }
     const mk = submissions(first).filter((call) => call.op === "fs.promises.mkdir");
     const completed = first.filter((call) => call.op === "fs.promises.mkdir" && call.event === "complete");
     expect(mk.map((call) => call.path)).toEqual(umask === "022" ? result.folders : result.folders.slice(0, 1));
@@ -240,6 +249,7 @@ it("bounded_read_loops_and_faults", () => {
   for (const key of ["midFault", "openFault"]) fixedFailure(result[key], "IO_UNAVAILABLE");
   for (const value of result.invalidCaps) fixedFailure(value, "BAD_INPUT");
   fixedFailure(result.fakeHandle, "BAD_BINDING");
+  fixedFailure(result.repeat, "BAD_BINDING");
   expect(result.empty).toEqual({ value: { bytes: "" } });
   expect(result.after).toEqual(result.before);
   expect(writes(calls)).toEqual([]);
@@ -250,6 +260,12 @@ it("bounded_read_loops_and_faults", () => {
 it("late_admission_cannot_start_next_io", () => {
   const { result, calls } = run("deadlines");
   // K1.10
+  for (const entry of result.lateCloses) {
+    expect.soft(entry.result, "late-" + entry.operation).toEqual({ code: "DEADLINE", message: "private storage request refused" });
+    const phase = calls.filter((call) => call.label === "late-" + entry.operation);
+    const closed = phase.find((call) => call.op === "seam.close" && call.event === "complete")!;
+    expect(submissions(phase).filter((call) => call.at > closed.at)).toEqual([]);
+  }
   for (const entry of result.cases) fixedFailure(entry.result, "DEADLINE");
   fixedFailure(result.mkdirLate, "DEADLINE");
   fixedFailure(result.fifo, "DEADLINE");

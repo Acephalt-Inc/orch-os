@@ -82,13 +82,18 @@ async function bindingCases() {
   await symlink(workspace, linked);
   const linkedResult = await call("linked-workspace", (budget) => bindWorkspace(linked, "memory-v1", budget));
   const traversal = await call("linked-traversal", (budget) => bindWorkspace(linked + "/../workspace", "memory-v1", budget));
+  const file = join(home, "file-workspace");
+  await writeFile(file, "workspace");
+  const fileWorkspace = await call("file-workspace", (budget) => bindWorkspace(file, "memory-v1", budget));
   const cases = [join(home, "CaseDir"), join(home, "casedir")];
   await mkdir(cases[0]);
   let alias;
   try {
     const first = await realpath(cases[0]);
     const second = await realpath(cases[1]);
-    alias = { same: first === second, digests: [digest(first), digest(second)] };
+    const bound = [];
+    for (const path of cases) bound.push(partitionPaths(await bindWorkspace(path, "memory-v1", nextBudget())).directory);
+    alias = { same: first === second, digests: [digest(first), digest(second)], bound };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     alias = { skip: "realpath aliases do not exist on this case-sensitive volume" };
@@ -99,7 +104,7 @@ async function bindingCases() {
   }
   return { kind: "bound", frozen: Object.isFrozen(binding), pathsFrozen: Object.isFrozen(paths), paths,
     expected: directory, second: partitionPaths(otherBinding).directory, unicode: partitionPaths(unicodeBinding).directory,
-    linkedResult, traversal, alias, namespaces, ancestorsBefore, ancestorsAfter: ancestorInfo() };
+    linkedResult, traversal, fileWorkspace, alias, namespaces, ancestorsBefore, ancestorsAfter: ancestorInfo() };
 }
 async function missingCases() {
   const binding = await bind();
@@ -123,7 +128,7 @@ async function authorityCases() {
   for (const input of ["", "bad\0path", { workspace, uid: process.getuid(), scope: "personal", approval: true }]) {
     cases.push(await call("bad-input", (budget) => bindWorkspace(input, "memory-v1", budget)));
   }
-  for (const seam of [{ root: home }, { uid: process.getuid() }, { platform: "win32" }, { policy: "safe" }, { approval: true }]) {
+  for (const seam of [{ root: home }, { uid: process.getuid() }, { platform: "win32" }, { policy: "safe" }, { approval: true }, { unknown: () => 0 }, []]) {
     cases.push(await call("bad-seam", (budget) => bindWorkspace(workspace, "memory-v1", budget, seam)));
   }
   for (const name of ["../state.json", "/state.json", "state.json\0", { name: "state.json" }]) {
@@ -133,8 +138,11 @@ async function authorityCases() {
     cases.push(await call("bad-budget", () => inspectPartition(binding, budget)));
   }
   cases.push(await call("expired-budget", () => inspectPartition(binding, performance.now() - 1)));
+  const rawSeam = await call("raw-seam", () => partitionPaths(binding, { platform: () => {
+    throw Object.assign(new Error("/tmp/review-path"), { cause: new Error("raw cause") });
+  } }));
   const paths = await call("fixed-paths", () => partitionPaths(binding));
-  return { cases, paths, privateInventory: inventory(folders[0]) };
+  return { cases, paths, rawSeam, privateInventory: inventory(folders[0]) };
 }
 async function prepareCases() {
   const binding = await bind();
@@ -163,7 +171,7 @@ async function directoryCases() {
   for (const mode of [0o1700, 0o2700, 0o4700, 0o600, 0o500]) {
     await chmod(folders[0], mode);
     const observedMode = (await lstat(folders[0])).mode & 0o7777;
-    if ((mode & 0o7000) && (observedMode & 0o7000) !== (mode & 0o7000)) {
+    if ((mode & 0o7000) && observedMode === (mode & 0o777)) {
       special.push({ mode, observedMode, notObservable: true });
       continue;
     }
@@ -231,7 +239,7 @@ async function leafCases() {
     await writeFile(state, "payload", { mode: 0o600 });
     await chmod(state, mode);
     const observedMode = (await lstat(state)).mode & 0o7777;
-    if ((mode & 0o7000) && (observedMode & 0o7000) !== (mode & 0o7000)) {
+    if ((mode & 0o7000) && observedMode === (mode & 0o777)) {
       cases.push({ mode, observedMode, notObservable: true });
       await rm(state);
       continue;
@@ -303,7 +311,7 @@ async function readCases() {
     },
   }));
   const caps = [];
-  for (const cap of [15, 16, 17]) caps.push(await call("cap", () => read(binding, cap)));
+  for (const cap of [15, 16, 17, 16 * 1_024 * 1_024]) caps.push(await call("cap", () => read(binding, cap)));
   let interrupted = false;
   const eintr = await call("eintr", () => read(binding, 16, {
     read: async (handle, buffer) => {
@@ -333,11 +341,14 @@ async function readCases() {
     invalidCaps.push(await call("bad-cap", (budget) => readBounded(result.handle, cap, budget)));
     await result.handle.close();
   }
+  const opened = await openPrivateFile(binding, "state.json", nextBudget());
+  await readBounded(opened.handle, 16, nextBudget());
+  const repeat = await call("repeat-handle", (budget) => readBounded(opened.handle, 16, budget));
   const fakeHandle = await call("fake-handle", (budget) => readBounded({ read: () => "payload" }, 16, budget));
   await writeFile(state, "");
   const empty = await call("empty", () => read(binding, 0));
   await writeFile(state, bytes);
-  return { short, counts, caps, eintr, midFault, retry, openFault, openRetry, invalidCaps, fakeHandle, empty,
+  return { short, counts, caps, eintr, midFault, retry, openFault, openRetry, invalidCaps, fakeHandle, repeat, empty,
     before, after: inventory(home), expected: Buffer.from(bytes).toString("hex") };
 }
 async function windowsCases() {
@@ -420,6 +431,26 @@ async function deadlineCases() {
     }
     cases.push({ operation, result: await call("late-" + operation, action, 100, () => now) });
   }
+  const lateCloses = [];
+  for (const operation of ["refusal-close", "directory-close-reject", "release-reject"]) {
+    await chmod(folders[0], operation === "refusal-close" ? 0o755 : 0o700);
+    let now = 0;
+    const result = await call("late-" + operation, () => inspectPartition(binding, 100, {
+      clock: () => now,
+      open: async (...args) => observed("open", async () => {
+        const handle = await open(...args);
+        const close = handle.close.bind(handle);
+        handle.close = async () => observed("close", async () => {
+          await close();
+          now = 101;
+          if (operation !== "refusal-close") throw Object.assign(new Error("close fault"), { code: "EIO" });
+        });
+        if (operation === "release-reject") now = 101;
+        return handle;
+      }),
+    }), 100, () => now);
+    lateCloses.push({ operation, result });
+  }
   // The budget expires between two in-time operations; a second case rejects an operation late.
   let between = 0;
   const betweenAwaits = await call("between-awaits", () => inspectPartition(binding, 100, {
@@ -463,7 +494,7 @@ async function deadlineCases() {
   }), deadline);
   const elapsed = performance.now() - start;
   const [writerExit] = await writerDone;
-  return { cases, mkdirLate, retained, fifo, elapsed, writerExit, betweenAwaits, lateRejection };
+  return { cases, mkdirLate, retained, fifo, elapsed, writerExit, betweenAwaits, lateRejection, lateCloses };
 }
 async function inertCases() {
   const binding = await ready();

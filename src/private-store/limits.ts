@@ -47,7 +47,7 @@ export class Budget {
     try {
       this.check();
     } catch (error) {
-      await release?.(value);
+      await release?.(value).catch(() => undefined);
       throw error;
     }
     return value;

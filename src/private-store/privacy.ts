@@ -24,7 +24,7 @@ async function checkedOpen(path: string, directory: boolean, budget: Budget): Pr
     if (directory ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) throw new PrivateStoreError("UNSAFE_PATH");
     return handle;
   } catch (error) {
-    await handle.close();
+    await handle.close().finally(() => budget.check());
     throw error;
   }
 }
@@ -43,7 +43,7 @@ async function partition(binding: Binding, budget: Budget, create: boolean): Pro
       if (!handle) throw new PrivateStoreError("IO_UNAVAILABLE");
     }
     if (!handle) return false;
-    await handle.close();
+    await handle.close().finally(() => budget.check());
   }
   budget.check();
   return true;

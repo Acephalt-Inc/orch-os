@@ -10,11 +10,14 @@ export class PrivateStoreError extends Error {
 export function errno(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
 }
+export function normalize(error: unknown): PrivateStoreError {
+  if (error instanceof PrivateStoreError) return error;
+  return new PrivateStoreError(["ELOOP", "ENOTDIR", "EISDIR"].includes(errno(error) ?? "") ? "UNSAFE_PATH" : "IO_UNAVAILABLE");
+}
 export async function guarded<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
-    if (error instanceof PrivateStoreError) throw error;
-    throw new PrivateStoreError(["ELOOP", "ENOTDIR", "EISDIR"].includes(errno(error) ?? "") ? "UNSAFE_PATH" : "IO_UNAVAILABLE");
+    throw normalize(error);
   }
 }

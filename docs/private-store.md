@@ -27,7 +27,11 @@ const deadline = performance.now() + 5_000;
 const binding = await bindWorkspace(workspace, "memory-v1", deadline);
 const opened = await openPrivateFile(binding, "state.json", deadline);
 if (opened.kind === "present") {
-  const bytes = await readBounded(opened.handle, 256 * 1_024, deadline);
+  try {
+    const bytes = await readBounded(opened.handle, 256 * 1_024, deadline);
+  } finally {
+    await opened.handle.close();
+  }
 }
 ```
 
