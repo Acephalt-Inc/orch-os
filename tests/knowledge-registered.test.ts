@@ -146,7 +146,7 @@ describe("KnowledgeRegistered", () => {
     }
     const help = await orch(c, ["knowledge", "--help"]);
     expect([help.code, help.stdout.split("\n")[0], help.stderr], "orch knowledge --help").toEqual([0, "usage: knowledge {query} ...", ""]);
-    expect(help.stdout, "orch knowledge --help: the wording").toContain(WORDING);
+    expect(help.stdout.split("\n")[2], "orch knowledge --help: the wording, on its own line").toBe(WORDING);
   }));
 
   it("the_packaged_command_reads_only_files_of_its_own_package_and_gives_one_result_in_two_worlds", () => inWorld(async (base) => {

@@ -189,7 +189,7 @@ describe("knowledge command", () => {
       expect(r.err, JSON.stringify(argv)).toBe("");
       expect(r.calls, JSON.stringify(argv)).toEqual([]);
     }
-    expect(top).toContain(WORDING);
+    expect(top.split("\n")[2]).toBe(WORDING);
     expect(sub).toContain(WORDING);
     // An unknown command, an unknown option or an invalid value read before it is refused.
     const refused = [
@@ -228,7 +228,7 @@ describe("knowledge command", () => {
       expect(r.code, argv.join(" ")).toBe(0);
       expect(r.err, argv.join(" ")).toBe("");
       expect(r.calls, argv.join(" ")).toEqual([]);
-      expect(r.out, argv.join(" ")).toContain(WORDING);
+      expect(r.out.split("\n")[2], argv.join(" ")).toBe(WORDING);
     }
     // The top-level help lists one command and no other.
     const top = (await runArgs(["--help"])).out.split("\n");
