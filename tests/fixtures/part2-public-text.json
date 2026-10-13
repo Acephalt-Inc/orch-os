@@ -23,8 +23,8 @@
   {
    "id": "docs/architecture.md: what calls out to the network",
    "file": "docs/architecture.md",
-   "text": "- **Network services.** Nothing listens on a port. Only live `merge-gate` (through `gh`) and `orch update check` (one request to the npm registry, when you type it) call out.",
-   "sha256": "c118b1450c225d1ca0b5d0b69cfa9354f78f20131a8e2b700ee7a8d37c146e40"
+   "text": "- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.",
+   "sha256": "09d76136961a94bbacc0dc84f589a034423fbe88ea01bb1990006ac4735d15f3"
   },
   {
    "id": "help: usage line of orch",

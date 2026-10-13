@@ -114,5 +114,5 @@ All deployment-specific values live in `config.toml`. Read-only commands work be
 - **The agent loop.** Tools, permissions, context and sessions belong to the agent CLI.
 - **A scheduler.** Run `orch load`, `orch msg watch` or periodic checks from cron, systemd timers or any other scheduler.
 - **Merging.** `merge-gate` only answers whether a merge is allowed.
-- **Network services.** Nothing listens on a port. Only live `merge-gate` (through `gh`) and `orch update check` (one request to the npm registry, when you type it) call out.
+- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.
 - **Windows.** Workers rely on POSIX process groups and signals.
