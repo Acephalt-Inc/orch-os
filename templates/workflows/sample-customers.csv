@@ -1,0 +1,7 @@
+id,name,due_date,status,next_step
+C101,Sample North,2026-10-07,open,local draft
+C102,Sample East,2026-10-10,open,local draft
+C103,Sample West,2026-10-01,open,local draft
+C104,Sample South,2026-10-13,open,local draft
+C105,Sample Central,2026-10-09,open,local draft
+C106,Sample Future,2026-10-20,open,local draft
