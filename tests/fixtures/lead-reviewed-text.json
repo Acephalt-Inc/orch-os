@@ -30,7 +30,7 @@
   "templates/workflows/sample-customers.csv": "89a778c53ff3441b39007b86ddd3b83b7c2940441c063fb9438b63e8cc3260a2"
  },
  "documents": {
-  "docs/lead-install.md": "1655b4d552f18f880ba022e67bdd72b93d33e8a67a0069c1f03ffb8257bec4b7"
+  "docs/lead-install.md": "0ac65bc682c796e24c96ad10ef242fae4bcd224661628e70f2f33bf1c89f195d"
  },
  "inventory": {
   "claude": [
@@ -1657,11 +1657,6 @@
     "text": "Install never changes or removes a file that already exists.",
     "class": "program-claim",
     "claim": "never-changes-existing"
-   },
-   {
-    "text": "If another program creates a pack file or a pack directory after the check, install stops, leaves it unchanged and reports `PARTIAL`.",
-    "class": "program-claim",
-    "claim": "stops-at-collision"
    },
    {
     "text": "If another install reserves `.orch-lead-install` first, install creates nothing and reports `CONFLICT`.",
