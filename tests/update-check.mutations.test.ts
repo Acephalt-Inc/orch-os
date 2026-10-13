@@ -198,7 +198,14 @@ describe("UpdateCheckMutationsReply", () => {
 
 describe("UpdateCheckMutationsVersions", () => {
   it("mutation_pre_release_ordered_above_its_release", () => {
-    row("a_pre_release_of_the_installed_version_is_not_newer", [{ file: UPDATE, from: "x.pre === y.pre ? 0 : x.pre === null ? 1 : -1", to: "x.pre === y.pre ? 0 : x.pre === null ? -1 : 1" }],
+    const edits: Edit[] = [{ file: UPDATE, from: "x.pre === y.pre ? 0 : x.pre === null ? 1 : -1", to: "x.pre === y.pre ? 0 : x.pre === null ? -1 : 1" }];
+    // The command row needs an installed release: a pre-release and its release are what the changed
+    // line orders. While the package version is itself a pre-release, the ordering row is the witness.
+    if (/-/.test(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version)) {
+      row(ORDER, edits, /1\.0\.0-alpha against 1\.0\.0: expected 1 to be -1/);
+      return;
+    }
+    row("a_pre_release_of_the_installed_version_is_not_newer", edits,
       /pre-release of the installed version: stdout: expected 'update check: newer version available…' to be 'update check: no newer version: insta…'/);
   });
 

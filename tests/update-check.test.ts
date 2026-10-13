@@ -19,7 +19,9 @@ import { candidate, pack } from "./_pack.js";
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const V: string = pkg.version;
-const [MAJOR, MINOR, PATCH] = V.split(".").map(Number);
+// The package version can be a pre-release (2.2.0-rc.1): the three numbers are those of its release part.
+const RELEASE = V.split(/[-+]/)[0];
+const [MAJOR, MINOR, PATCH] = RELEASE.split(".").map(Number);
 const ENTRY = join(ROOT, "tests", "update-check-entry.mjs");
 const REGISTRY_URL = "https://registry.npmjs.org/orch-os/latest";
 const CAP = 128 * 1024;
@@ -154,7 +156,7 @@ describe("UpdateCheckAnswers", () => {
   });
 
   it("the_installed_version_as_latest_claims_no_update_and_exits_0", async () => {
-    for (const latest of [V, `${MAJOR}.${MINOR}.${PATCH}+build.7`, "0.0.1"]) {
+    for (const latest of [V, `${V}+build.7`, "0.0.1"]) {
       ctx.fake.handler = published(latest);
       const r = await check(ctx.fake.url);
       expect(r.out, `latest ${latest}: stdout`).toBe(current(latest));
@@ -163,7 +165,9 @@ describe("UpdateCheckAnswers", () => {
   });
 
   it("a_pre_release_of_the_installed_version_is_not_newer", async () => {
-    const latest = `${V}-rc.1`;
+    // lower than the installed version: a pre-release of it or, when the installed version is a
+    // pre-release itself, an earlier pre-release of the same release
+    const latest = V === RELEASE ? `${V}-rc.1` : `${RELEASE}-0`;
     ctx.fake.handler = published(latest);
     const r = await check(ctx.fake.url);
     expect(r.out, "pre-release of the installed version: stdout").toBe(current(latest));

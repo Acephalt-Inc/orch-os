@@ -44,5 +44,12 @@ jobs:
       # No NPM_TOKEN / NODE_AUTH_TOKEN: npm publish authenticates via OIDC
       # (npm Trusted Publishing) using the id-token: write permission above.
       # Provenance attestations are generated automatically.
+      # A pre-release version (2.2.0-rc.1) goes out under the "next" tag, so "latest" stays on the
+      # last full release. Without --tag, npm would make the pre-release "latest".
       - name: Publish
-        run: npm publish --access public
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          case "$PKG_VERSION" in
+            *-*) npm publish --access public --tag next ;;
+            *) npm publish --access public ;;
+          esac

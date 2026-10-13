@@ -1,6 +1,6 @@
 # Install ORCH-os with a coding assistant
 
-For a coding assistant that can run commands on the user's machine. It covers one case: a first install of `orch-os@2.1.0` on macOS or Windows 11. It does not upgrade, repair or remove anything.
+For a coding assistant that can run commands on the user's machine. It covers one case: a first install of `orch-os@2.2.0-rc.1` on macOS or Windows 11. It does not upgrade, repair or remove anything.
 
 When the `node` command is missing, step 1 tells the assistant how to install Node.js first. This guide has no step that replaces, upgrades or removes a Node.js that is already installed.
 
@@ -23,9 +23,9 @@ When the `node` command is missing, step 1 tells the assistant how to install No
 2. `ls -d "$(npm root --global)/orch-os"` must fail with `No such file or directory` for a path that ends in `/node_modules/orch-os`. If it prints a directory, stop: the package is already installed.
 3. `command -v orch` must print nothing. If it prints a path, stop: an `orch` command is already on `PATH`.
 4. `ls -d "${ORCH_HOME:-$HOME/.orch}"` must fail with `No such file or directory`. If it prints the directory, stop: an ORCH-os home already exists there.
-5. `npm install --global orch-os@2.1.0` must exit 0.
+5. `npm install --global orch-os@2.2.0-rc.1` must exit 0.
 6. `orch init --no-profile --no-handbook` must print two `wrote` lines, for `config.toml` and `mailbox.md` in the directory from step 4, and end with `next: orch doctor`. If it prints `config exists`, stop: a home already existed.
-7. `orch --version` must print `orch 2.1.0`.
+7. `orch --version` must print `orch 2.2.0-rc.1`.
 8. `orch doctor` must end with `doctor: PASS (0 required check(s) failed)`. Show the user every row. If it ends with `doctor: FAIL`, stop: this guide does not repair a failed check.
 
 ## Windows 11
@@ -44,9 +44,9 @@ Use PowerShell, not as administrator.
 2. `Test-Path -LiteralPath (Join-Path (npm.cmd root --global) 'orch-os')` must print `False`. If it prints `True`, stop: the package is already installed.
 3. `Get-Command orch -ErrorAction SilentlyContinue` must print nothing. If it prints a command, stop: an `orch` command is already on `PATH`.
 4. `Test-Path -LiteralPath $(if ($env:ORCH_HOME) { $env:ORCH_HOME } elseif ($env:HOME) { Join-Path $env:HOME '.orch' } else { Join-Path $env:USERPROFILE '.orch' })` must print `False`. If it prints `True`, stop: an ORCH-os home already exists there.
-5. `npm.cmd install --global orch-os@2.1.0` must exit 0.
+5. `npm.cmd install --global orch-os@2.2.0-rc.1` must exit 0.
 6. `orch.cmd init --no-profile --no-handbook` must print two `wrote` lines, for `config.toml` and `mailbox.md` in the directory from step 4, and end with `next: orch doctor`. If it prints `config exists`, stop: a home already existed.
-7. `orch.cmd --version` must print `orch 2.1.0`.
+7. `orch.cmd --version` must print `orch 2.2.0-rc.1`.
 8. `orch.cmd doctor` must end with `doctor: PASS (0 required check(s) failed)`. Show the user every row. If it ends with `doctor: FAIL`, stop: this guide does not repair a failed check.
 
 ## Limits
