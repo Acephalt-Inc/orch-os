@@ -52,17 +52,22 @@ function run(probe: string, program: string, root: string): Record {
 }
 
 describe("LearningProbeAttribution", () => {
-  it.each([
+  const W1 = "W1 attributes top-level, dynamic-import, timer and getter reads to the program: %s";
+  const SHAPES: [string, string][] = [
     ["plain", "plain"],
-    ["node:internal/modules", "node:internal/modules"],
     ["paren(x)", "paren(x)"],
-    ["node:internal/modules with paren(x)", "node:internal/modules/paren(x)"],
     ["space", "with space"],
     ["hash", "with#hash"],
     ["non-ASCII", "路径"],
     ["text at", "x at y"],
     ["probe-url-prefix beside the probe", "."],
-  ])("W1 attributes top-level, dynamic-import, timer and getter reads to the program: %s", (shape, relative) => {
+  ];
+  // A directory name cannot contain a colon on Windows, so these two shapes cannot exist there.
+  const COLON_SHAPES: [string, string][] = [
+    ["node:internal/modules", "node:internal/modules"],
+    ["node:internal/modules with paren(x)", "node:internal/modules/paren(x)"],
+  ];
+  const attributesReadsToTheProgram = (shape: string, relative: string) => {
     const { root, probe } = world();
     const dir = join(root, relative);
     mkdirSync(dir, { recursive: true });
@@ -98,7 +103,9 @@ void object.value;
     expect(record.fs_read.filter((name) => name === "fs.readFileSync"), "all four canary file reads are PROGRAM reads").toHaveLength(4);
     expect(record.runtime.loaded, "the runtime did not load the canary file").not.toContain(canary);
     expect(record.runtime.env.filter((name) => CANARIES.includes(name)), "no canary variable is a runtime read").toEqual([]);
-  });
+  };
+  it.each(SHAPES)(W1, attributesReadsToTheProgram);
+  it.skipIf(process.platform === "win32").each(COLON_SHAPES)(W1, attributesReadsToTheProgram);
 
   it("W2 known limit: a new Function timer callback without a program file on the stack records its environment read as runtime", () => {
     const { root, probe } = world();
