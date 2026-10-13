@@ -22,7 +22,7 @@ export const LEAD_TEXT = {
   help: "lead text pack in one workspace: install it, report on it, remove it; nothing that already exists is changed",
   helpInstall: "create the lead pack and one bootstrap file in a workspace that has neither",
   helpStatus: "report the state of every pack path in a workspace; reads only",
-  helpUninstall: "remove the unchanged files and the empty directories install created; everything else stays",
+  helpUninstall: "remove verified pack files and anchors, clean up accepted state records, and remove empty recorded host directories and empty state directories when cleanup can finish",
   optWorkspace: "the workspace folder; it must exist",
   optHost: "the assistant the pack is for",
   optDryRun: "print every path install would create, then stop; creates nothing",
@@ -46,7 +46,7 @@ export const LEAD_TEXT = {
   created: "files created: {count} of {total}",
   stoppedCollision: "stopped at: {path} (it already exists and was left unchanged)",
   stoppedError: "stopped at: {path} ({detail})",
-  afterStop: "what this run created was left in place; `orch lead status` lists it and `orch lead uninstall` removes it (same --workspace and --host)",
+  afterStop: "what this run created was left in place; `orch lead uninstall` can leave files in `.orch-lead-install` for you to inspect (same --workspace and --host)",
   activation: "host activation: unverified",
   activationNote: "the files are in place; this command does not check whether the assistant reads them",
   rowLine: "  {state} {path}{why}",
@@ -210,8 +210,16 @@ function preservedLine(env: LeadEnv, workspace: string, p: Preserved): string {
 export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<number> {
   const err = deps.err ?? ((text: string) => void process.stderr.write(text));
   const write = deps.write ?? (deps.out ? (bytes: Buffer, done: (error?: Error | null) => void) => { deps.out!(bytes.toString("utf8")); done(null); } : processWrite);
+  const now = deps.now ?? (() => performance.now());
+  const deadline = now() + COMMAND_BUDGET_MS;
   const emit = (lines: string[]) => new Promise<void>((resolve, reject) => {
-    write(Buffer.from(lines.join("\n") + "\n", "utf8"), (error) => (error ? reject(error) : resolve()));
+    const timer = setTimeout(() => reject(new LeadError("the command deadline was reached", "io", "DEADLINE")), Math.max(0, deadline - now()));
+    timer.unref();
+    write(Buffer.from(lines.join("\n") + "\n", "utf8"), (error) => {
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    });
   });
 
   // 1. Arguments, before any file access.
@@ -220,8 +228,12 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
     parsed = parse(leadSpec(), argv, ["orch", "lead"]);
   } catch (e) {
     if (e instanceof HelpRequested) {
-      await emit([e.text]);
-      return 0;
+      try {
+        await emit([e.text]);
+        return 0;
+      } catch {
+        return 1;
+      }
     }
     if (e instanceof UsageError) {
       err(`${e.usage}\norch lead: error: ${e.message}\n`);
@@ -240,12 +252,11 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
   const env: LeadEnv = {
     fs: deps.fs ?? realFs,
     path,
-    now: deps.now ?? (() => performance.now()),
+    now,
     pid: deps.pid ?? process.pid,
     probe: deps.probe ?? ((pid) => void process.kill(pid, 0)),
     packageRoot: deps.packageRoot ?? fileURLToPath(new URL("../../", import.meta.url)),
   };
-  const deadline = env.now() + COMMAND_BUDGET_MS;
 
   try {
     // 2. The workspace: text check first, then it must be an existing real directory.
@@ -268,6 +279,9 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
     if (cmd.name === "uninstall") {
       const outcome = uninstall(env, workspace, host, deadline);
       const lines = [...head];
+      if (outcome.before.state === "ABSENT" || outcome.before.state === "INVALID") {
+        lines.push(...reportLines(env, workspace, outcome.before));
+      }
       for (const rel of outcome.removed) lines.push(fill(LEAD_TEXT.removed, { path: abs(rel) }));
       for (const rel of outcome.absent) lines.push(fill(LEAD_TEXT.alreadyAbsent, { path: abs(rel) }));
       for (const p of outcome.preserved) lines.push(preservedLine(env, workspace, p));

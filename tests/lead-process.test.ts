@@ -550,6 +550,24 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     const before = tree(w);
     const second = await run(["install", "--workspace", w, "--host", "codex"]);
     expect.soft([second.code, resultOf(second.stdout), describeMutations(second), tree(w)], "[conflict-reported] the other host in the same workspace").toEqual([2, "CONFLICT", [], before]);
+
+    for (const target of [".claude/skills", ".orch-lead-install"]) {
+      const { base, w: linked } = workspace();
+      const outside = join(base, `outside-${target.replaceAll("/", "-")}`);
+      mkdirSync(outside);
+      mkdirSync(join(outside, target === ".orch-lead-install" ? "objects" : "orch-lead"));
+      if (target === ".claude/skills") mkdirSync(at(linked, ".claude"));
+      symlinkSync(outside, at(linked, target), "dir");
+      const linkedPrefix = at(linked, target).split(sep).join("/");
+      const behind = (r: Result) => r.trace.filter((ev) => [ev.path, ev.path2].some((p) => typeof p === "string" && p.startsWith(`${linkedPrefix}/`)));
+      const installResult = await run(["install", "--workspace", linked, "--host", "claude"]);
+      expect.soft([installResult.code, resultOf(installResult.stdout), describeMutations(installResult), behind(installResult), installResult.stdout.includes(at(linked, target))],
+        `[preflight-stops-at-link] ${target}: install names the link, creates nothing and makes no file call behind it`).toEqual([2, "CONFLICT", [], [], true]);
+      if (target === ".claude/skills") {
+        const status = await run(["status", "--workspace", linked, "--host", "claude"]);
+        expect.soft(behind(status), "[preflight-stops-at-link] status with absent state makes no file call behind the shared-parent link").toEqual([]);
+      }
+    }
   });
 
   it("lead_prints_every_path_before_first_mutation", async () => {
@@ -988,6 +1006,28 @@ describe.skipIf(!RUN)("orch lead: reinstall, own directories, finished installs"
       renameSync(outside, at(w, target));
       const finish = await run(["uninstall", ...claude(w)]);
       expect.soft([finish.code, resultOf(finish.stdout), tree(w)], `[link-undone-cleans] ${name}: with the folder back in place uninstall leaves nothing\n${finish.stdout}\n${finish.stderr}`).toEqual([0, "NOT_INSTALLED", []]);
+    }
+    for (const state of ["no state", "invalid manifest"] as const) {
+      for (const [name, target] of variants.slice(0, 3)) {
+        const { base, w } = workspace();
+        expect((await run(["install", ...claude(w)])).code, "install").toBe(0);
+        const outside = join(base, `moved away ${state}`);
+        renameSync(at(w, target), outside);
+        writeFileSync(join(outside, "canary.txt"), "not part of the workspace\n");
+        symlinkSync(outside, at(w, target), "dir");
+        if (state === "no state") rmSync(at(w, ".orch-lead-install"), { recursive: true });
+        else writeFileSync(at(w, ".orch-lead-install/manifest.json"), "{");
+        const before = tree(outside);
+        const through = dests("claude").filter((dest) => dest.startsWith(`${target}/`));
+        const behind = (r: Result) => r.trace.filter((ev) => [ev.path, ev.path2].some((p) => typeof p === "string" && p.startsWith(`${slash(at(w, target))}/`)));
+        for (const command of ["status", "uninstall"] as const) {
+          const result = await run([command, ...claude(w)]);
+          expect.soft(behind(result), `[nothing-behind-link-no-state] ${state}, ${name}, ${command}: no file call of any kind reaches behind the link`).toEqual([]);
+          expect.soft(through.filter((dest) => rowStates(result.stdout, w)[dest] !== "UNVERIFIABLE"),
+            `[nothing-behind-link-no-state] ${state}, ${name}, ${command}: every payload row below the link is UNVERIFIABLE`).toEqual([]);
+          expect.soft(tree(outside), `[nothing-behind-link-no-state] ${state}, ${name}, ${command}: the canary behind the link is unchanged`).toEqual(before);
+        }
+      }
     }
   });
 

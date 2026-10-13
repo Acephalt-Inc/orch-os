@@ -2,11 +2,12 @@
 // `orch lead` command line: help and usage before any file access, the exit codes, and the text
 // checks on Windows-style workspace paths.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
+import { runLead } from "../src/lead/cli.js";
 import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
 
 const RUN = !WINDOWS || process.env.ORCH_LEAD_UNMEASURED === "1";
@@ -41,6 +42,29 @@ async function inProcess(args: string[], deps: Record<string, unknown> = {}): Pr
 const resultOf = (stdout: string) => /^result: (\w+)$/m.exec(stdout)?.[1] ?? "";
 
 describe("orch lead: command line", () => {
+  it("lead_output_wait_is_bounded", async () => {
+    const w = workspace();
+    const never = (_bytes: Buffer, _done: (error?: Error | null) => void) => {};
+    const expired = (() => {
+      let first = true;
+      return () => {
+        if (first) {
+          first = false;
+          return 0;
+        }
+        return 31_000;
+      };
+    });
+    const withinOneSecond = async (promise: Promise<number>) => Promise.race([
+      promise,
+      new Promise<number>((resolve) => setTimeout(() => resolve(-1), 1_000)),
+    ]);
+    expect.soft(await withinOneSecond(runLead(["--help"], { write: never, now: expired() })), "[output-wait-bounded] help returns 1 when its output wait reaches the deadline").toBe(1);
+    expect.soft(await withinOneSecond(runLead(["install", "--workspace", w, "--host", "claude"], { write: never, now: expired() })),
+      "[output-wait-bounded] install returns 1 when its output wait reaches the deadline").toBe(1);
+    expect.soft(readdirSync(w), "[output-wait-bounded] install creates nothing before the plan output completes").toEqual([]);
+  });
+
   it("lead_help_and_usage_come_before_any_file_access", async () => {
     const top = await inProcess(["--help"]);
     expect.soft(top.out, "orch --help lists the command").toMatch(/^ {2}lead\s+lead text pack in one workspace/m);

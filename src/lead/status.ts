@@ -278,8 +278,11 @@ function unknownEntries(env: LeadEnv, workspace: string): string[] {
 /** Rows when no valid manifest exists: nothing is opened, and nothing is called owned. */
 function rowsWithoutManifest(env: LeadEnv, workspace: string, host: Host, present: RowState, why: RowWhy): RowReport[] {
   return manifestRows(host).map((row) => {
-    const st = lstatOrCode(env, insideWorkspace(env.path, workspace, row.path));
     const base = { path: row.path, anchor: row.anchor, anchorState: "MISSING" as AnchorState, id: null };
+    if (linkOnPath(env, workspace, row.path) !== null) {
+      return { ...base, state: "UNVERIFIABLE", why: "LINKED" };
+    }
+    const st = lstatOrCode(env, insideWorkspace(env.path, workspace, row.path));
     return st === "ENOENT" ? { ...base, state: "MISSING", why: "" } : { ...base, state: present, why };
   });
 }

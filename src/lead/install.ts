@@ -22,7 +22,7 @@ import {
   codePointCompare, COMPLETE, DIRECTORIES, type Host, insideWorkspace, MANIFEST, MANIFEST_TMP, OBJECTS_DIR, packDirs, payloadRows, publicationOrder, sharedParents,
   STATE_DIR,
 } from "./paths.js";
-import { checkManifest, type DirRow, readState, serializeComplete, serializeDirectories, serializeManifest, type StateReport } from "./status.js";
+import { checkManifest, type DirRow, linkOnPath, readState, serializeComplete, serializeDirectories, serializeManifest, type StateReport } from "./status.js";
 
 export type PlanKind = "directory" | "file" | "state" | "temporary";
 
@@ -80,6 +80,12 @@ export function preflight(env: LeadEnv, workspace: string, host: Host): Prefligh
   const mustBeAbsent = (rel: string, kind: PlanKind) => {
     const path = at(rel);
     lines.push({ kind, path });
+    const blocked = linkOnPath(env, workspace, rel);
+    if (blocked !== null) {
+      const blockedPath = at(blocked);
+      conflicts.set(blockedPath, { path: blockedPath, why: "NOT_A_DIRECTORY" });
+      return;
+    }
     try {
       env.fs.lstatSync(path, BIG);
       conflicts.set(path, { path, why: "EXISTS" });
@@ -95,6 +101,12 @@ export function preflight(env: LeadEnv, workspace: string, host: Host): Prefligh
   mustBeAbsent(COMPLETE, "state");
   for (const rel of sharedParents(host)) {
     const path = at(rel);
+    const blocked = linkOnPath(env, workspace, `${rel}/child`);
+    if (blocked !== null && blocked !== rel) {
+      const blockedPath = at(blocked);
+      conflicts.set(blockedPath, { path: blockedPath, why: "NOT_A_DIRECTORY" });
+      continue;
+    }
     try {
       const st = env.fs.lstatSync(path, BIG);
       if (!st.isDirectory()) conflicts.set(path, { path, why: "NOT_A_DIRECTORY" });

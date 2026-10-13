@@ -16,7 +16,11 @@ import { type Host, type PayloadRow, payloadRows } from "./paths.js";
 export const FILE_CAP = 128 * 1024;
 export const PACK_CAP = 1024 * 1024;
 export const MANIFEST_CAP = 64 * 1024;
-/** Every `orch lead` command gives up after this long (milliseconds, monotonic clock). */
+/**
+ * The byte loops of file reads and writes (`readDescriptor`, `writeAll` below) and the wait for
+ * each standard-output write (`emit` in cli.ts) check this budget (milliseconds, monotonic
+ * clock). Other loops do not check it. A single file-system call is not interrupted.
+ */
 export const COMMAND_BUDGET_MS = 30_000;
 
 /** SHA-256 of each packaged file as reviewed. A text change must change this table by hand. */

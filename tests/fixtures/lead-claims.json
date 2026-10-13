@@ -1896,6 +1896,70 @@
      "replace": "The assistant will do so."
     }
    ]
+  },
+  {
+   "id": "rows-without-manifest-link-check-removed",
+   "why": "rows without a valid manifest follow a linked folder",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_only_its_own_empty_directories",
+   "markers": [
+    "nothing-behind-link-no-state"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "    if (linkOnPath(env, workspace, row.path) !== null) {\n      return { ...base, state: \"UNVERIFIABLE\", why: \"LINKED\" };\n    }",
+     "replace": "    void linkOnPath;"
+    }
+   ]
+  },
+  {
+   "id": "preflight-continues-below-link",
+   "why": "preflight checks entries behind a linked folder",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_preflight_conflict_has_zero_mutations",
+   "markers": [
+    "preflight-stops-at-link"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "      conflicts.set(blockedPath, { path: blockedPath, why: \"NOT_A_DIRECTORY\" });\n      return;",
+     "replace": "      conflicts.set(blockedPath, { path: blockedPath, why: \"NOT_A_DIRECTORY\" });"
+    }
+   ]
+  },
+  {
+   "id": "output-wait-timer-removed",
+   "why": "an output callback that never arrives is waited for without a deadline",
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_output_wait_is_bounded",
+   "markers": [
+    "output-wait-bounded"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "    const timer = setTimeout(() => reject(new LeadError(\"the command deadline was reached\", \"io\", \"DEADLINE\")), Math.max(0, deadline - now()));",
+     "replace": "    const timer = setTimeout(() => {}, 2_147_483_647);"
+    }
+   ]
+  },
+  {
+   "id": "deadline-created-after-help",
+   "why": "help output starts before the command deadline exists",
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_output_wait_is_bounded",
+   "markers": [
+    "output-wait-bounded"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "  const deadline = now() + COMMAND_BUDGET_MS;",
+     "replace": "  const deadline = argv.includes(\"--help\") ? 2_147_483_647 : now() + COMMAND_BUDGET_MS;"
+    }
+   ]
   }
  ],
  "controls": [
