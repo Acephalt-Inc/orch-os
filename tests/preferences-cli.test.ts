@@ -265,6 +265,8 @@ describe("preference command", () => {
       const result = await cli(home, args);
       expect(result.code).toBe(4);
       expect(result.stdout).toBe("");
+      // the refusal is the validator's own, not an error met further on with the unknown field
+      expect(result.stderr).toBe('{"status":"unavailable","message":"preference state is corrupt"}\n');
       expect(await readFile(state, "utf8")).toBe(bytes);
     }
   });

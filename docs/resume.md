@@ -14,6 +14,8 @@ The note contains only `objective`, `next_step`, and `reported_progress` text fi
 
 Notes are stored under the operating-system user's home in `.orch-private/resume-v1` and are not covered by the legacy backup flow.
 
+Showing the note of an accepted workspace creates `.orch-private` and `.orch-private/resume-v1` under your home when they are missing; it creates no folder for the workspace and no note. `orch preference show`, by contrast, creates nothing.
+
 A workspace path that is a symbolic link, or that passes through one, is refused with status 4 and nothing is created.
 
 On macOS `/tmp` and `/var` are symbolic links, so a workspace below them has to be given by its `/private/...` path.

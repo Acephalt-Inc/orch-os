@@ -65,6 +65,8 @@ function probed(program: string, words: string[], stdin: Uint8Array | string, w:
 /** The packaged command: `orch WORDS`. */
 const orch = (words: string[], stdin: Uint8Array | string, w: World, tag = "A"): Probed => probed(CLI, words, stdin, w, tag);
 const result = (r: Ran) => [r.status, r.signal, r.stdout, r.stderr];
+/** The input document followed by spaces up to `bytes` bytes: still a valid document. */
+const padded = (bytes: number) => Buffer.concat([INPUT, Buffer.alloc(bytes - INPUT.length, " ")]);
 
 /** `orch WORDS` with a standard input that is written to and never closed; killed at `hardDeadlineMs` if still alive. */
 function orchWithOpenStdin(words: string[], written: Uint8Array | null, hardDeadlineMs: number): Promise<Ran & { killedByTest: boolean; ms: number }> {
@@ -141,6 +143,8 @@ describe("LearningRegistered", () => {
     expect(result(stale), "reject with a revision that is not the document's: exit 1").toEqual([1, null, "", errorLine("CONFLICT")]);
     const missing = orch(["learning", "reject", "0".repeat(64), "--expected-revision", "1"], REVIEWED, w);
     expect(result(missing), "reject of an ID that is not a draft: exit 1").toEqual([1, null, "", errorLine("NOT_FOUND")]);
+    const atCap = orch(["learning", "review"], padded(MAX_BYTES), w);
+    expect(result(atCap), "a valid document of exactly the cap: exit 0").toEqual([0, null, REVIEWED, ""]);
     const large = orch(["learning", "review"], "x".repeat(MAX_BYTES + 1), w);
     expect(result(large), "an input over the cap: exit 1").toEqual([1, null, "", errorLine("LIMIT")]);
     const typed = "ARGUMENT-CANARY-34";
@@ -153,6 +157,12 @@ describe("LearningRegistered", () => {
   });
 
   it("an_input_that_is_never_closed_ends_with_timeout_and_an_oversized_one_with_limit", async () => {
+    // The two readers wait the same time. The constants are read from the source, because a wait
+    // that differs by less than the scheduling tolerance below could not be told apart by timing.
+    expect(readFileSync(join(ROOT, "src", "cli.ts"), "utf8"), "src/cli.ts: the wait of orch learning").toContain(
+      `const LEARNING_STDIN_DEADLINE_MS = ${INPUT_WAIT_MS};`);
+    expect(readFileSync(join(ROOT, "src", "learning", "entry.ts"), "utf8"), "src/learning/entry.ts: the wait of the module entry").toContain(
+      `const STDIN_DEADLINE_MS = ${INPUT_WAIT_MS};`);
     const hard = INPUT_WAIT_MS + SCHEDULING_TOLERANCE_MS + 3000;
     const [open, half, over, help] = await Promise.all([
       orchWithOpenStdin(["learning", "review"], null, hard),
@@ -180,7 +190,7 @@ describe("LearningRegistered", () => {
       [["review"], INPUT], [["review"], REVIEWED], [["show"], REVIEWED], [["show"], INPUT], [["review"], "{"], [["review"], ""],
       [["reject", SETTING_ID, "--expected-revision", "1"], REVIEWED], [["reject", SETTING_ID, "--expected-revision=9"], REVIEWED],
       [["reject", SETTING_ID, "--expected-revision", "1", "--expected-revision", "1"], REVIEWED],
-      [["review"], "x".repeat(MAX_BYTES + 1)],
+      [["review"], "x".repeat(MAX_BYTES + 1)], [["review"], padded(MAX_BYTES)],
     ];
     for (const [words, stdin] of runs) {
       const direct = probed(ENTRY, words, stdin, w);

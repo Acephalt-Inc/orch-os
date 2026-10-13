@@ -5,8 +5,8 @@
   {
    "id": "docs/commands.md: which commands read the config file",
    "file": "docs/commands.md",
-   "text": "All commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`).",
-   "sha256": "2f7e60b2ae4c3af45b279a78a127840d7118d19cb76f0ad243cebff61342d1ee"
+   "text": "Apart from `--version` (`-V`), a `--help` request and a usage error, all commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `review approve`, `review changes` and `review reject` skip it when `--repo` is given, and on Windows `review watch`, `worker start` and `worker stop` are refused before it is read.",
+   "sha256": "ad5aa3b9da46aa2e54d5f5497201332b69333c3bd070fed51973696a960370c1"
   },
   {
    "id": "docs/commands.md: shared exit codes",

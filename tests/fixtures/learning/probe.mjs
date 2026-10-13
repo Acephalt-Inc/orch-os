@@ -11,9 +11,10 @@
 // own files, and it looks at a few environment variables of its own. Those calls are kept
 // apart under `runtime`. A file read counts as the loader's when the loader itself made it, or
 // when the call stack has a loader frame and no frame of program code; its path is recorded so
-// that the test can check it lies inside the program's own directory. An environment read
-// counts as the runtime's when no frame of program code is on the stack, or when the module
-// loader itself made the read while loading a module the program imports lazily.
+// that the test can check it lies inside the program's own directory. A loader read that has no
+// path (a read or a close of an open file descriptor) is recorded by name under `runtime.io`.
+// An environment read counts as the runtime's when no frame of program code is on the stack, or
+// when the module loader itself made the read while loading a module the program imports lazily.
 //
 // LEARNING_PROBE_NOW, when set, freezes the clock of the child at that instant. The variable is
 // read and removed here, before the program starts, so the program cannot see it.
@@ -39,7 +40,7 @@ const SELF = import.meta.url;
 const writeReport = fs.writeSync.bind(fs);
 
 const record = { fs_write: [], fs_read: [], process: [], network: [], home: [], env: [] };
-const runtime = { loaded: [], env: [] };
+const runtime = { loaded: [], io: [], env: [] };
 
 const frozen = process.env.LEARNING_PROBE_NOW;
 delete process.env.LEARNING_PROBE_NOW;
@@ -93,8 +94,12 @@ let depth = 0;
 
 function note(kind, label, args) {
   if (depth > 0) return;
-  if (kind === "fs_read" && (madeByLoader() || origin() === "loader")) runtime.loaded.push(pathOf(args[0]) ?? label);
-  else record[kind].push(label);
+  if (kind === "fs_read" && (madeByLoader() || origin() === "loader")) {
+    // A loader read through an open file descriptor has no path: it is kept by name under `io`.
+    const path = pathOf(args[0]);
+    if (path === null) runtime.io.push(label);
+    else runtime.loaded.push(path);
+  } else record[kind].push(label);
 }
 
 /** Replace `owner[name]` with a function that records the call and then makes it. */
@@ -197,6 +202,8 @@ function madeByLoader() {
   for (const frame of String(new Error().stack).split("\n").slice(1)) {
     const file = IN_FILE.exec(frame);
     if (file && file[1].startsWith(SELF)) continue;
+    // A frame located in a file is program code, whatever its path contains.
+    if (file) return false;
     return frame.includes("node:internal/modules/");
   }
   return false;

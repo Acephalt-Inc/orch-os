@@ -1,6 +1,6 @@
 # Command reference
 
-All commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read-only commands use built-in defaults when the file does not exist yet. A malformed config gives exit 2 with a one-line message. Every command accepts `-h`/`--help`; a usage error exits 2.
+Apart from `--version` (`-V`), a `--help` request and a usage error, all commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `review approve`, `review changes` and `review reject` skip it when `--repo` is given, and on Windows `review watch`, `worker start` and `worker stop` are refused before it is read. Read-only commands use built-in defaults when the file does not exist yet. A command that reads a malformed config exits 2 with a one-line message; `doctor` instead prints a `FAIL  config` row and exits 1. Every command accepts `-h`/`--help`; a usage error exits 2.
 
 | Environment variable | Effect |
 |---|---|
@@ -369,7 +369,7 @@ A synthetic demo; no service is connected. It looks up one of two fixed question
 
 | Exit | Meaning |
 |---|---|
-| `0` | The passage and its citation were printed |
+| `0` | The passage and its citation, or the help, were printed |
 | `1` | No passage was printed; stderr holds `{"status":"ERROR","code":"<code>"}` |
 | `2` | The arguments were refused; stderr holds `{"status":"ERROR","code":"USAGE"}` |
 
