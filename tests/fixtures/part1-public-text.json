@@ -65,8 +65,8 @@
   {
    "id": "doctor row snapshot: note on the changed row",
    "file": "tests/snapshots/merge-gate-pre-profiles.json",
-   "text": "One value is not from that capture: the first doctor row was node>=20 there and through 2.1.0, and is node>=22 since the doctor applies the package's engines floor.",
-   "sha256": "b8a90a2b6cdb131435c19c247278ca2cb32ff94fb03643f47f2af8c094683a18"
+   "text": "Two values are not from that capture: the first doctor row was node>=20 there and through 2.1.0, and is node>=22 since the doctor applies the package's engines floor. The gh row label changed to gh (live GitHub commands).",
+   "sha256": "5fba76aa2bee72ebd686380cf1ed80024b25efc1d851d0afdfa8c536a72b3818"
   }
  ]
 }

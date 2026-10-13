@@ -55,7 +55,7 @@ One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when n
 | `node>=22`, `config`, `state dir writable`, `lease lockable`, `mailbox`, `mailbox sections`, `messages`, `task registry`, `mem` | yes everywhere |
 | `posix (process groups)`, `git` | yes on macOS and Linux |
 | `windows (no process groups)` | yes on Windows |
-| `handbook`, `gh (merge-gate live mode)`, `merge repo`, `worker command`, `timeout (worker time limit)`, `agent CLIs`, each `agent NAME` | no (SKIP) |
+| `handbook`, `gh (live GitHub commands)`, `merge repo`, `worker command`, `timeout (worker time limit)`, `agent CLIs`, each `agent NAME` | no (SKIP) |
 | `load state` | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid or was written for the removed built-in table (no `policy` key); every other profile row is `PASS` or `SKIP` |
 

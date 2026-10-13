@@ -425,7 +425,7 @@ const cmdDoctor: Run = (a, io) => {
     if (a._platform === "win32") add(git !== null, "git", git ?? "absent - only worker worktrees use it, and workers are not available on Windows", true);
     else add(git !== null, "git", git ?? "not on PATH");
     const gh = findCommand("gh");
-    add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
+    add(gh !== null, "gh (live GitHub commands)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
     const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";

@@ -57,7 +57,7 @@ PASS  task registry                $ORCH_HOME/tasks
 PASS  mem                          $ORCH_HOME/mem (0/200 index lines)
 PASS  handbook                     $ORCH_HOME/handbook
 PASS  git                          /usr/bin/git
-SKIP  gh (merge-gate live mode)    absent - fixtures still work
+SKIP  gh (live GitHub commands)    absent - fixtures still work
 SKIP  merge repo                   unset - pass --repo or use --fixture
 SKIP  worker command               none configured - use --agent or pass a command after --
 SKIP  timeout (worker time limit)  absent - workers run without a time limit
