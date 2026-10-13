@@ -357,6 +357,20 @@ Personal display preferences for one workspace: `response-language` (`en` or `zh
 | `3` | `--expected-revision` is not the current revision |
 | `4` | The workspace or the settings store cannot be used |
 
+## orch knowledge
+
+```text
+orch knowledge query --connection demo --question-id invoice-terms|approval-threshold
+```
+
+A synthetic demo; no service is connected. It looks up one of two fixed questions in a corpus that is compiled into the program and prints the stored passage with its citation as one JSON line. [knowledge.md](knowledge.md) describes the arguments, the output and the limits. `orch knowledge` does not load `config.toml`. It reads its own arguments: `orch knowledge --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The passage and its citation were printed |
+| `1` | No passage was printed; stderr holds `{"status":"ERROR","code":"<code>"}` |
+| `2` | The arguments were refused; stderr holds `{"status":"ERROR","code":"USAGE"}` |
+
 ## Config keys
 
 | Key | Default | Meaning |

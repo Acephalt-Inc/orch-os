@@ -29,8 +29,8 @@
   {
    "id": "help: usage line of orch",
    "command": "orch --help",
-   "text": "usage: orch {init,agents,doctor,config,update,lease,mailbox,msg,task,merge-gate,profile,review,worker,load,mem,resume,preference} ...",
-   "sha256": "7689fc4d6c0ec0cb50f508eb5407168c211a98099f185f2ebeb7d5d13380ce65"
+   "text": "usage: orch {init,agents,doctor,config,update,lease,mailbox,msg,task,merge-gate,profile,review,worker,load,mem,resume,preference,knowledge} ...",
+   "sha256": "d8154c9ec125413e5efb9f1a40cbc2e4c153a6596d1b28888ae3629b62e09435"
   },
   {
    "id": "help: update in the command list",

@@ -1297,6 +1297,15 @@ export function buildTree(): CmdSpec<Run> {
         run: async (a) => (await import("./preferences/command.js")).runPreferenceCommand(a.argv),
         pos: [{ dest: "argv", variadic: true }],
       },
+      {
+        name: "knowledge", help: "synthetic demo; no service connected: looks up one fixed question in the built-in corpus",
+        run: async (a, io) => {
+          const { main: knowledge } = await import("./knowledge/command.js");
+          const { createDemoTransport } = await import("./knowledge/demo.js");
+          return knowledge(a.argv, io, { transport: createDemoTransport(), now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
+      },
     ],
   };
 }
@@ -1320,6 +1329,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "resume") argv = ["resume", "--", ...argv.slice(1)];
   // `preference` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
   if (argv[0] === "preference") argv = ["preference", "--", ...argv.slice(1)];
+  // `knowledge` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
   const tree = buildTree();
   let parsed;
   try {

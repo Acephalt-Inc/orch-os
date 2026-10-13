@@ -223,6 +223,7 @@ describe("InstallEntry", () => {
     expect(existsSync(join(ROOT, GUIDE)), `${GUIDE} exists`).toBe(true);
     expect(pkg.files.filter((f: string) => f.startsWith("docs")), "docs entries in package.json files").toEqual([
       GUIDE,
+      "docs/knowledge.md",
       "docs/preferences.md",
       "docs/resume.md",
     ]);
@@ -235,6 +236,7 @@ describe("InstallEntry", () => {
       const files = copy.run("tar", ["-tzf", pack(copy)]).trim().split("\n");
       expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([
         `package/${GUIDE}`,
+        "package/docs/knowledge.md",
         "package/docs/preferences.md",
         "package/docs/resume.md",
       ]);

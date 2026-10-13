@@ -198,6 +198,7 @@ The commands above apply a few rules. Each row names the command that applies it
 - [Demo](docs/DEMO.md) — a scripted offline walkthrough.
 - [Continuation notes](docs/resume.md) — `orch resume`: a private continuation note for one workspace (save, show, forget).
 - [Display preferences](docs/preferences.md) — `orch preference`: an explicit response language or answer length for one workspace (set, show, unset).
+- [Knowledge demo](docs/knowledge.md) — `orch knowledge`: a synthetic demo that looks up two fixed questions in a built-in corpus; no service is connected.
 
 ## License
 
