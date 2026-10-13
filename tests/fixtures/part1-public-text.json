@@ -1,0 +1,72 @@
+{
+ "owner_approved": false,
+ "note": "Every public sentence block this change added or reworded, with the SHA-256 of its exact text (UTF-8). A whole_file block is the SHA-256 of the file's bytes. tests/doctor-install-entry.test.ts checks each block against the file or the command output it names.",
+ "blocks": [
+  {
+   "id": "doctor: node row name",
+   "command": "orch doctor",
+   "text": "node>=22",
+   "sha256": "b56563247ff1d01542d46f0a472a5179be4cd2da9c6d298a362bc56564f48528"
+  },
+  {
+   "id": "doctor: agent CLIs row with no agent CLI",
+   "command": "orch doctor",
+   "text": "none found (this run looked for claude, codex, gemini, qwen; `orch agents` lists each as found or absent)",
+   "sha256": "183b7332c8d1e107610badfa95469d4fbc0190cfd9608c74532392cc356d2ed3"
+  },
+  {
+   "id": "README.md: install entry",
+   "file": "README.md",
+   "text": "Or paste this one sentence to a coding assistant that can run commands on your machine:\n\n```text\nInstall ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.\n```\n",
+   "sha256": "0874d7de0519704d7b063faeea41ec60f19c083b7769123cba1d1dd348f2b791"
+  },
+  {
+   "id": "README.zh.md: install entry",
+   "file": "README.zh.md",
+   "text": "也可以把下面这一句话粘贴给能在你机器上运行命令的编程助手：\n\n```text\n请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装 ORCH-os，文件要求停下时就停下并告诉我。\n```\n",
+   "sha256": "c0f9bbae1e2816897667a62ed61f96999dfdab08fe1bf118694b762ba66c9be2"
+  },
+  {
+   "id": "install guide",
+   "file": "docs/INSTALL-WITH-AGENT.md",
+   "whole_file": true,
+   "sha256": "2f82af188248d89a33b18c802f7cbca914d3505f7ba334c11a111f64b59af4d1"
+  },
+  {
+   "id": "docs/DEMO.md: node row",
+   "file": "docs/DEMO.md",
+   "text": "PASS  node>=22                     <version>",
+   "sha256": "a83bae2f35682ddd9d83c18cc8d647324d329e1e1d7ea42f9518b299a2405ead"
+  },
+  {
+   "id": "docs/DEMO.md: agent CLIs row",
+   "file": "docs/DEMO.md",
+   "text": "SKIP  agent CLIs                   none found (this run looked for claude, codex, gemini, qwen; `orch agents` lists each as found or absent)",
+   "sha256": "3cb7fc67f8b1a50ffe8700cfb55f87a5187ed233c19d576180f2fa1d1e0205d2"
+  },
+  {
+   "id": "docs/migration.md: doctor rows",
+   "file": "docs/migration.md",
+   "text": "| `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=22` (`node>=20` in 2.0.0 through 2.1.0), `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |",
+   "sha256": "41315f721de105155c8930dc2fdc908b2f6dd5754d58b1bf5ccc93931f5377e5"
+  },
+  {
+   "id": "docs/commands.md: doctor required checks",
+   "file": "docs/commands.md",
+   "text": "| Node.js ≥ 22, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |",
+   "sha256": "e7f2f13e8faa1422c24c0ec0371d078498e8c672952eca586bc666f9398fe4c6"
+  },
+  {
+   "id": "docs/faq.md: doctor prerequisites",
+   "file": "docs/faq.md",
+   "text": "No. With Node.js ≥ 22 and git on a POSIX system, the doctor passes.",
+   "sha256": "428e8b7a55f2f4a166948da9a03c3e7192492fc0b318eacb17560ff242f05654"
+  },
+  {
+   "id": "doctor row snapshot: note on the changed row",
+   "file": "tests/snapshots/merge-gate-pre-profiles.json",
+   "text": "One value is not from that capture: the first doctor row was node>=20 there and through 2.1.0, and is node>=22 since the doctor applies the package's engines floor.",
+   "sha256": "b8a90a2b6cdb131435c19c247278ca2cb32ff94fb03643f47f2af8c094683a18"
+  }
+ ]
+}

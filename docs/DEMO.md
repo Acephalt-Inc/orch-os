@@ -45,7 +45,7 @@ boot: point each agent session at its role file, e.g. $ORCH_HOME/handbook/lead-b
 next: orch doctor
 
 $ orch doctor
-PASS  node>=20                     <version>
+PASS  node>=22                     <version>
 PASS  posix (process groups)       <platform>
 PASS  config                       $ORCH_HOME/config.toml
 PASS  state dir writable           $ORCH_HOME
@@ -61,7 +61,7 @@ SKIP  gh (merge-gate live mode)    absent - fixtures still work
 SKIP  merge repo                   unset - pass --repo or use --fixture
 SKIP  worker command               none configured - use --agent or pass a command after --
 SKIP  timeout (worker time limit)  absent - workers run without a time limit
-SKIP  agent CLIs                   none found (install one, then `orch init --force`)
+SKIP  agent CLIs                   none found (this run looked for claude, codex, gemini, qwen; `orch agents` lists each as found or absent)
 PASS  load state                   no sample yet (run `orch load`)
 doctor: PASS (0 required check(s) failed)
 

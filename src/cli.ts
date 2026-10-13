@@ -353,7 +353,8 @@ const cmdDoctor: Run = (a, io) => {
   };
   const findCommand = (name: string) => which(name, undefined, a._platform);
   const major = Number(process.versions.node.split(".")[0]);
-  add(major >= 20, "node>=20", process.versions.node);
+  // the same floor as `engines.node` in package.json
+  add(major >= 22, "node>=22", process.versions.node);
   if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
   else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
@@ -433,7 +434,8 @@ const cmdDoctor: Run = (a, io) => {
     const to = a._platform === "win32" ? null : findCommand("timeout") ?? findCommand("gtimeout");
     add(to !== null, "timeout (worker time limit)", to ?? (a._platform === "win32" ? "not used - workers are not available on Windows" : "absent - workers run without a time limit"), true);
     const found = D.installed().map((x) => x.name);
-    add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
+    // detected on every run, never read from config.toml: the hint names a command that only reads
+    add(found.length > 0, "agent CLIs", found.join(", ") || `none found (this run looked for ${D.KNOWN.map((k) => k[0]).join(", ")}; \`orch agents\` lists each as found or absent)`, true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
       const b = (ag.command ?? [""])[0] ?? "";
       add(Boolean(b) && findCommand(b) !== null, `agent ${name}`, b || "empty command", true);

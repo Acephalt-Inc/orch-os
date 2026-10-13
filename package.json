@@ -20,6 +20,7 @@
     "dist/",
     "fixtures/",
     "templates/",
+    "docs/INSTALL-WITH-AGENT.md",
     "README.md",
     "README.zh.md",
     "LICENSE",
