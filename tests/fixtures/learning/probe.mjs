@@ -220,8 +220,8 @@ function madeByLoader() {
   for (const site of sites()) {
     const file = fileName(site);
     if (file === SELF) continue;
-    // A file outside this probe and the runtime identifies the program.
-    if (file && !file.startsWith("node:")) return false;
+    // The first frame outside this probe decides. A program file is a `file:` URL or a path and
+    // never starts with `node:`, whatever its path contains.
     return !!(file && file.startsWith("node:internal/modules/"));
   }
   return false;
