@@ -28,7 +28,7 @@ const spec: CmdSpec = {
   help: DISPLAY_NOTE,
   sub: [
     { name: "review", help: "Create draft proposals." },
-    { name: "show", help: DISPLAY_NOTE },
+    { name: "show", help: "Show draft proposals." },
     {
       name: "reject",
       help: "Reject one exact proposal.",
