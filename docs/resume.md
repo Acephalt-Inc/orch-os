@@ -4,6 +4,8 @@
 
 `orch resume save --workspace PATH --expected-revision N` reads one JSON note from standard input.
 
+Each successful save returns a new `id`, even when it replaces a note for the same workspace.
+
 Standard input has to be closed promptly: a save that has not received its whole note within two seconds saves nothing and exits with status 2.
 
 The note contains only `objective`, `next_step`, and `reported_progress` text fields.
