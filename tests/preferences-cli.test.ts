@@ -313,3 +313,28 @@ describe("preference command", () => {
     expect(await readdir(await stateDirectory(home))).toEqual(["state.json"]);
   });
 });
+
+describe.skipIf(process.platform === "win32")("a named pipe where the state file should be", () => {
+  it("is refused with status 4 without waiting for a writer", async () => {
+    const { home, workspace } = await setup();
+    expect((await cli(home, set(workspace, "answer-length", "short", 0))).code).toBe(0);
+    const state = join(await stateDirectory(home), "state.json");
+    await rm(state);
+    await exec("mkfifo", [state]);
+    for (const args of [["show", "--workspace", workspace], set(workspace, "answer-length", "normal", 1)]) {
+      // A command that waits on the pipe is killed at the limit and then has no exit code.
+      let outcome: { code: number | string | null; stdout: string; stderr: string };
+      try {
+        const done = await exec(process.execPath, [entry, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home }, timeout: 8_000 });
+        outcome = { code: 0, stdout: done.stdout, stderr: done.stderr };
+      } catch (error) {
+        const failed = error as { code?: number | string | null; stdout?: string; stderr?: string };
+        outcome = { code: failed.code ?? null, stdout: failed.stdout ?? "", stderr: failed.stderr ?? "" };
+      }
+      expect(outcome.code, args[0]).toBe(4);
+      expect(outcome.stdout).toBe("");
+      expect(diagnostic(outcome.stderr)).toEqual({ status: "unavailable", message: "unsafe preference state" });
+    }
+    expect((await readdir(await stateDirectory(home))).sort()).toEqual(["state.json"]);
+  });
+});

@@ -54,7 +54,8 @@ function plainDirectory(path: string, seam: WriteSeam = {}): boolean {
   if ((seam.platform ?? process.platform) === "win32") return true;
   let fd: number | undefined;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    // O_NONBLOCK: a named pipe put in this place makes the open return at once instead of waiting for a writer.
+    fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     stat = fstatSync(fd);
   } catch {
     throw new ResumeError("unavailable", "unsafe storage directory");
@@ -131,7 +132,8 @@ function read(location: ResumeLocation, seam: WriteSeam = {}): ResumeRecord | un
   }
   let fd: number | undefined;
   try {
-    const flags = constants.O_RDONLY | ((seam.platform ?? process.platform) === "win32" ? 0 : constants.O_NOFOLLOW);
+    // O_NONBLOCK: a named pipe put in the record's place is opened at once and then refused as not a file.
+    const flags = constants.O_RDONLY | ((seam.platform ?? process.platform) === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
     seam.beforeRecordOpen?.(location.state);
     fd = openSync(location.state, flags);
     const stat = fstatSync(fd);
@@ -170,7 +172,7 @@ function atomicWrite(location: ResumeLocation, record: ResumeRecord, seam: Write
     seam.at?.("renamed");
     if ((seam.platform ?? process.platform) === "win32") return true;
     const openDirectory = seam.openDirectory
-      ?? ((path: string) => openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
+      ?? ((path: string) => openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
     const dirfd = openDirectory(location.directory);
     try {
       fsync(dirfd);
@@ -199,6 +201,7 @@ export function write(workspace: string, expectedRevision: number, note?: Resume
   const location = locate(workspace, seam);
   const unlock = lock(location, seam);
   let record: ResumeRecord;
+  let directoryFlushed: boolean;
   try {
     seam.at?.("locked");
     // Read only now, with the lock held: a writer that waited sees what the previous holder left.
@@ -207,7 +210,7 @@ export function write(workspace: string, expectedRevision: number, note?: Resume
     if (current !== expectedRevision) throw new ResumeError("conflict", "revision conflict");
     removeLeftovers(location);
     record = { schema: 1, id: randomUUID(), revision: current + 1, saved_at: new Date().toISOString(), ...(note === undefined ? {} : { note }) };
-    var directoryFlushed = atomicWrite(location, record, seam);
+    directoryFlushed = atomicWrite(location, record, seam);
   } catch (error) {
     // Nothing was acknowledged, so the caller is told this refusal. If the lock cannot be removed
     // either, it stays, and the next writer reports it as a held lock.

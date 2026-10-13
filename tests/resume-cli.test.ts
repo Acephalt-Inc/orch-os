@@ -170,3 +170,23 @@ test("an unknown option is refused without a write and is not echoed", () => {
   }
   expect(existsSync(join(home, ".orch-private"))).toBe(false);
 });
+
+test.skipIf(process.platform === "win32")("a named pipe where the record should be is refused without waiting for a writer", () => {
+  const { home, workspace } = setup();
+  const note = JSON.stringify({ objective: "a", next_step: "b", reported_progress: "c" });
+  expect(run(home, ["save", "--workspace", workspace, "--expected-revision", "0"], note).status).toBe(0);
+  const root = join(home, ".orch-private", "resume-v1");
+  const folder = join(root, readdirSync(root)[0]);
+  const state = join(folder, "state.json");
+  rmSync(state);
+  expect(spawnSync("mkfifo", [state]).status).toBe(0);
+  for (const args of [["show", "--workspace", workspace], ["forget", "--workspace", workspace, "--expected-revision", "1"]]) {
+    // A command that waits on the pipe is killed at the limit and then has a signal instead of a status.
+    const result = spawnSync(process.execPath, ["dist/resume/command.js", ...args], { encoding: "utf8", timeout: HARD_KILL_MS, env: { ...process.env, HOME: home, USERPROFILE: home } });
+    expect(result.signal, args[0]).toBeNull();
+    expect(result.status, args[0]).toBe(4);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toEqual({ status: "unavailable", message: "unsafe state file" });
+  }
+  expect(readdirSync(folder).sort()).toEqual(["state.json"]);
+});

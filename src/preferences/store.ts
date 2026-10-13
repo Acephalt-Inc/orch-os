@@ -79,7 +79,8 @@ async function plainDirectory(path: string, seam: StoreSeam = {}): Promise<boole
   if ((seam.platform ?? process.platform) !== "win32") {
     let handle: FileHandle;
     try {
-      handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      // O_NONBLOCK: a named pipe put in this place makes the open return at once instead of waiting for a writer.
+      handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw new PreferenceError("unavailable", "unsafe preference path");
@@ -124,7 +125,8 @@ async function read(loc: Awaited<ReturnType<typeof locations>>, seam: StoreSeam 
       if (!info.isFile() || info.nlink !== 1) throw new PreferenceError("unavailable", "unsafe preference state");
       return parseState(await readFile(loc.state, "utf8"));
     }
-    const handle = await open(loc.state, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // O_NONBLOCK: a named pipe put in the state file's place is opened at once and then refused as not a file.
+    const handle = await open(loc.state, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const info = await handle.stat();
       if (!info.isFile() || info.nlink !== 1) throw new PreferenceError("unavailable", "unsafe preference state");
