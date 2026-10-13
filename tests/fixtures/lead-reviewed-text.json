@@ -30,7 +30,7 @@
   "templates/workflows/sample-customers.csv": "89a778c53ff3441b39007b86ddd3b83b7c2940441c063fb9438b63e8cc3260a2"
  },
  "documents": {
-  "docs/lead-install.md": "0c5ce3e7b3ca8a001fb505c7282186d82aefbf856ed19dd4ccfb79b92abaa60a"
+  "docs/lead-install.md": "1655b4d552f18f880ba022e67bdd72b93d33e8a67a0069c1f03ffb8257bec4b7"
  },
  "inventory": {
   "claude": [
@@ -1659,7 +1659,7 @@
     "claim": "never-changes-existing"
    },
    {
-    "text": "If another program creates a pack file or a pack directory after the check, install stops at that path, leaves it unchanged and reports `PARTIAL`.",
+    "text": "If another program creates a pack file or a pack directory after the check, install stops, leaves it unchanged and reports `PARTIAL`.",
     "class": "program-claim",
     "claim": "stops-at-collision"
    },
@@ -1871,7 +1871,7 @@
     "claim": "own-directories-removed"
    },
    {
-    "text": "A directory that the record in `.orch-lead-install` does not list as created by install stays.",
+    "text": "Apart from the two state directories, a directory that the record in `.orch-lead-install` does not list as created by install stays.",
     "class": "program-claim",
     "claim": "preexisting-parent-kept"
    },
@@ -1970,7 +1970,7 @@
     "class": "limit"
    },
    {
-    "text": "Status lists it.",
+    "text": "Status can list it.",
     "class": "program-claim",
     "claim": "result-partial"
    },
@@ -2074,6 +2074,14 @@
    },
    {
     "text": "It grants no permission, enforces no limit on workers, spending or context, and is not a working lead session.",
+    "class": "limit"
+   },
+   {
+    "text": "Use one assistant session in a workspace at a time.",
+    "class": "instruction"
+   },
+   {
+    "text": "The pack does not stop two sessions from writing the same file.",
     "class": "limit"
    },
    {

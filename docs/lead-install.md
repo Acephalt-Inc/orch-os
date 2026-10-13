@@ -19,7 +19,7 @@ Install creates 20 files: 19 under `.claude/skills/orch-lead` for host `claude` 
 
 Install first checks every path it would create. If any of them exists, install stops and creates nothing. This includes an existing `CLAUDE.md` or `AGENTS.md`, an existing pack directory and an existing `.orch-lead-install`. Install then prints every path it will create, and creates nothing until that list has been written. With `--dry-run`, install prints the list and creates nothing.
 
-Install never changes or removes a file that already exists. If another program creates a pack file or a pack directory after the check, install stops at that path, leaves it unchanged and reports `PARTIAL`. If another install reserves `.orch-lead-install` first, install creates nothing and reports `CONFLICT`. If a missing parent directory appears as an ordinary directory after the check, install uses it and continues. If a file appears at one of the paths install reserves inside `.orch-lead-install` before install creates that path, install stops. Status then reports `UNVERIFIABLE_PREPARATION` if this happened before the manifest was in place, and `PARTIAL` after. A file at another name inside `.orch-lead-install` does not stop install; status lists it as an unknown entry and reports `PARTIAL`. Files created before the stop stay until you run uninstall.
+Install never changes or removes a file that already exists. If another program creates a pack file or a pack directory after the check, install stops, leaves it unchanged and reports `PARTIAL`. If another install reserves `.orch-lead-install` first, install creates nothing and reports `CONFLICT`. If a missing parent directory appears as an ordinary directory after the check, install uses it and continues. If a file appears at one of the paths install reserves inside `.orch-lead-install` before install creates that path, install stops. Status then reports `UNVERIFIABLE_PREPARATION` if this happened before the manifest was in place, and `PARTIAL` after. A file at another name inside `.orch-lead-install` does not stop install; status lists it as an unknown entry and reports `PARTIAL`. Files created before the stop stay until you run uninstall.
 
 ## What the pack contains
 
@@ -66,7 +66,7 @@ orch lead uninstall --workspace PATH --host claude
 
 Uninstall removes an installed file only when it is still the file install created and its content is unchanged. A file you edited, a file that replaced an installed file and a file install did not create stay in place and are listed. Uninstall removes the state directory only when no listed path remains. With an accepted manifest and cleanup ready to finish, uninstall can remove the empty `.orch-lead-install` and `objects` directories by name without checking who created them.
 
-When every installed file is gone, uninstall removes the directories that install created, deepest first, and only those that are empty. A directory that the record in `.orch-lead-install` does not list as created by install stays. A directory that holds a file install did not create stays, with every directory above it. Uninstall lists each directory it left and the reason. After an uninstall that left no pack directory, install for the same host works again. While the pack directory exists, install for that host is refused. A later uninstall has no record of a directory that an earlier one left and does not remove it. Delete it yourself.
+When every installed file is gone, uninstall removes the directories that install created, deepest first, and only those that are empty. Apart from the two state directories, a directory that the record in `.orch-lead-install` does not list as created by install stays. A directory that holds a file install did not create stays, with every directory above it. Uninstall lists each directory it left and the reason. After an uninstall that left no pack directory, install for the same host works again. While the pack directory exists, install for that host is refused. A later uninstall has no record of a directory that an earlier one left and does not remove it. Delete it yourself.
 
 Uninstall asks whether the process id recorded by install is in use only when the install is not recorded as finished. In that case uninstall refuses with `BUSY` while the id is in use. When that process has ended, uninstall removes the files and directories that the unfinished install recorded.
 
@@ -84,7 +84,7 @@ They read no ORCH configuration and write only below the workspace path they che
 
 ## Limits
 
-- A collision after the first check can leave a partial install. Status lists it. Uninstall can leave files in `.orch-lead-install` for you to inspect.
+- A collision after the first check can leave a partial install. Status can list it. Uninstall can leave files in `.orch-lead-install` for you to inspect.
 - A crash or kill while install prepares its state directory can leave files that uninstall will not remove. Status then reports `UNVERIFIABLE_PREPARATION` or `PARTIAL`. Run uninstall, read what it preserved, then delete the `.orch-lead-install` directory yourself.
 - An install that was killed before it recorded its directories leaves them in place. Uninstall then removes its state and lists those directories. Delete the empty directories yourself before you install again.
 - For an install that is not recorded as finished, the check on the recorded process id is a question, not a lock. If another program now has that id, uninstall reports `BUSY` until that program ends.
@@ -94,6 +94,7 @@ They read no ORCH configuration and write only below the workspace path they che
 - The manifest records the workspace path. After the workspace folder is moved or renamed, status reports `UNVERIFIABLE_PREPARATION`.
 - A host can find the skill directory of a partial install on its own, before the bootstrap file exists.
 - The pack is instructions for an assistant. It grants no permission, enforces no limit on workers, spending or context, and is not a working lead session.
+- Use one assistant session in a workspace at a time. The pack does not stop two sessions from writing the same file.
 - Windows link, junction, directory-identity and file-permission behaviour has not been measured.
 - These commands do not defend against a program running as your user or as an administrator. Such a program can change the records in `.orch-lead-install`, and uninstall decides from those records what to remove. Uninstall can remove unchanged pack files and anchors, state records in the accepted byte format, and empty directories at the fixed host and state paths.
 
