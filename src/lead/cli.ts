@@ -9,7 +9,6 @@
  * partial, busy or unverifiable. 1: wrong usage or a file or output error.
  */
 import nodePath, { type PlatformPath } from "node:path";
-import { writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type CmdSpec, HelpRequested, parse, UsageError } from "../args.js";
 import { install, preflight, resolveWorkspace, type Conflict } from "./install.js";
@@ -126,6 +125,18 @@ function fill(template: string, values: Record<string, string | number> = {}): s
   return template.replace(/\{(\w+)\}/g, (_, name: string) => printable(values[name] ?? ""));
 }
 
+function describeError(e: unknown): string {
+  try {
+    const stack = (e as { stack?: unknown } | null)?.stack;
+    if (typeof stack === "string") return stack;
+  } catch {}
+  try {
+    return String(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
 export interface LeadDeps {
   fs?: LeadFs;
   path?: PlatformPath;
@@ -161,9 +172,6 @@ let stdoutErrorHandled = false;
 
 function pendingWriteGuard(deadline: number, now: () => number): NodeJS.Timeout {
   const guard = setTimeout(() => {
-    try {
-      writeSync(2, "orch lead: the command deadline was reached\n");
-    } catch {}
     process.exit(1);
   }, Math.max(0, deadline - now()));
   guard.unref();
@@ -278,7 +286,7 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
       err(`${e.usage}\norch lead: error: ${printable(e.message)}\n`);
       return 1;
     }
-    err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + "\n");
+    err(fill(LEAD_TEXT.errorLine, { message: `error: ${describeError(e)}` }) + "\n");
     return 1;
   }
   const { args, cmd } = parsed;
@@ -383,7 +391,7 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
     }
     const code = errorCode(e);
     if (code === "ERROR") {
-      err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + "\n");
+      err(fill(LEAD_TEXT.errorLine, { message: `error: ${describeError(e)}` }) + "\n");
       return 1;
     }
     const where = (e as { path?: unknown }).path;

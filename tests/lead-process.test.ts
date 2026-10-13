@@ -382,6 +382,54 @@ function orch(p: Packed, args: string[]): Promise<Result> {
 }
 
 describe.skipIf(!RUN)("orch lead: real processes", () => {
+  it("lead_both_full_outputs_end_within_budget", async () => {
+    const base = tmp("orch-lead-full-");
+    const sizesFile = join(base, "sizes.json");
+    const boot = join(base, "fill.mjs");
+    writeFileSync(boot, String.raw`
+import fs from "node:fs";
+const sizes = [];
+const byte = Buffer.alloc(1, 120);
+for (const [fd, stream] of [[1, process.stdout], [2, process.stderr]]) {
+  stream._handle.setBlocking(false);
+  let size = 0;
+  try {
+    for (;;) size += fs.writeSync(fd, byte);
+  } catch (e) {
+    if (e.code !== "EAGAIN") throw e;
+  }
+  stream._handle.setBlocking(true);
+  sizes.push(size);
+}
+fs.writeFileSync(process.argv[3], JSON.stringify(sizes));
+process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--help"], process.env);
+`);
+    const began = performance.now();
+    const child = spawn(process.execPath, [boot, DIST_CLI, sizesFile], {
+      cwd: isolated, stdio: ["ignore", "pipe", "pipe"], env: childEnv(),
+    });
+    // Stop the native readers too: buffering even one chunk would free output space.
+    for (const stream of [child.stdout, child.stderr]) {
+      (stream as unknown as { _handle: { readStop(): void } })._handle.readStop();
+    }
+    const r = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_BUDGET_MS + 8_000);
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
+        clearTimeout(timer);
+        child.stdout!.destroy();
+        child.stderr!.destroy();
+        resolve({ code, signal });
+      });
+    });
+    const elapsed = performance.now() - began;
+    const sizes = JSON.parse(readFileSync(sizesFile, "utf8")) as number[];
+    console.log(`[observation] both full: code=${r.code}, signal=${r.signal}, elapsed_ms=${Math.round(elapsed)}, prefill_bytes=${sizes}`);
+    expect(sizes.every((size) => size > 0), "both descriptors filled until EAGAIN before help").toBe(true);
+    expect.soft([r.code, r.signal], "[both-full-ends] exits 1 without a signal").toEqual([1, null]);
+    expect.soft(elapsed, "[both-full-ends] ends within the budget plus 5 seconds").toBeLessThan(COMMAND_BUDGET_MS + 5_000);
+  }, 45_000);
+
   it("lead_stalled_output_ends_within_budget", async () => {
     const out = workspace();
     const err = workspace();

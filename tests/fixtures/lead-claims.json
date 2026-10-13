@@ -444,6 +444,18 @@
    "test": "lead_stalled_output_ends_within_budget",
    "marker": "stalled-output-ends",
    "mutant": "stalled-output-guard-removed"
+  },
+  "error-values-safe": {
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_error_values_that_throw_are_reported_safely",
+   "marker": "error-value-safe",
+   "mutant": "error-stack-read-unprotected"
+  },
+  "both-full-output-ends": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_both_full_outputs_end_within_budget",
+   "marker": "both-full-ends",
+   "mutant": "blocking-deadline-diagnostic-restored"
   }
  },
  "mutants": [
@@ -2165,7 +2177,7 @@
    "edits": [
     {
      "file": "src/lead/cli.ts",
-     "find": "    if (code === \"ERROR\") {\n      err(fill(LEAD_TEXT.errorLine, { message: `error: ${String((e as { stack?: unknown })?.stack ?? e)}` }) + \"\\n\");\n      return 1;\n    }",
+     "find": "    if (code === \"ERROR\") {\n      err(fill(LEAD_TEXT.errorLine, { message: `error: ${describeError(e)}` }) + \"\\n\");\n      return 1;\n    }",
      "replace": "    if (code === \"ERROR\") throw e;"
     }
    ]
@@ -2197,6 +2209,36 @@
      "file": "src/lead/cli.ts",
      "find": "    process.exit(1);",
      "replace": "    process.exitCode = 1;"
+    }
+   ]
+  },
+  {
+   "id": "error-stack-read-unprotected",
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_error_values_that_throw_are_reported_safely",
+   "markers": [
+    "error-value-safe"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "  try {\n    const stack = (e as { stack?: unknown } | null)?.stack;\n    if (typeof stack === \"string\") return stack;\n  } catch {}",
+     "replace": "  const stack = (e as { stack?: unknown } | null)?.stack;\n  if (typeof stack === \"string\") return stack;"
+    }
+   ]
+  },
+  {
+   "id": "blocking-deadline-diagnostic-restored",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_both_full_outputs_end_within_budget",
+   "markers": [
+    "both-full-ends"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "    process.exit(1);",
+     "replace": "    process.getBuiltinModule(\"node:fs\").writeSync(2, \"orch lead: the command deadline was reached\\n\");\n    process.exit(1);"
     }
    ]
   }

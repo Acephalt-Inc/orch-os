@@ -61,7 +61,7 @@ describe("orch lead: command line", () => {
       new Promise<number>((resolve) => setTimeout(() => resolve(-1), 1_000)),
     ]);
     expect.soft(await withinOneSecond(runLead(["--help"], { write: never, now: expired() })), "[output-wait-bounded] help returns 1 when its output wait reaches the deadline").toBe(1);
-    expect.soft(await withinOneSecond(runLead(["install", "--workspace", w, "--host", "claude"], { write: never, now: expired() })),
+    expect.soft(await withinOneSecond(runLead(["install", "--workspace", w, "--host", "claude"], { write: never, err: () => {}, now: expired() })),
       "[output-wait-bounded] install returns 1 when its output wait reaches the deadline").toBe(1);
     expect.soft(readdirSync(w), "[output-wait-bounded] install creates nothing before the plan output completes").toEqual([]);
   });
@@ -186,6 +186,36 @@ describe.skipIf(!RUN)("orch lead: exit codes", () => {
       write: (_bytes: Buffer, done: (error: Error) => void) => done(Object.assign(new Error("EPIPE"), { code: "EPIPE" })),
     });
     expect.soft([output.code, resultOf(output.out), readdirSync(w)], "[file-error-exit-one] output failure exits 1 before mutation").toEqual([1, "", []]);
+  });
+
+  it("lead_error_values_that_throw_are_reported_safely", async () => {
+    const w = workspace();
+    expect((await inProcess(["lead", "install", "--workspace", w, "--host", "claude"])).code, "install").toBe(0);
+    const secondary = new Error("getter failed\nresult: INSTALLED\u200d");
+    secondary.stack = "Error: getter failed\nresult: INSTALLED\u200d";
+    const values = [
+      { get stack() { throw secondary; } },
+      { stack: 42, toString() { throw secondary; } },
+    ];
+    let hits = 0;
+    for (const value of values) for (const command of ["status", "uninstall"]) {
+      const faulty = { ...fs, readdirSync: (...args: Parameters<typeof fs.readdirSync>) => {
+        if (String(args[0]).endsWith(".orch-lead-install")) {
+          hits += 1;
+          throw value;
+        }
+        return fs.readdirSync(...args);
+      } };
+      const r = await inProcess(["lead", command, "--workspace", w, "--host", "claude"], { fs: faulty })
+        .catch((e) => ({ code: -1, out: "", err: String(e?.stack ?? e) }));
+      const text = r.out + r.err;
+      expect.soft(r.code, `[error-value-safe] ${command}: exit 1`).toBe(1);
+      expect.soft(text.split("\n").filter((line) => line.startsWith("result: ")), "[error-value-safe] no forged result line").toEqual([]);
+      expect.soft(/(?!\n)[\p{C}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u.test(text), "[error-value-safe] no raw control or invisible character").toBe(false);
+      expect.soft(r.err.split("\n"), "[error-value-safe] one error line with the fixed prefix").toEqual([expect.stringMatching(/^orch lead: error:/), ""]);
+      if (value === values[1]) expect.soft(r.err, "[error-value-safe] fixed fallback when conversion fails").toContain("Unknown error");
+    }
+    expect(hits, "all four inputs reached the fault").toBe(4);
   });
 
   it("lead_generic_errors_are_escaped_and_exit_one", async () => {
