@@ -44,7 +44,7 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 28 `skipIf` markers, 57 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 37 `skipIf` markers, 72 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
 
 | Test file | Skipped | Why |
 |---|---|---|
@@ -73,6 +73,14 @@ The `windows` CI job runs every test file. The tests below are skipped there, ea
 | `tests/preferences-store.test.ts` | `a state link installed immediately before open is refused without reading its target` | the open that does not follow a symbolic link is not available on Windows |
 | `tests/resume-cli.test.ts` | `a named pipe where the record should be is refused without waiting for a writer` | the test makes a named pipe with `mkfifo` |
 | `tests/resume-store.test.ts` | `a record replaced by a link immediately before open is refused without reading its target` | the open that does not follow a symbolic link is not available on Windows |
+| `tests/preferences-store.test.ts` | all of `an existing folder that other users can enter` (3): `an existing public %s is refused without changing its mode` (one per folder) | the owner and the permission bits of a folder are not checked on Windows |
+| `tests/preferences-store.test.ts` | all of `a link in place of a preferences folder` (3): `a link in place of %s is refused and nothing is read or written through it` (one per folder) | the test looks for the open that does not follow a symbolic link, which is not available on Windows; what `orch preference` does there with a link in place of one of its folders is not verified |
+| `tests/preferences-store.test.ts` | all of `a state file that is a link` (2): `a state file that is %s is refused and the file behind it is not opened` (a symbolic link, a second hard link) | the test looks for the same open; a state file that is a link is not verified on Windows |
+| `tests/preferences-store.test.ts` | `a directory flush failure after rename is an acknowledged change` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/preferences-cli.test.ts` | `a directory flush failure reports the installed change and permits only its new revision` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/resume-faults.test.ts` | `an existing storage folder owned by another uid is refused without changing it`, `an existing storage folder accessible to a group is refused without changing it` | the owner and the permission bits of a folder are not checked on Windows |
+| `tests/resume-faults.test.ts` | `a folder flush failure after rename is a warning and revisions continue from the written record` | a folder is not flushed on Windows, so there is no flush failure to report |
+| `tests/resume-store.test.ts` | all of `a record that is a link` (2): `a record that is %s is refused and the file behind it is not opened` (a symbolic link, a second hard link) | the test looks for the open that does not follow a symbolic link, which is not available on Windows; a record that is a link is not verified there |
 | `tests/doctor-install-entry.test.ts` | `guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one` | it runs the macOS group's already-installed check of the install guide |
 | `tests/doctor-install-entry.mutations.test.ts` | `mutation_guide_installed_check_restored_to_npm_ls` | it changes that macOS check and reruns the test above |
 

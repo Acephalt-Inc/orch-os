@@ -139,7 +139,8 @@ describe("crash boundaries preserve acknowledged state or report unavailable", (
     expect(readdirSync(stateDirectory(home))).toEqual([]);
   });
 
-  it("an existing storage folder owned by another uid is refused without changing it", () => {
+  // the owner and the permission bits of a folder are not checked on Windows (docs/windows.md)
+  it.skipIf(process.platform === "win32")("an existing storage folder owned by another uid is refused without changing it", () => {
     const { home, workspace } = setupInProcess();
     const root = join(home, ".orch-private");
     mkdirSync(root, { mode: 0o700 });
@@ -148,7 +149,8 @@ describe("crash boundaries preserve acknowledged state or report unavailable", (
     expect({ mode: statSync(root).mode, entries: readdirSync(root) }).toEqual(before);
   });
 
-  it("an existing storage folder accessible to a group is refused without changing it", () => {
+  // the owner and the permission bits of a folder are not checked on Windows (docs/windows.md)
+  it.skipIf(process.platform === "win32")("an existing storage folder accessible to a group is refused without changing it", () => {
     const { home, workspace } = setupInProcess();
     const root = join(home, ".orch-private");
     mkdirSync(root, { mode: 0o750 });
@@ -269,7 +271,8 @@ describe("a writer lock that cannot be removed", () => {
   });
 });
 
-test("a folder flush failure after rename is a warning and revisions continue from the written record", () => {
+// a folder is not flushed on Windows, so there is no flush failure to report (docs/windows.md)
+test.skipIf(process.platform === "win32")("a folder flush failure after rename is a warning and revisions continue from the written record", () => {
   const { home, env, workspace } = setup();
   const first = faultCommand(env, "folder-flush", save(workspace, 0), JSON.stringify(noteOf(OLD)));
   expect(first.status).toBe(0);

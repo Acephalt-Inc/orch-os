@@ -236,33 +236,36 @@ describe("native roots links and workspace identities stay distinct", () => {
     expect(lstatSync(linked).isSymbolicLink()).toBe(true);
   });
 
-  it.each(["a symbolic link", "a second hard link"])("a record that is %s is refused and the file behind it is not opened", (kind) => {
-    const { base, home, workspace, outside, env } = layout();
-    expect(run(env, save(workspace, 0), JSON.stringify(noteOf(CANARY))).status).toBe(0);
-    const directory = stateDirectory(home);
-    const state = join(directory, "state.json");
+  // the open that does not follow a symbolic link is not available on Windows (docs/windows.md)
+  describe.skipIf(process.platform === "win32")("a record that is a link", () => {
+    it.each(["a symbolic link", "a second hard link"])("a record that is %s is refused and the file behind it is not opened", (kind) => {
+      const { base, home, workspace, outside, env } = layout();
+      expect(run(env, save(workspace, 0), JSON.stringify(noteOf(CANARY))).status).toBe(0);
+      const directory = stateDirectory(home);
+      const state = join(directory, "state.json");
 
-    // Control: a plain record is opened and read, and the record of calls shows it.
-    const control = traced(base, env, ["show", "--workspace", workspace]);
-    expect(JSON.parse(control.stdout)).toMatchObject({ status: "unverified", revision: 1, note: noteOf(CANARY) });
-    expect(through(control.calls, state)).not.toEqual([]);
+      // Control: a plain record is opened and read, and the record of calls shows it.
+      const control = traced(base, env, ["show", "--workspace", workspace]);
+      expect(JSON.parse(control.stdout)).toMatchObject({ status: "unverified", revision: 1, note: noteOf(CANARY) });
+      expect(through(control.calls, state)).not.toEqual([]);
 
-    const canary = join(outside, "canary.json");
-    if (kind === "a symbolic link") { renameSync(state, canary); privateLink(canary, state); } else linkSync(state, canary);
-    const behind = snapshot(outside);
-    const inside = snapshot(directory);
-    expect(behind.join("\n")).toContain(Buffer.from(CANARY).toString("hex"));
+      const canary = join(outside, "canary.json");
+      if (kind === "a symbolic link") { renameSync(state, canary); privateLink(canary, state); } else linkSync(state, canary);
+      const behind = snapshot(outside);
+      const inside = snapshot(directory);
+      expect(behind.join("\n")).toContain(Buffer.from(CANARY).toString("hex"));
 
-    for (const [name, args, input] of commands(workspace, 1)) {
-      const result = traced(base, env, args, input);
-      // The record's own entry was opened without following it and checked through that descriptor.
-      expect(result.calls).toContainEqual({ op: "openSync", paths: [state] });
-      expect(through(result.calls, outside)).toEqual([]);
-      expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
-        .toEqual({ name, status: 4, stdout: "", stderr: `${JSON.stringify({ status: "unavailable", message: "unsafe state file" })}\n` });
-    }
-    expect(snapshot(outside)).toEqual(behind);
-    expect(snapshot(directory)).toEqual(inside);
+      for (const [name, args, input] of commands(workspace, 1)) {
+        const result = traced(base, env, args, input);
+        // The record's own entry was opened without following it and checked through that descriptor.
+        expect(result.calls).toContainEqual({ op: "openSync", paths: [state] });
+        expect(through(result.calls, outside)).toEqual([]);
+        expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
+          .toEqual({ name, status: 4, stdout: "", stderr: `${JSON.stringify({ status: "unavailable", message: "unsafe state file" })}\n` });
+      }
+      expect(snapshot(outside)).toEqual(behind);
+      expect(snapshot(directory)).toEqual(inside);
+    });
   });
 });
 

@@ -236,7 +236,8 @@ describe("preference command", () => {
     });
   });
 
-  it("a directory flush failure reports the installed change and permits only its new revision", async () => {
+  // a folder is not flushed on Windows, so there is no flush failure to report (docs/windows.md)
+  it.skipIf(process.platform === "win32")("a directory flush failure reports the installed change and permits only its new revision", async () => {
     const { home, workspace } = await setup();
     const result = await lockStays(home, "directory-flush", set(workspace, "answer-length", "short", 0));
     expect(result.code).toBe(0);

@@ -150,17 +150,20 @@ describe("preferences store", () => {
   });
 
   describe("unsafe paths and interrupted writes preserve state", () => {
-    it.each(["the private root", "the versioned folder", "the workspace folder"])("an existing public %s is refused without changing its mode", async (level) => {
-      const { home, workspace } = await setup();
-      const root = join(home, ".orch-private");
-      const versioned = join(root, "preferences-v1");
-      const directory = join(versioned, workspaceDigest(await realpath(workspace)));
-      const folders = [root, versioned, directory];
-      const index = ["the private root", "the versioned folder", "the workspace folder"].indexOf(level);
-      for (let current = 0; current <= index; current++) await mkdir(folders[current], { mode: current === index ? 0o755 : 0o700 });
-      await expect(setPreference(workspace, "answer-length", "short", 0)).rejects.toThrow("unsafe preference path");
-      expect((await stat(folders[index])).mode & 0o777).toBe(0o755);
-      expect(await readdir(folders[index])).toEqual([]);
+    // the owner and the permission bits of a folder are not checked on Windows (docs/windows.md)
+    describe.skipIf(process.platform === "win32")("an existing folder that other users can enter", () => {
+      it.each(["the private root", "the versioned folder", "the workspace folder"])("an existing public %s is refused without changing its mode", async (level) => {
+        const { home, workspace } = await setup();
+        const root = join(home, ".orch-private");
+        const versioned = join(root, "preferences-v1");
+        const directory = join(versioned, workspaceDigest(await realpath(workspace)));
+        const folders = [root, versioned, directory];
+        const index = ["the private root", "the versioned folder", "the workspace folder"].indexOf(level);
+        for (let current = 0; current <= index; current++) await mkdir(folders[current], { mode: current === index ? 0o755 : 0o700 });
+        await expect(setPreference(workspace, "answer-length", "short", 0)).rejects.toThrow("unsafe preference path");
+        expect((await stat(folders[index])).mode & 0o777).toBe(0o755);
+        expect(await readdir(folders[index])).toEqual([]);
+      });
     });
 
     it.skipIf(process.platform === "win32")("an existing folder owned by another user is refused", async () => {
@@ -248,67 +251,73 @@ describe("preferences store", () => {
       expect(command(env, set(join(base, "work"), "answer-length", "short", 0)).status).toBe(0);
     });
 
-    it.each(["the private root", "the versioned folder", "the workspace folder"])("a link in place of %s is refused and nothing is read or written through it", async (level) => {
-      const { base, home, workspace, outside, env } = await layout();
-      expect(command(env, set(workspace, "response-language", "zh", 0)).status).toBe(0);
-      const root = join(home, ".orch-private");
-      const versioned = join(root, "preferences-v1");
-      const folder = await stateDirectory(home, workspace);
-      const linked = level === "the private root" ? root : level === "the versioned folder" ? versioned : folder;
+    // the open that does not follow a symbolic link is not available on Windows (docs/windows.md)
+    describe.skipIf(process.platform === "win32")("a link in place of a preferences folder", () => {
+      it.each(["the private root", "the versioned folder", "the workspace folder"])("a link in place of %s is refused and nothing is read or written through it", async (level) => {
+        const { base, home, workspace, outside, env } = await layout();
+        expect(command(env, set(workspace, "response-language", "zh", 0)).status).toBe(0);
+        const root = join(home, ".orch-private");
+        const versioned = join(root, "preferences-v1");
+        const folder = await stateDirectory(home, workspace);
+        const linked = level === "the private root" ? root : level === "the versioned folder" ? versioned : folder;
 
-      // Control: while nothing is linked, show reads the state, and the record of calls shows it going through this folder.
-      const control = traced(base, env, ["show", "--workspace", workspace]);
-      expect(JSON.parse(control.stdout)).toMatchObject(BEHIND);
-      expect(through(control.calls, linked)).not.toEqual([]);
+        // Control: while nothing is linked, show reads the state, and the record of calls shows it going through this folder.
+        const control = traced(base, env, ["show", "--workspace", workspace]);
+        expect(JSON.parse(control.stdout)).toMatchObject(BEHIND);
+        expect(through(control.calls, linked)).not.toEqual([]);
 
-      // The real folder, with its valid state, moves outside; a link takes its place.
-      const target = join(outside, "moved");
-      await rename(linked, target);
-      await privateLink(target, linked);
-      const behind = snapshot(outside);
-      expect(behind.join("\n")).toContain(Buffer.from('"value":"zh"').toString("hex"));
+        // The real folder, with its valid state, moves outside; a link takes its place.
+        const target = join(outside, "moved");
+        await rename(linked, target);
+        await privateLink(target, linked);
+        const behind = snapshot(outside);
+        expect(behind.join("\n")).toContain(Buffer.from('"value":"zh"').toString("hex"));
 
-      for (const [name, args] of commands(workspace, 1)) {
-        const result = traced(base, env, args);
-        // The command tried to open the folder without following it and asked for nothing through it.
-        expect(result.calls).toContainEqual({ op: "promises.open", paths: [linked] });
-        expect(through(result.calls, linked)).toEqual([]);
-        expect(through(result.calls, outside)).toEqual([]);
-        expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
-          .toEqual({ name, status: 4, stdout: "", stderr: refusal("unsafe preference path") });
-      }
-      expect(snapshot(outside)).toEqual(behind);
-      expect(lstatSync(linked).isSymbolicLink()).toBe(true);
+        for (const [name, args] of commands(workspace, 1)) {
+          const result = traced(base, env, args);
+          // The command tried to open the folder without following it and asked for nothing through it.
+          expect(result.calls).toContainEqual({ op: "promises.open", paths: [linked] });
+          expect(through(result.calls, linked)).toEqual([]);
+          expect(through(result.calls, outside)).toEqual([]);
+          expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
+            .toEqual({ name, status: 4, stdout: "", stderr: refusal("unsafe preference path") });
+        }
+        expect(snapshot(outside)).toEqual(behind);
+        expect(lstatSync(linked).isSymbolicLink()).toBe(true);
+      });
     });
 
-    it.each(["a symbolic link", "a second hard link"])("a state file that is %s is refused and the file behind it is not opened", async (kind) => {
-      const { base, home, workspace, outside, env } = await layout();
-      expect(command(env, set(workspace, "response-language", "zh", 0)).status).toBe(0);
-      const directory = await stateDirectory(home, workspace);
-      const state = join(directory, "state.json");
+    // the open that does not follow a symbolic link is not available on Windows (docs/windows.md)
+    describe.skipIf(process.platform === "win32")("a state file that is a link", () => {
+      it.each(["a symbolic link", "a second hard link"])("a state file that is %s is refused and the file behind it is not opened", async (kind) => {
+        const { base, home, workspace, outside, env } = await layout();
+        expect(command(env, set(workspace, "response-language", "zh", 0)).status).toBe(0);
+        const directory = await stateDirectory(home, workspace);
+        const state = join(directory, "state.json");
 
-      // Control: a plain state file is opened and read, and the record of calls shows it.
-      const control = traced(base, env, ["show", "--workspace", workspace]);
-      expect(JSON.parse(control.stdout)).toMatchObject(BEHIND);
-      expect(control.calls).toContainEqual({ op: "promises.open", paths: [state] });
+        // Control: a plain state file is opened and read, and the record of calls shows it.
+        const control = traced(base, env, ["show", "--workspace", workspace]);
+        expect(JSON.parse(control.stdout)).toMatchObject(BEHIND);
+        expect(control.calls).toContainEqual({ op: "promises.open", paths: [state] });
 
-      const canary = join(outside, "canary.json");
-      if (kind === "a symbolic link") { await rename(state, canary); await privateLink(canary, state); } else await link(state, canary);
-      const behind = snapshot(outside);
-      const inside = snapshot(directory);
-      expect(behind.join("\n")).toContain(Buffer.from('"value":"zh"').toString("hex"));
+        const canary = join(outside, "canary.json");
+        if (kind === "a symbolic link") { await rename(state, canary); await privateLink(canary, state); } else await link(state, canary);
+        const behind = snapshot(outside);
+        const inside = snapshot(directory);
+        expect(behind.join("\n")).toContain(Buffer.from('"value":"zh"').toString("hex"));
 
-      for (const [name, args] of commands(workspace, 1)) {
-        const result = traced(base, env, args);
-        // The state entry was opened without following it, and nothing named the file outside.
-        expect(result.calls).toContainEqual({ op: "promises.open", paths: [state] });
-        expect(through(result.calls, state)).toEqual([]);
-        expect(through(result.calls, outside)).toEqual([]);
-        expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
-          .toEqual({ name, status: 4, stdout: "", stderr: refusal("unsafe preference state") });
-      }
-      expect(snapshot(outside)).toEqual(behind);
-      expect(snapshot(directory)).toEqual(inside);
+        for (const [name, args] of commands(workspace, 1)) {
+          const result = traced(base, env, args);
+          // The state entry was opened without following it, and nothing named the file outside.
+          expect(result.calls).toContainEqual({ op: "promises.open", paths: [state] });
+          expect(through(result.calls, state)).toEqual([]);
+          expect(through(result.calls, outside)).toEqual([]);
+          expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
+            .toEqual({ name, status: 4, stdout: "", stderr: refusal("unsafe preference state") });
+        }
+        expect(snapshot(outside)).toEqual(behind);
+        expect(snapshot(directory)).toEqual(inside);
+      });
     });
 
     it.each<WritePoint>(["locked", "temp-flushed", "renamed"])("a set killed at %s leaves the old or the new valid state", async (point) => {
@@ -380,7 +389,8 @@ describe("preferences store", () => {
       expect(stored).toMatchObject({ revision: 1, preferences: { "answer-length": { value: "short" } } });
     });
 
-    it("a directory flush failure after rename is an acknowledged change", async () => {
+    // a folder is not flushed on Windows, so there is no flush failure to report (docs/windows.md)
+    it.skipIf(process.platform === "win32")("a directory flush failure after rename is an acknowledged change", async () => {
       const { home, workspace } = await setup();
       const refuse = async () => { throw new Error("directory flush failed"); };
       const first = await setPreference(workspace, "answer-length", "short", 0, Date.now(), { openDirectory: refuse });
