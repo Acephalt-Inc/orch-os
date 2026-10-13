@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, parse, resolve, sep } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -13,6 +13,8 @@ const LOCK_STEP_MS = 25;
 const LOCK_HELD = "a set or unset is still running or was interrupted; when none is running, remove the .lock folder in this workspace's folder under .orch-private/preferences-v1 and retry";
 /** Reported on standard error, with status 0, when a change was written and its lock could not be removed. */
 export const LOCK_LEFT = "the change was written, but the .lock folder could not be removed; when no set or unset is running, remove the .lock folder in this workspace's folder under .orch-private/preferences-v1 before the next set or unset";
+/** Reported on standard error, with status 0, when an installed change could not be flushed. */
+export const DIRECTORY_NOT_FLUSHED = "the change was written, but the preferences folder could not be flushed; verify the saved preference before retrying";
 const TEMPORARY = /^\.state-\d+-[0-9a-f]{16}\.tmp$/;
 const EXPIRY_MS = 90 * 24 * 60 * 60 * 1_000;
 
@@ -27,11 +29,13 @@ export interface StoreSeam {
   sync?: (handle: FileHandle) => Promise<void>;
   openDirectory?: (path: string) => Promise<FileHandle>;
   removeLock?: (path: string) => Promise<void>;
+  beforeStateOpen?: () => void | Promise<void>;
   platform?: NodeJS.Platform;
+  uid?: number;
 }
 
 /** The result of one change: the settings now in place, and whether the writer lock was removed afterwards. */
-export interface PreferenceChange { view: PreferenceView; lockReleased: boolean; }
+export interface PreferenceChange { view: PreferenceView; directoryFlushed: boolean; lockReleased: boolean; }
 
 function emptyState(): PreferenceState { return { version: 1, revision: 0, preferences: {} }; }
 
@@ -71,7 +75,26 @@ async function locations(workspace: string) {
  * Look at one storage folder without following it. Returns false when nothing is there. Anything
  * that is there must be a plain folder: a link in its place is refused, never followed.
  */
-async function plainDirectory(path: string): Promise<boolean> {
+async function plainDirectory(path: string, seam: StoreSeam = {}): Promise<boolean> {
+  if ((seam.platform ?? process.platform) !== "win32") {
+    let handle: FileHandle;
+    try {
+      handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw new PreferenceError("unavailable", "unsafe preference path");
+    }
+    try {
+      const info = await handle.stat();
+      const uid = seam.uid ?? process.getuid!();
+      if (!info.isDirectory() || info.uid !== uid || (info.mode & 0o077) !== 0) {
+        throw new PreferenceError("unavailable", "unsafe preference path");
+      }
+      return true;
+    } finally {
+      await handle.close();
+    }
+  }
   let info;
   try { info = await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   // lstat describes a link itself, not what it points at, so a link is never a directory here.
@@ -79,30 +102,39 @@ async function plainDirectory(path: string): Promise<boolean> {
   return true;
 }
 
-async function ensurePrivate(loc: Awaited<ReturnType<typeof locations>>) {
+async function ensurePrivate(loc: Awaited<ReturnType<typeof locations>>, seam: StoreSeam) {
   for (const directory of [loc.base, loc.root, loc.directory]) {
-    if (!(await plainDirectory(directory))) {
+    if (!(await plainDirectory(directory, seam))) {
       // Another writer may create it first, so "already there" is not an error: it is looked at again.
       try { await mkdir(directory, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      if (!(await plainDirectory(directory))) throw new PreferenceError("unavailable", "unsafe preference path");
+      if (!(await plainDirectory(directory, seam))) throw new PreferenceError("unavailable", "unsafe preference path");
     }
-    if (process.platform !== "win32") await chmod(directory, 0o700);
   }
 }
 
-async function read(loc: Awaited<ReturnType<typeof locations>>): Promise<PreferenceState> {
+async function read(loc: Awaited<ReturnType<typeof locations>>, seam: StoreSeam = {}): Promise<PreferenceState> {
   // Each folder on the way is looked at first, so state is never reached through a link put in its place.
   for (const directory of [loc.base, loc.root, loc.directory]) {
-    if (!(await plainDirectory(directory))) return emptyState();
+    if (!(await plainDirectory(directory, seam))) return emptyState();
   }
   try {
-    // The state file's own entry is looked at without following it: a link is not a file here, and
-    // a file with a second hard link is refused too, before anything opens it.
-    const info = await lstat(loc.state);
-    if (!info.isFile() || info.nlink !== 1) throw new PreferenceError("unavailable", "unsafe preference state");
-    return parseState(await readFile(loc.state, "utf8"));
+    await seam.beforeStateOpen?.();
+    if ((seam.platform ?? process.platform) === "win32") {
+      const info = await lstat(loc.state);
+      if (!info.isFile() || info.nlink !== 1) throw new PreferenceError("unavailable", "unsafe preference state");
+      return parseState(await readFile(loc.state, "utf8"));
+    }
+    const handle = await open(loc.state, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.nlink !== 1) throw new PreferenceError("unavailable", "unsafe preference state");
+      return parseState(await handle.readFile("utf8"));
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyState();
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new PreferenceError("unavailable", "unsafe preference state");
     throw error;
   }
 }
@@ -112,7 +144,7 @@ async function read(loc: Awaited<ReturnType<typeof locations>>): Promise<Prefere
  * it. A lock that is still held at the bound is reported and left alone: it is never removed or
  * taken over here.
  */
-async function withLock(loc: Awaited<ReturnType<typeof locations>>, seam: StoreSeam, action: () => Promise<PreferenceView>): Promise<PreferenceChange> {
+async function withLock(loc: Awaited<ReturnType<typeof locations>>, seam: StoreSeam, action: () => Promise<{ view: PreferenceView; directoryFlushed: boolean }>): Promise<PreferenceChange> {
   // A monotonic clock: a change of the wall clock cannot lengthen or shorten the wait.
   const deadline = performance.now() + LOCK_WAIT_MS;
   for (;;) {
@@ -124,8 +156,8 @@ async function withLock(loc: Awaited<ReturnType<typeof locations>>, seam: StoreS
     }
   }
   const release = () => (seam.removeLock ?? ((path: string) => rm(path, { recursive: true, force: true })))(loc.lock);
-  let view: PreferenceView;
-  try { await seam.at?.("locked"); view = await action(); }
+  let result: { view: PreferenceView; directoryFlushed: boolean };
+  try { await seam.at?.("locked"); result = await action(); }
   catch (error) {
     // Nothing was acknowledged, so the caller is told this refusal. If the lock cannot be removed
     // either, it stays, and the next writer reports it as a held lock.
@@ -133,11 +165,11 @@ async function withLock(loc: Awaited<ReturnType<typeof locations>>, seam: StoreS
     throw error;
   }
   // The state is in place. From here the change is reported as made, whatever happens to the lock.
-  try { await release(); } catch { return { view, lockReleased: false }; }
-  return { view, lockReleased: true };
+  try { await release(); } catch { return { ...result, lockReleased: false }; }
+  return { ...result, lockReleased: true };
 }
 
-async function writeAtomic(loc: Awaited<ReturnType<typeof locations>>, state: PreferenceState, seam: StoreSeam) {
+async function writeAtomic(loc: Awaited<ReturnType<typeof locations>>, state: PreferenceState, seam: StoreSeam): Promise<boolean> {
   const sync = seam.sync ?? ((handle: FileHandle) => handle.sync());
   const temporary = join(loc.directory, `.state-${process.pid}-${randomBytes(8).toString("hex")}.tmp`);
   try {
@@ -153,9 +185,14 @@ async function writeAtomic(loc: Awaited<ReturnType<typeof locations>>, state: Pr
   await seam.at?.("renamed");
   // The new state is in place. Windows cannot open a directory to flush it, so the directory
   // flush is skipped there: an error at this step must not report a write that happened as failed.
-  if ((seam.platform ?? process.platform) === "win32") return;
-  const directory = await (seam.openDirectory ?? ((path: string) => open(path, "r")))(loc.directory);
-  try { await sync(directory); } finally { await directory.close(); }
+  if ((seam.platform ?? process.platform) === "win32") return true;
+  try {
+    const directory = await (seam.openDirectory ?? ((path: string) => open(path, "r")))(loc.directory);
+    try { await sync(directory); } finally { await directory.close(); }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -177,30 +214,34 @@ function view(state: PreferenceState, now: number): PreferenceView {
   return { source: "explicit-command", revision: state.revision, preferences, expiry };
 }
 
-export async function showPreferences(workspace: string, now = Date.now()): Promise<PreferenceView> {
-  return view(await read(await locations(workspace)), now);
+export async function showPreferences(workspace: string, now = Date.now(), seam: StoreSeam = {}): Promise<PreferenceView> {
+  return view(await read(await locations(workspace), seam), now);
 }
 
 export async function setPreference(workspace: string, key: string, value: string, expectedRevision: number, now = Date.now(), seam: StoreSeam = {}): Promise<PreferenceChange> {
   assertPreference(key, value);
-  const loc = await locations(workspace); await ensurePrivate(loc);
+  const loc = await locations(workspace); await ensurePrivate(loc, seam);
   return withLock(loc, seam, async () => {
     // Read only now, with the lock held: a writer that waited sees what the previous holder left.
-    const state = await read(loc);
+    const state = await read(loc, seam);
     if (state.revision !== expectedRevision) throw new PreferenceError("conflict", "preference revision conflict");
     await removeLeftovers(loc);
     state.revision++; state.preferences[key] = { value: value as PreferenceValue, expires_at: new Date(now + EXPIRY_MS).toISOString() };
-    await writeAtomic(loc, state, seam); return view(state, now);
+    const directoryFlushed = await writeAtomic(loc, state, seam);
+    return { view: view(state, now), directoryFlushed };
   });
 }
 
 export async function unsetPreference(workspace: string, key: string, expectedRevision: number, now = Date.now(), seam: StoreSeam = {}): Promise<PreferenceChange> {
   if (!isPreferenceKey(key)) throw new PreferenceError("invalid", "invalid preference key or value");
-  const loc = await locations(workspace); await ensurePrivate(loc);
+  const loc = await locations(workspace); await ensurePrivate(loc, seam);
   return withLock(loc, seam, async () => {
-    const state = await read(loc);
+    const state = await read(loc, seam);
     if (state.revision !== expectedRevision) throw new PreferenceError("conflict", "preference revision conflict");
     await removeLeftovers(loc);
-    state.revision++; delete state.preferences[key]; await writeAtomic(loc, state, seam); return view(state, now);
+    state.revision++;
+    delete state.preferences[key];
+    const directoryFlushed = await writeAtomic(loc, state, seam);
+    return { view: view(state, now), directoryFlushed };
   });
 }

@@ -51,6 +51,7 @@ const show = (workspace: string) => ["show", "--workspace", workspace];
 
 const LOCK_HELD = "a set or unset is still running or was interrupted; when none is running, remove the .lock folder in this workspace's folder under .orch-private/preferences-v1 and retry";
 const LOCK_LEFT = "the change was written, but the .lock folder could not be removed; when no set or unset is running, remove the .lock folder in this workspace's folder under .orch-private/preferences-v1 before the next set or unset";
+const DIRECTORY_NOT_FLUSHED = "the change was written, but the preferences folder could not be flushed; verify the saved preference before retrying";
 
 /** The built command run in a real process with a seam in which removing the writer lock fails. */
 async function lockStays(home: string, when: "after-rename" | "always", args: string[]): Promise<{ code: number | string | null; stdout: string; stderr: string }> {
@@ -233,6 +234,38 @@ describe("preference command", () => {
       expect(await readFile(join(directory, "state.json"))).toEqual(bytes);
       expect((await readdir(directory)).sort()).toEqual([".lock", "state.json"]);
     });
+  });
+
+  it("a directory flush failure reports the installed change and permits only its new revision", async () => {
+    const { home, workspace } = await setup();
+    const result = await lockStays(home, "directory-flush", set(workspace, "answer-length", "short", 0));
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ revision: 1, preferences: { "answer-length": "short" } });
+    expect(result.stderr).toBe(`${JSON.stringify({ status: "warning", message: DIRECTORY_NOT_FLUSHED })}\n`);
+    expect((await cli(home, set(workspace, "answer-length", "normal", 0))).code).toBe(3);
+    expect((await cli(home, set(workspace, "answer-length", "normal", 1))).code).toBe(0);
+  });
+
+  it.each([
+    ["state", { version: 1, revision: 1, preferences: {}, extra: true }],
+    ["preferences", { version: 1, revision: 1, preferences: { unknown: { value: "short", expires_at: "2099-01-01T00:00:00.000Z" } } }],
+    ["stored preference", {
+      version: 1,
+      revision: 1,
+      preferences: { "answer-length": { value: "short", expires_at: "2099-01-01T00:00:00.000Z", extra: true } },
+    }],
+  ])("unknown fields at the %s level are refused by show, set and unset", async (_level, stored) => {
+    const { home, workspace } = await setup();
+    expect((await cli(home, set(workspace, "answer-length", "short", 0))).code).toBe(0);
+    const state = join(await stateDirectory(home), "state.json");
+    const bytes = `${JSON.stringify(stored)}\n`;
+    await writeFile(state, bytes);
+    for (const args of [show(workspace), set(workspace, "answer-length", "normal", 1), unset(workspace, "answer-length", 1)]) {
+      const result = await cli(home, args);
+      expect(result.code).toBe(4);
+      expect(result.stdout).toBe("");
+      expect(await readFile(state, "utf8")).toBe(bytes);
+    }
   });
 
   it("failures use one status scheme and never echo what the caller typed", async () => {

@@ -3,7 +3,7 @@
 import { parse, HelpRequested, UsageError, type CmdSpec } from "../args.js";
 import { pathToFileURL } from "node:url";
 import { PreferenceError } from "./schema.js";
-import { LOCK_LEFT, setPreference, showPreferences, unsetPreference, type StoreSeam } from "./store.js";
+import { DIRECTORY_NOT_FLUSHED, LOCK_LEFT, setPreference, showPreferences, unsetPreference, type StoreSeam } from "./store.js";
 
 // Fixed text: a usage diagnostic never repeats what the caller typed.
 const USAGE = "invalid arguments; usage: preference set KEY VALUE --workspace PATH --expected-revision N, preference unset KEY --workspace PATH --expected-revision N, or preference show --workspace PATH";
@@ -39,6 +39,7 @@ export async function runPreferenceCommand(argv: string[], seam?: StoreSeam): Pr
     // The store's optional clock is never passed here: the time of a change is the store's own.
     const change = action === "set" ? await setPreference(args.workspace, args.key, args.value, args.expectedRevision, undefined, seam) : await unsetPreference(args.workspace, args.key, args.expectedRevision, undefined, seam);
     process.stdout.write(`${JSON.stringify(change.view)}\n`);
+    if (!change.directoryFlushed) process.stderr.write(`${JSON.stringify({ status: "warning", message: DIRECTORY_NOT_FLUSHED })}\n`);
     // The change was written and is reported as written. A lock that could not be removed is named separately.
     if (!change.lockReleased) process.stderr.write(`${JSON.stringify({ status: "warning", message: LOCK_LEFT })}\n`);
     return 0;

@@ -13,8 +13,12 @@ const { runPreferenceCommand } = await import(pathToFileURL(command).href);
 let renamed = false;
 process.exitCode = await runPreferenceCommand(argv, {
   at(point) { if (point === "renamed") renamed = true; },
+  async openDirectory(path) {
+    if (when === "directory-flush") throw Object.assign(new Error("the folder cannot be flushed here"), { code: "EPERM" });
+    return (await import("node:fs/promises")).open(path, "r");
+  },
   async removeLock(path) {
-    if (when === "always" || renamed) throw Object.assign(new Error("the lock folder cannot be removed here"), { code: "EPERM" });
+    if (when === "always" || (when === "after-rename" && renamed)) throw Object.assign(new Error("the lock folder cannot be removed here"), { code: "EPERM" });
     await rmdir(path);
   },
 });
