@@ -1061,6 +1061,56 @@ const cmdProfile: Run = (a, io) => {
   return showProfile(io, parseToml(next), false);
 };
 
+// ---- learning: its one input document ----------------------------------------------------------
+
+/** How long `orch learning` waits for standard input to end, in milliseconds: the wait of the module's own entry file. */
+const LEARNING_STDIN_DEADLINE_MS = 4500;
+
+/**
+ * All of standard input for `orch learning`, read as the module's own entry file reads it (that file runs a
+ * command when it is loaded, so it cannot be imported here): LIMIT over the cap, TIMEOUT at the deadline.
+ * At the cap or at the deadline the input is closed, so the process ends even when the other side never closes it.
+ */
+async function learningInput(): Promise<Uint8Array> {
+  const { LearningError, MAX_BYTES } = await import("./learning/schema.js");
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.off("error", onError);
+    };
+    // Give up on the input: stop listening and close it. Pausing is not enough, because a
+    // paused stream keeps reading ahead and an input that stays open would keep the process alive.
+    const abandon = (code: "TIMEOUT" | "LIMIT" | "INVALID_INPUT") => {
+      cleanup();
+      stdin.destroy();
+      reject(new LearningError(code));
+    };
+    const timer = setTimeout(() => abandon("TIMEOUT"), LEARNING_STDIN_DEADLINE_MS);
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BYTES) {
+        abandon("LIMIT");
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks));
+    };
+    const onError = () => abandon("INVALID_INPUT");
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+    stdin.resume();
+  });
+}
+
 // ---- the command tree -------------------------------------------------------------------------
 
 const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
@@ -1306,6 +1356,14 @@ export function buildTree(): CmdSpec<Run> {
         },
         pos: [{ dest: "argv", variadic: true }],
       },
+      {
+        name: "learning", help: "drafts only; nothing is applied: review, show, reject proposed display settings and quoted notes",
+        run: async (a, io) => {
+          const { main: learning } = await import("./learning/command.js");
+          return learning(a.argv, { read: learningInput, out: (s) => io.out(s), err: (s) => io.err(s) }, { now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
+      },
     ],
   };
 }
@@ -1331,6 +1389,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "preference") argv = ["preference", "--", ...argv.slice(1)];
   // `knowledge` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
   if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
+  // `learning` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "learning") argv = ["learning", "--", ...argv.slice(1)];
   const tree = buildTree();
   let parsed;
   try {

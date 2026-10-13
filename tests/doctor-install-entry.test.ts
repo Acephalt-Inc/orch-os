@@ -224,6 +224,7 @@ describe("InstallEntry", () => {
     expect(pkg.files.filter((f: string) => f.startsWith("docs")), "docs entries in package.json files").toEqual([
       GUIDE,
       "docs/knowledge.md",
+      "docs/learning.md",
       "docs/preferences.md",
       "docs/resume.md",
     ]);
@@ -237,6 +238,7 @@ describe("InstallEntry", () => {
       expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([
         `package/${GUIDE}`,
         "package/docs/knowledge.md",
+        "package/docs/learning.md",
         "package/docs/preferences.md",
         "package/docs/resume.md",
       ]);

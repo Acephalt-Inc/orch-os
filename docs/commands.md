@@ -371,6 +371,22 @@ A synthetic demo; no service is connected. It looks up one of two fixed question
 | `1` | No passage was printed; stderr holds `{"status":"ERROR","code":"<code>"}` |
 | `2` | The arguments were refused; stderr holds `{"status":"ERROR","code":"USAGE"}` |
 
+## orch learning
+
+```text
+orch learning review < DOCUMENT
+orch learning show < DOCUMENT
+orch learning reject ID --expected-revision N < DOCUMENT
+```
+
+Drafts only; nothing is applied, and there is no accept or apply command. Each command reads one JSON document from stdin and prints one JSON line on stdout: `review` writes the drafts again from the events of the document, `show` prints the drafts, and `reject` removes one draft and keeps its ID as a marker. [learning.md](learning.md) describes the document, the errors and the limits. `orch learning` does not load `config.toml`. It reads its own arguments: `orch learning --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The document or the drafts were printed |
+| `1` | `CONFLICT`, `STALE`, `NOT_FOUND`, `LIMIT` or `TIMEOUT`; stderr holds `{"code":"<code>","status":"ERROR"}` |
+| `2` | `USAGE` or `INVALID_INPUT`; stderr holds the same object with that code |
+
 ## Config keys
 
 | Key | Default | Meaning |

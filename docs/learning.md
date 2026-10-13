@@ -1,10 +1,10 @@
 # Learning drafts
 
-This stage is a module with its own entry file; the `orch learning` command does not exist until a later registration step.
+`orch learning` is a command of the packaged `orch` program.
 
 ## Commands
 
-Build with `npx tsc -p tsconfig.json`, then run `node dist/learning/entry.js review < private-input.json`, `node dist/learning/entry.js show < private-drafts.json`, or `node dist/learning/entry.js reject ID --expected-revision 1 < private-drafts.json`.
+Run `orch learning review < private-input.json`, `orch learning show < private-drafts.json`, or `orch learning reject ID --expected-revision 1 < private-drafts.json`.
 Each command reads one document from standard input and writes only standard output and standard error; it has no output-file option and creates no file.
 `review` prints the next document, with the drafts written again from the events, the settings snapshot, the rejection markers and the clock.
 `show` prints the drafts and the omitted event IDs of a reviewed document, without its events.
@@ -38,7 +38,7 @@ An error is one JSON object on standard error, `{"code":"...","status":"ERROR"}`
 `STALE` means the events, the snapshot or the clock no longer give the stored drafts; run `review` on the current records.
 `NOT_FOUND` means the ID given to `reject` is not a current draft.
 `LIMIT` means the input or the output is over a cap; nothing is cut to fit.
-`TIMEOUT` means standard input did not end within 4.5 seconds; the entry then closes the input and exits.
+`TIMEOUT` means standard input did not end within 4.5 seconds; the command then closes the input and exits.
 
 ## Personal data
 
@@ -46,12 +46,12 @@ The personal label does not authenticate the author or permit sharing.
 Every draft is labelled `user-supplied-unverified`, and a digest detects content changes rather than identity or truth.
 A lesson remains quoted text and is not executable instruction or trusted fact.
 A settings snapshot is read-only interchange data: with it a setting draft carries the before value and the settings revision, and without it both are null and `before_known` is false.
-Review creates drafts without applying settings, reading a file, an environment variable or the home directory, contacting a service, or launching a process.
+Review creates drafts without applying settings, reading a file other than the program's own files, reading an environment variable or the home directory, contacting a service, or launching a process.
 Reject keeps only the proposal identifier and does not erase source events, shell output, unmanaged files, or host transcripts.
 The output of `review` and `reject` contains the source events, notes included, so it is as private as the input.
 
 ## Limits
 
 The fixture in `tests/fixtures/learning` has fixed dates: its events are eligible from 2026-10-12T12:00:00.000Z until 2026-11-12T12:00:00.000Z, and the tests run it on a clock frozen at 2026-10-13T12:00:00.000Z.
-The input deadline has been measured on macOS only; native Windows behaviour of the direct entry is not verified.
+The input deadline has been measured on macOS only; native Windows behaviour of the command is not verified.
 The module guarantees inspectable draft processing, not natural-language correctness, live-store freshness, authenticated authorship, private shell-redirection enforcement, or improved future behavior.
