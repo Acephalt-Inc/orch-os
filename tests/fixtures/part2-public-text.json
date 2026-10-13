@@ -21,6 +21,12 @@
    "sha256": "b8a39144acca0a9199cf659debc26a79d6ddd197340d7b42547d435d5f0d6f48"
   },
   {
+   "id": "docs/architecture.md: what calls out to the network",
+   "file": "docs/architecture.md",
+   "text": "- **Network services.** Nothing listens on a port. Only live `merge-gate` (through `gh`) and `orch update check` (one request to the npm registry, when you type it) call out.",
+   "sha256": "c118b1450c225d1ca0b5d0b69cfa9354f78f20131a8e2b700ee7a8d37c146e40"
+  },
+  {
    "id": "help: usage line of orch",
    "command": "orch --help",
    "text": "usage: orch {init,agents,doctor,config,update,lease,mailbox,msg,task,merge-gate,profile,review,worker,load,mem} ...",

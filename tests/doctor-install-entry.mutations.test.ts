@@ -19,6 +19,10 @@ const VERSION: string = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf
 type Verdict = "PASSED" | "KILLED" | "INVALID";
 type Result = { verdict: Verdict; detail: string };
 type Edit = { file: string; from?: string; to?: string; remove?: true };
+const NODE_STEP = "guide_node_step_installs_a_missing_node_and_changes_no_older_one";
+/** Runs the guide's command in a POSIX shell, so it is skipped on Windows, and so is its row. */
+const INSTALLED_CHECK = "guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one";
+const NOT_RUN_LINE = "     - **Not run by the authors.** The install command below has not been run by the authors of this guide. What it installs, and every result this case names after it, is unverified until the user's machine shows it.\n";
 
 let copy = "";
 let control: Record<string, string> = {};
@@ -154,13 +158,13 @@ describe("DoctorInstallEntryMutations", () => {
   it("mutation_guide_install_unpinned", () => {
     row("guide_install_commands_pin_the_package_version",
       [{ file: GUIDE, from: `\`npm install --global orch-os@${VERSION}\``, to: "`npm install --global orch-os`" }],
-      /package-manager commands in the guide: expected \[ 'npm ls --global --depth=0', …\(3\) \] to deeply equal \[ 'npm ls --global --depth=0', …\(3\) \]/);
+      /package-manager commands in the guide: expected \[ 'command -v brew', …\(7\) \] to deeply equal \[ 'command -v brew', …\(7\) \]/);
   });
 
   it("mutation_package_version_moves_and_the_guide_does_not", () => {
     row("guide_install_commands_pin_the_package_version",
       [{ file: "package.json", from: `"version": "${VERSION}"`, to: '"version": "99.0.0"' }],
-      /package-manager commands in the guide: expected \[ 'npm ls --global --depth=0', …\(3\) \] to deeply equal \[ 'npm ls --global --depth=0', …\(3\) \]/);
+      /package-manager commands in the guide: expected \[ 'command -v brew', …\(7\) \] to deeply equal \[ 'command -v brew', …\(7\) \]/);
   });
 
   it("mutation_guide_introduction_names_another_version", () => {
@@ -185,6 +189,64 @@ describe("DoctorInstallEntryMutations", () => {
     row("guide_has_two_command_groups_that_refuse_first_and_end_with_version_and_doctor",
       [{ file: GUIDE, from: "8. `orch doctor` must end", to: "8. `orch init` must end" }],
       /macOS: steps in order: expected \[ Array\(8\) \] to deeply equal \[ Array\(8\) \]/);
+  });
+
+  it.skipIf(WINDOWS)("mutation_guide_installed_check_restored_to_npm_ls", () => {
+    row(INSTALLED_CHECK,
+      [{
+        file: GUIDE,
+        from: '2. `ls -d "$(npm root --global)/orch-os"` must fail with `No such file or directory` for a path that ends in `/node_modules/orch-os`. If it prints a directory, stop',
+        to: "2. `npm ls --global --depth=0` must not list an `orch-os` package. If it does, stop",
+      }],
+      /prefix with no lib directory: answer of the already-installed check: expected 'npm error code ENOENT \(exit 254\)' to be 'not installed'/);
+  });
+
+  it("mutation_guide_older_node_case_upgrades_node", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: "Do not install, replace or upgrade anything. Run `command -v node` and show", to: "Run `brew upgrade node`, then run `command -v node` and show" }],
+      /macOS: the older-Node case opens by ruling out an install, a replacement and an upgrade: expected false to be true/);
+  });
+
+  it("mutation_guide_older_node_case_gains_an_install_command", () => {
+    row(NODE_STEP,
+      [{
+        file: GUIDE, from: "Run `(Get-Command node).Source` and show the user that path and the version.",
+        to: "Run `(Get-Command node).Source` and show the user that path and the version. Then run `winget install --id OpenJS.NodeJS.LTS --exact --source winget`.",
+      }],
+      /Windows 11: commands in the older-Node case: expected \[ '\(Get-Command node\)\.Source', …\(1\) \] to deeply equal \[ '\(Get-Command node\)\.Source' \]/);
+  });
+
+  it("mutation_guide_missing_node_case_loses_the_not_run_label", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: `${NOT_RUN_LINE}     - \`command -v brew\``, to: "     - `command -v brew`" }],
+      /macOS: the missing-Node case carries the not-run-by-the-authors label once: expected \+0 to be 1/);
+  });
+
+  it("mutation_guide_missing_node_label_says_the_command_was_run", () => {
+    row(NODE_STEP,
+      [{
+        file: GUIDE, from: `${NOT_RUN_LINE}     - \`Get-Command winget`,
+        to: "     - **Run by the authors.** The install command below has been run by the authors of this guide.\n     - `Get-Command winget",
+      }],
+      /Windows 11: the missing-Node case carries the not-run-by-the-authors label once: expected \+0 to be 1/);
+  });
+
+  it("mutation_guide_node_install_gains_sudo", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: "- `brew install node` must exit 0.", to: "- `sudo brew install node` must exit 0." }],
+      /macOS: commands that add sudo, --force or a PATH edit: expected \[ 'sudo brew install node' \] to deeply equal \[\]/);
+  });
+
+  it("mutation_guide_node_install_gains_force", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: "--source winget` must exit 0.", to: "--source winget --force` must exit 0." }],
+      /Windows 11: commands that add sudo, --force or a PATH edit: expected \[ Array\(1\) \] to deeply equal \[\]/);
+  });
+
+  it("mutation_guide_node_install_is_followed_by_a_path_edit", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: "- `brew install node` must exit 0.", to: '- `brew install node && export PATH="$HOME/bin:$PATH"` must exit 0.' }],
+      /macOS: commands that add sudo, --force or a PATH edit: expected \[ Array\(1\) \] to deeply equal \[\]/);
   });
 
   it("mutation_windows_label_removed", () => {
@@ -243,6 +305,7 @@ describe("DoctorInstallEntryMutationHarness", () => {
     const run = runTests();
     expect(run.built, run.raw).toBe(true);
     expect(Object.fromEntries(Object.entries(run.tests).map(([k, v]) => [k, v.status])), "every test passes again in the copy").toEqual(control);
-    expect(Object.values(control).every((s) => s === "passed"), `every test passed in the unchanged copy: ${JSON.stringify(control)}`).toBe(true);
+    const notPassed = Object.entries(control).filter(([test, status]) => status !== "passed" && !(WINDOWS && test === INSTALLED_CHECK));
+    expect(notPassed, "tests that did not pass in the unchanged copy").toEqual([]);
   });
 });

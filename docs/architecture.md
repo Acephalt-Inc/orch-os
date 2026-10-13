@@ -114,5 +114,5 @@ All deployment-specific values live in `config.toml`. Read-only commands work be
 - **The agent loop.** Tools, permissions, context and sessions belong to the agent CLI.
 - **A scheduler.** Run `orch load`, `orch msg watch` or periodic checks from cron, systemd timers or any other scheduler.
 - **Merging.** `merge-gate` only answers whether a merge is allowed.
-- **Network services.** Nothing listens on a port. Only live `merge-gate` calls out, through `gh`.
+- **Network services.** Nothing listens on a port. Only live `merge-gate` (through `gh`) and `orch update check` (one request to the npm registry, when you type it) call out.
 - **Windows.** Workers rely on POSIX process groups and signals.

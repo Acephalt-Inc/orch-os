@@ -3,14 +3,14 @@
 // leads to one guide file inside the package.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as C from "../src/config.js";
 import * as D from "../src/detect.js";
 import { parseToml } from "../src/toml.js";
-import { DIST_CLI, fakeBin, keepEnv, ROOT, run, testPath, tmp, useTmpHome } from "./_helpers.js";
-import { candidate, pack } from "./_pack.js";
+import { DIST_CLI, fakeBin, keepEnv, ROOT, run, testPath, tmp, useTmpHome, WINDOWS } from "./_helpers.js";
+import { candidate, npmCommand, pack } from "./_pack.js";
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const GUIDE = "docs/INSTALL-WITH-AGENT.md";
@@ -158,7 +158,7 @@ function steps(group: string): { command: string; text: string }[] {
 const STEP_KINDS: Record<"macOS" | "Windows 11", [string, RegExp][]> = {
   macOS: [
     ["node", /^node --version$/],
-    ["installed", /^npm ls --global --depth=0$/],
+    ["installed", /^ls -d "\$\(npm root --global\)\/orch-os"$/],
     ["on-path", /^command -v orch$/],
     ["home", /^ls -d "\$\{ORCH_HOME:-\$HOME\/\.orch\}"$/],
     ["install", /^npm install --global orch-os@\S+$/],
@@ -168,7 +168,7 @@ const STEP_KINDS: Record<"macOS" | "Windows 11", [string, RegExp][]> = {
   ],
   "Windows 11": [
     ["node", /^node --version$/],
-    ["installed", /^npm\.cmd ls --global --depth=0$/],
+    ["installed", /^Test-Path -LiteralPath \(Join-Path \(npm\.cmd root --global\) 'orch-os'\)$/],
     ["on-path", /^Get-Command orch -ErrorAction SilentlyContinue$/],
     ["home", /^Test-Path -LiteralPath \$\(if \(\$env:ORCH_HOME\) \{ \$env:ORCH_HOME \} elseif \(\$env:HOME\) \{ Join-Path \$env:HOME '\.orch' \} else \{ Join-Path \$env:USERPROFILE '\.orch' \}\)$/],
     ["install", /^npm\.cmd install --global orch-os@\S+$/],
@@ -179,6 +179,31 @@ const STEP_KINDS: Record<"macOS" | "Windows 11", [string, RegExp][]> = {
 };
 const kindOf = (group: "macOS" | "Windows 11", command: string) => STEP_KINDS[group].find(([, re]) => re.test(command))?.[0] ?? `unrecognised: ${command}`;
 const guideText = () => (existsSync(join(ROOT, GUIDE)) ? read(GUIDE) : "");
+/** Every text in backticks, in order. */
+const spans = (text: string) => [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+
+const NODE_MISSING = "`node` is not found.";
+const NODE_OLDER = `\`node --version\` prints a version lower than \`v${FLOOR}\`.`;
+const NOT_RUN_LABEL = "**Not run by the authors.** The install command below has not been run by the authors of this guide. What it installs, and every result this case names after it, is unverified until the user's machine shows it.";
+const NODEJS_DOWNLOAD = "https://nodejs.org/en/download";
+/** Per group: the command that looks for the installer, the install command, and the command that prints where `node` is. */
+const NODE_COMMANDS: Record<"macOS" | "Windows 11", { find: string; install: string; where: string }> = {
+  macOS: { find: "command -v brew", install: "brew install node", where: "command -v node" },
+  "Windows 11": { find: "Get-Command winget -ErrorAction SilentlyContinue", install: "winget install --id OpenJS.NodeJS.LTS --exact --source winget", where: "(Get-Command node).Source" },
+};
+/** A command that raises privilege, forces, or changes PATH or a shell startup file. */
+const RISKY = /\bsudo\b|\brunas\b|--force\b|-Force\b|\bPATH\s*=|\$env:PATH\b|\bsetx\b|SetEnvironmentVariable|\.(?:zshrc|zprofile|zshenv|bashrc|bash_profile|profile)\b|\$PROFILE\b/i;
+
+/** The first step of a group with its indented lines, and the text of each case under it by title. */
+function nodeStep(group: string): { block: string; cases: Record<string, string> } {
+  const block = /^1\. .*\n(?: .*\n)*/m.exec(group)?.[0] ?? "";
+  const cases: Record<string, string> = {};
+  for (const part of block.split(/^ {3}- \*\*/m).slice(1)) {
+    const end = part.indexOf("**");
+    cases[part.slice(0, end)] = part.slice(end + 2);
+  }
+  return { block, cases };
+}
 
 describe("InstallEntry", () => {
   it("each_readme_has_one_paste_sentence_that_names_the_guide", () => {
@@ -211,14 +236,56 @@ describe("InstallEntry", () => {
     }
   });
 
+  // The macOS group's already-installed check, run as the guide writes it against real npm prefixes. Each prefix
+  // is a new directory under the system temporary directory; npm reads no user config and uses no network.
+  it.skipIf(WINDOWS)("guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one", () => {
+    const check = steps(section(guideText(), "macOS"))[1]?.command ?? "";
+    expect(check.length > 0, "the macOS group has a second step").toBe(true);
+    const dirs: string[] = [];
+    try {
+      const copy = candidate(dirs);
+      const tarball = pack(copy);
+      const prefixed = (prefix: string) => ({ cwd: copy.dir, env: { ...copy.env, NPM_CONFIG_PREFIX: prefix }, encoding: "utf8" as const, timeout: 30_000 });
+      const install = (prefix: string, what: string) => {
+        const r = spawnSync(npmCommand, ["install", "--global", "--install-links", what], prefixed(prefix));
+        expect(r.status, `npm install --global ${what}\n${r.stdout}\n${r.stderr}`).toBe(0);
+      };
+      /** What the step's command says about one prefix, in the words of the step. */
+      const answer = (prefix: string): string => {
+        const r = spawnSync("/bin/sh", ["-c", check], prefixed(prefix));
+        const out = `${r.stdout}${r.stderr}`;
+        if (/^npm error/m.test(out)) return `${out.split("\n")[0]} (exit ${r.status})`;
+        if (r.status === 0 && r.stdout.trim().endsWith("/node_modules/orch-os")) return "installed";
+        if (r.status !== 0 && r.stdout === "" && /\/node_modules\/orch-os'?: No such file or directory\n$/.test(r.stderr)) return "not installed";
+        return `no answer (exit ${r.status}): ${out}`;
+      };
+      const [fresh, used, installed] = ["fresh", "used", "installed"].map((name) => join(copy.dir, `prefix-${name}`));
+      mkdirSync(fresh);
+      expect(answer(fresh), "prefix with no lib directory: answer of the already-installed check").toBe("not installed");
+      expect(readdirSync(fresh), "prefix with no lib directory: entries after the check").toEqual([]);
+      const other = join(copy.dir, "other-global-package");
+      mkdirSync(other);
+      writeFileSync(join(other, "package.json"), JSON.stringify({ name: "other-global-package", version: "1.0.0" }));
+      install(used, other);
+      expect(readdirSync(join(used, "lib", "node_modules")), "prefix with another global package: its packages").toEqual(["other-global-package"]);
+      expect(answer(used), "prefix with another global package: answer of the already-installed check").toBe("not installed");
+      install(installed, tarball);
+      expect(readdirSync(join(installed, "lib", "node_modules")), "prefix with orch-os installed: its packages").toEqual(["orch-os"]);
+      expect(answer(installed), "prefix with orch-os installed: answer of the already-installed check").toBe("installed");
+    } finally {
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("guide_install_commands_pin_the_package_version", () => {
     const guide = guideText();
     expect(guide.length > 0, `${GUIDE} exists`).toBe(true);
-    // every command of a package manager in the guide: two listings and two pinned installs, nothing else
-    const commands = [...guide.matchAll(/`((?:npm|npx|pnpm|yarn|bun)(?:\.cmd)?\b[^`]*)`/g)].map((m) => m[1]);
+    // every command in the guide that names a package manager, per group: the lookup of the Node.js installer and
+    // its install command, the already-installed check, and the pinned install; nothing else
+    const commands = spans(guide).filter((c) => /\b(?:npm|npx|pnpm|yarn|bun|brew|winget|choco|scoop|nvm|fnm|volta)(?:\.cmd)?\b/.test(c));
     expect(commands, "package-manager commands in the guide").toEqual([
-      "npm ls --global --depth=0", `npm install --global orch-os@${pkg.version}`,
-      "npm.cmd ls --global --depth=0", `npm.cmd install --global orch-os@${pkg.version}`,
+      NODE_COMMANDS.macOS.find, NODE_COMMANDS.macOS.install, 'ls -d "$(npm root --global)/orch-os"', `npm install --global orch-os@${pkg.version}`,
+      NODE_COMMANDS["Windows 11"].find, NODE_COMMANDS["Windows 11"].install, "Test-Path -LiteralPath (Join-Path (npm.cmd root --global) 'orch-os')", `npm.cmd install --global orch-os@${pkg.version}`,
     ]);
     const versions = [...guide.matchAll(/\borch-os@([^\s`'"]*)/g)].map((m) => m[1]);
     expect([...new Set(versions)], "every orch-os@VERSION spec in the guide").toEqual([pkg.version]);
@@ -245,6 +312,37 @@ describe("InstallEntry", () => {
     // one program name per group: npm and orch on macOS, npm.cmd and orch.cmd on Windows 11
     expect(/\b(?:npm|orch)\.cmd\b/.test(section(guide, "macOS")), "macOS group uses a .cmd program").toBe(false);
     expect(steps(section(guide, "Windows 11")).filter((s) => /^(?:npm|orch) /.test(s.command)), "Windows 11 steps that do not use the .cmd program").toEqual([]);
+  });
+
+  // Step 1 of each group: a missing Node.js may be installed, with a command labelled as not run by the authors;
+  // a Node.js that is there and older than the floor gets no install, replacement or upgrade.
+  it("guide_node_step_installs_a_missing_node_and_changes_no_older_one", () => {
+    const guide = guideText();
+    expect(guide.length > 0, `${GUIDE} exists`).toBe(true);
+    for (const group of ["macOS", "Windows 11"] as const) {
+      const text = section(guide, group);
+      const { find, install, where } = NODE_COMMANDS[group];
+      expect(spans(text).filter((c) => RISKY.test(c)), `${group}: commands that add sudo, --force or a PATH edit`).toEqual([]);
+      const { block, cases } = nodeStep(text);
+      expect(block.split("\n")[0], `${group}: step 1 names the floor of package.json`).toContain(`\`node --version\` must print \`v${FLOOR}\` or a higher major version.`);
+      expect(Object.keys(cases), `${group}: cases of step 1`).toEqual([NODE_MISSING, NODE_OLDER]);
+      const older = cases[NODE_OLDER] ?? "";
+      expect(older.startsWith(" Do not install, replace or upgrade anything. "), `${group}: the older-Node case opens by ruling out an install, a replacement and an upgrade`).toBe(true);
+      expect(spans(older), `${group}: commands in the older-Node case`).toEqual([where]);
+      expect(older.match(/\b(?:brew|winget|npm|npx|nvm|fnm|volta|choco|scoop|installer|homebrew)\b/gi), `${group}: installers named in the older-Node case`).toBeNull();
+      expect(older, `${group}: the older-Node case says other software may depend on that Node.js`).toContain("other software on this machine may depend on this Node.js");
+      expect(/\bThen stop, and give the user two choices: upgrade this Node\.js themselves, or set up a separate Node\.js \d+ or newer\./.test(older), `${group}: the older-Node case stops with the two choices`).toBe(true);
+      const missing = cases[NODE_MISSING] ?? "";
+      expect(missing.split(NOT_RUN_LABEL).length - 1, `${group}: the missing-Node case carries the not-run-by-the-authors label once`).toBe(1);
+      expect(missing.indexOf(NOT_RUN_LABEL) < missing.indexOf(`\`${install}\``), `${group}: the label comes before the install command`).toBe(true);
+      expect(spans(missing), `${group}: commands and outputs in the missing-Node case`).toEqual([find, install, "node --version", `v${FLOOR}`, "node", "PATH"]);
+      expect(missing.split(NODEJS_DOWNLOAD).length - 1, `${group}: the missing-Node case names the Node.js download page once`).toBe(1);
+      expect(/process and run `node --version` in it\./.test(missing), `${group}: the missing-Node case checks node again in a new process`).toBe(true);
+      expect(missing, `${group}: the missing-Node case rules out a PATH edit`).toContain("Do not edit `PATH` or any startup file of the shell.");
+      expect(missing.match(/\bstop\b/g)?.length, `${group}: stops in the missing-Node case`).toBe(3);
+    }
+    // one label in each group and none anywhere else
+    expect(guide.split(NOT_RUN_LABEL).length - 1, "not-run-by-the-authors labels in the guide").toBe(2);
   });
 
   it("guide_labels_every_windows_step_unverified", () => {
