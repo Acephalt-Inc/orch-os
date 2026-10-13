@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawnSync } from "node:child_process";
-import { existsSync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, test } from "vitest";
@@ -40,7 +40,7 @@ function crash(env: NodeJS.ProcessEnv, workspace: string, revision: number, poin
 }
 
 /** The built command run in a real process with a seam in which removing the writer lock fails. */
-function lockStays(env: NodeJS.ProcessEnv, when: "after-rename" | "always", args: string[], input?: string) {
+function faultCommand(env: NodeJS.ProcessEnv, when: "after-rename" | "always" | "folder-flush", args: string[], input?: string) {
   const fixture = resolve("tests/fixtures/resume/seam-command.mjs");
   return spawnSync(process.execPath, [fixture, resolve("dist/resume/command.js"), when, ...args], { input, encoding: "utf8", timeout: 30000, env });
 }
@@ -57,6 +57,7 @@ const forget = (workspace: string, revision: number) => ["forget", "--workspace"
 const OLD = "old-objective-7f3a", NEW = "new-objective-c41e", LATER = "later-objective-99b2";
 const LOCK_HELD = "a save or forget is still running or was interrupted; when none is running, remove the write.lock folder in this workspace's folder under .orch-private/resume-v1 and retry";
 const LOCK_LEFT = "the change was written, but the write.lock folder could not be removed; when no save or forget is running, remove the write.lock folder in this workspace's folder under .orch-private/resume-v1 before the next save or forget";
+const DIRECTORY_NOT_FLUSHED = "the change was written, but the note storage folder could not be flushed; verify the saved note before retrying";
 
 /** Save OLD at revision 1, then start a save of NEW that is killed at `point`. */
 function interrupted(point: WritePoint) {
@@ -138,6 +139,24 @@ describe("crash boundaries preserve acknowledged state or report unavailable", (
     expect(readdirSync(stateDirectory(home))).toEqual([]);
   });
 
+  it("an existing storage folder owned by another uid is refused without changing it", () => {
+    const { home, workspace } = setupInProcess();
+    const root = join(home, ".orch-private");
+    mkdirSync(root, { mode: 0o700 });
+    const before = { mode: statSync(root).mode, entries: readdirSync(root) };
+    expect(() => write(workspace, 0, noteOf("goal"), { uid: process.getuid!() + 1 })).toThrow("unsafe storage directory");
+    expect({ mode: statSync(root).mode, entries: readdirSync(root) }).toEqual(before);
+  });
+
+  it("an existing storage folder accessible to a group is refused without changing it", () => {
+    const { home, workspace } = setupInProcess();
+    const root = join(home, ".orch-private");
+    mkdirSync(root, { mode: 0o750 });
+    const before = { mode: statSync(root).mode, entries: readdirSync(root) };
+    expect(() => write(workspace, 0, noteOf("goal"))).toThrow("storage directory is not private");
+    expect({ mode: statSync(root).mode, entries: readdirSync(root) }).toEqual(before);
+  });
+
   it("a platform that cannot sync a directory still acknowledges the write it made", () => {
     const { home, workspace } = setupInProcess();
     const refuse = () => { throw Object.assign(new Error("a directory cannot be opened here"), { code: "EPERM" }); };
@@ -198,7 +217,7 @@ describe("stale lock and corrupt state are not silently recovered", () => {
 describe("a writer lock that cannot be removed", () => {
   it("a save that was written is reported as written, the left-over lock is named, and the next write is refused", () => {
     const { home, env, workspace } = setup();
-    const result = lockStays(env, "after-rename", save(workspace, 0), JSON.stringify(noteOf(OLD)));
+    const result = faultCommand(env, "after-rename", save(workspace, 0), JSON.stringify(noteOf(OLD)));
     // The write happened, so the command says so: status 0 and the record's identity on standard output.
     expect(result.status).toBe(0);
     const saved = JSON.parse(result.stdout);
@@ -228,7 +247,7 @@ describe("a writer lock that cannot be removed", () => {
   it("a forget that was written is reported as written with the same warning", () => {
     const { home, env, workspace } = setup();
     expect(run(env, save(workspace, 0), JSON.stringify(noteOf(OLD))).status).toBe(0);
-    const result = lockStays(env, "after-rename", forget(workspace, 1));
+    const result = faultCommand(env, "after-rename", forget(workspace, 1));
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ status: "forgotten", id: expect.stringMatching(/^[0-9a-f-]{36}$/), revision: 2 });
     expect(result.stderr).toBe(`${JSON.stringify({ status: "warning", message: LOCK_LEFT })}\n`);
@@ -243,11 +262,23 @@ describe("a writer lock that cannot be removed", () => {
     expect(run(env, save(workspace, 0), JSON.stringify(noteOf(OLD))).status).toBe(0);
     const directory = stateDirectory(home);
     const bytes = readFileSync(join(directory, "state.json"));
-    const result = lockStays(env, "always", save(workspace, 0), JSON.stringify(noteOf(NEW)));
+    const result = faultCommand(env, "always", save(workspace, 0), JSON.stringify(noteOf(NEW)));
     expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({ status: 3, stdout: "", stderr: `${JSON.stringify({ status: "conflict", message: "revision conflict" })}\n` });
     expect(readFileSync(join(directory, "state.json"))).toEqual(bytes);
     expect(readdirSync(directory).sort()).toEqual(["state.json", "write.lock"]);
   });
+});
+
+test("a folder flush failure after rename is a warning and revisions continue from the written record", () => {
+  const { home, env, workspace } = setup();
+  const first = faultCommand(env, "folder-flush", save(workspace, 0), JSON.stringify(noteOf(OLD)));
+  expect(first.status).toBe(0);
+  expect(JSON.parse(first.stdout)).toMatchObject({ status: "saved", revision: 1 });
+  expect(first.stderr).toBe(`${JSON.stringify({ status: "warning", message: DIRECTORY_NOT_FLUSHED })}\n`);
+  const written = JSON.parse(readFileSync(join(stateDirectory(home), "state.json"), "utf8"));
+  expect(written).toMatchObject({ revision: 1, note: noteOf(OLD) });
+  expect(run(env, save(workspace, 0), JSON.stringify(noteOf(LATER))).status).toBe(3);
+  expect(run(env, save(workspace, 1), JSON.stringify(noteOf(LATER))).status).toBe(0);
 });
 
 test("oversized invalid input is rejected without a write", () => {

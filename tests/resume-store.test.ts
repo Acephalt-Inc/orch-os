@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, test } from "vitest";
+import { show } from "../src/resume/store.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -254,9 +255,8 @@ describe("native roots links and workspace identities stay distinct", () => {
 
     for (const [name, args, input] of commands(workspace, 1)) {
       const result = traced(base, env, args, input);
-      // The record's own entry was looked at without following it; nothing opened it, and nothing named the file outside.
-      expect(result.calls).toContainEqual({ op: "lstatSync", paths: [state] });
-      expect(through(result.calls, state)).toEqual([]);
+      // The record's own entry was opened without following it and checked through that descriptor.
+      expect(result.calls).toContainEqual({ op: "openSync", paths: [state] });
       expect(through(result.calls, outside)).toEqual([]);
       expect({ name, status: result.status, stdout: result.stdout, stderr: result.stderr })
         .toEqual({ name, status: 4, stdout: "", stderr: `${JSON.stringify({ status: "unavailable", message: "unsafe state file" })}\n` });
@@ -275,4 +275,37 @@ test("forget removes body and old revision cannot resurrect it", () => {
   expect(readdirSync(directory)).toEqual(["state.json"]);
   expect(readFileSync(join(directory, "state.json"), "utf8")).not.toContain("goal");
   expect(JSON.parse(run(env, ["show", "--workspace", workspace]).stdout)).toEqual({ status: "absent", revision: 2 });
+});
+
+test.runIf(process.platform !== "win32")("a record replaced by a link immediately before open is refused without reading its target", () => {
+  const { home, env, workspace } = setup();
+  expect(run(env, save(workspace, 0), note).status).toBe(0);
+  const state = join(stateDirectory(home), "state.json");
+  const outside = join(home, "outside.json");
+  const outsideRecord = {
+    schema: 1,
+    id: "00000000-0000-4000-8000-000000000000",
+    revision: 77,
+    saved_at: new Date().toISOString(),
+    note: noteOf(CANARY),
+  };
+  writeFileSync(outside, `${JSON.stringify(outsideRecord)}\n`);
+  const outsideBefore = readFileSync(outside);
+  const oldHome = process.env.HOME;
+  const oldProfile = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  try {
+    expect(() => show(workspace, { beforeRecordOpen: (path) => {
+      expect(path).toBe(state);
+      rmSync(state);
+      symlinkSync(outside, state);
+    } })).toThrow("unsafe state file");
+  } finally {
+    if (oldHome === undefined) delete process.env.HOME;
+    else process.env.HOME = oldHome;
+    if (oldProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = oldProfile;
+  }
+  expect(readFileSync(outside)).toEqual(outsideBefore);
 });

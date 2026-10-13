@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { parse, HelpRequested, UsageError, type CmdSpec } from "../args.js";
 import { MAX_INPUT_BYTES, parseNote, ResumeError } from "./schema.js";
-import { LOCK_LEFT, show, write, type WriteSeam } from "./store.js";
+import { DIRECTORY_NOT_FLUSHED, LOCK_LEFT, show, write, type WriteSeam } from "./store.js";
 
 const common = [{ dest: "workspace", flags: ["--workspace"], kind: "str" as const, help: "Workspace path", metavar: "PATH" }];
 const expected = { dest: "expected_revision", flags: ["--expected-revision"], kind: "int" as const, help: "Expected current revision", metavar: "N" };
@@ -73,9 +73,10 @@ export async function main(argv = process.argv.slice(2), seam?: WriteSeam): Prom
     if (!Number.isSafeInteger(revision) || revision < 0) throw new UsageError("argument --expected-revision: expected a non-negative integer", "usage: resume");
     // The note is read and checked before the store is touched: a refused input creates nothing.
     const note = action === "save" ? parseNote(await readInput()) : undefined;
-    const { record, lockReleased } = write(workspace, revision, note, seam);
+    const { record, directoryFlushed, lockReleased } = write(workspace, revision, note, seam);
     process.stdout.write(`${JSON.stringify({ status: action === "save" ? "saved" : "forgotten", id: record.id, revision: record.revision })}\n`);
-    // The write was made and is reported as made. A lock that could not be removed is named separately.
+    // The write was made and is reported as made. Later durability and cleanup failures are warnings.
+    if (!directoryFlushed) process.stderr.write(`${JSON.stringify({ status: "warning", message: DIRECTORY_NOT_FLUSHED })}\n`);
     if (!lockReleased) process.stderr.write(`${JSON.stringify({ status: "warning", message: LOCK_LEFT })}\n`);
     return 0;
   } catch (error) {

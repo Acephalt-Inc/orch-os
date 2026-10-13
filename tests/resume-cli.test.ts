@@ -8,6 +8,13 @@ import { afterEach, expect, test } from "vitest";
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
+test("documentation states the storage-folder replacement boundary exactly", () => {
+  const documentation = readFileSync("docs/resume.md", "utf8");
+  const boundary = "A program that can replace a note storage folder between the last safety check and a filesystem operation is not defended against. "
+    + "Such a replacement can redirect that operation outside the note storage folder.";
+  expect(documentation).toContain(boundary);
+});
+
 function setup() {
   const home = mkdtempSync(join(realpathSync(tmpdir()), "resume-cli-"));
   homes.push(home);
