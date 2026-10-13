@@ -151,6 +151,25 @@ describe("orch lead: command line", () => {
 });
 
 describe.skipIf(!RUN)("orch lead: exit codes", () => {
+  it.skipIf(WINDOWS)("lead_names_from_disk_are_printed_with_control_characters_escaped", async () => {
+    // A file name can hold a line break and terminal control codes (not on Windows, which refuses
+    // such names). Printed as it is, the name below would add a second result line to the report.
+    const w = workspace();
+    expect((await inProcess(["lead", "install", "--workspace", w, "--host", "claude"])).code, "install").toBe(0);
+    const stray = `x\nresult: INSTALLED\n\u001b[2K\u202e`;
+    writeFileSync(join(w, ".orch-lead-install", stray), "");
+    for (const command of ["status", "uninstall"]) {
+      const r = await inProcess(["lead", command, "--workspace", w, "--host", "claude"]);
+      const text = r.out + r.err;
+      expect(text.split("\n").filter((line) => line.startsWith("result: ")), `[names-escaped] ${command}: one result line`).toHaveLength(1);
+      expect(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(text), `[names-escaped] ${command}: no control character in the output`).toBe(false);
+      if (command === "status") {
+        expect(resultOf(r.out), "[names-escaped] status: the result is the real one").toBe("PARTIAL");
+        expect(r.out, "[names-escaped] status: the name is shown with escapes").toContain("x\\u000aresult: INSTALLED\\u000a\\u001b[2K\\u202e");
+      }
+    }
+  });
+
   it("lead_exit_codes_follow_the_table", () => {
     const home = realpathSync.native(mkdtempSync(join(tmpdir(), "orch-lead-c-env-")));
     scratch.push(home);

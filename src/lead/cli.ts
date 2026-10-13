@@ -104,8 +104,18 @@ export const LEAD_TEXT = {
   fileError: "file-system error {code} at {path}",
 } as const;
 
+/**
+ * A value as it is placed into an output line. These characters are written as `\uNNNN`:
+ * U+0000 to U+001F (a line break and the escape character are among them), U+007F to U+009F, the
+ * line and paragraph separators U+2028 and U+2029, and the direction characters U+202A to U+202E
+ * and U+2066 to U+2069. A file name read from the disk can contain them.
+ */
+function printable(value: string | number): string {
+  return String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function fill(template: string, values: Record<string, string | number> = {}): string {
-  return template.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? ""));
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => printable(values[name] ?? ""));
 }
 
 export interface LeadDeps {
@@ -236,7 +246,7 @@ export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<numb
       }
     }
     if (e instanceof UsageError) {
-      err(`${e.usage}\norch lead: error: ${e.message}\n`);
+      err(`${e.usage}\norch lead: error: ${printable(e.message)}\n`);
       return 1;
     }
     throw e;
