@@ -18,6 +18,8 @@ Library errors contain a fixed code and fixed message with no input interpolatio
 
 Each entry accepts an optional trailing test seam — an object of functions (platform, uid, clock, UUID, low-level open/read flags and faults) in the pattern of `src/preferences/store.ts:27–35`; it cannot be expressed from arguments, environment or stdin (K1.03/12). Zero-call assertions run the built library in a child with an `--import` trace preload (pattern `tests/preferences-store.test.ts:49–55`); K1.12 adds a preload hooking `child_process`, `net`, `http`, `https`, `dns`, `worker_threads`. These hooks, together with filesystem tracing, observe the inert-input assertion.
 
+A seam function stands in for the native operation it replaces: it returns that operation's value, rejects or throws an ordinary error, or throws a pristine library error; the fixed-error and DEADLINE promises are stated for those seam behaviours, and other seam behaviours are outside this contract.
+
 Upper production estimate: 180 TypeScript lines across binding.ts, privacy.ts, errors.ts and limits.ts. Stop 9 triggers above 225 lines. This is a planning allocation, not a measurement or permission to compress source. The sibling estimate is 160; combined estimates are 340 and the combined stop-9 threshold is 425. Count each owned production file once and include all its physical lines, including comments and blanks; exclude tests, fixtures, docs and generated output. No automatic borrowing, new file or enlarged allowance is authorized; an allocation change needs dispatcher refreezing before further work.
 
 | Row | Setup → real entry → required observation | Witness test |

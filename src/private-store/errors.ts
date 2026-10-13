@@ -11,8 +11,12 @@ export function errno(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
 }
 export function normalize(error: unknown): PrivateStoreError {
-  if (error instanceof PrivateStoreError) return error;
-  return new PrivateStoreError(["ELOOP", "ENOTDIR", "EISDIR"].includes(errno(error) ?? "") ? "UNSAFE_PATH" : "IO_UNAVAILABLE");
+  try {
+    if (error instanceof PrivateStoreError) return new PrivateStoreError(error.code);
+    return new PrivateStoreError(["ELOOP", "ENOTDIR", "EISDIR"].includes(errno(error) ?? "") ? "UNSAFE_PATH" : "IO_UNAVAILABLE");
+  } catch {
+    return new PrivateStoreError("IO_UNAVAILABLE");
+  }
 }
 export async function guarded<T>(action: () => Promise<T>): Promise<T> {
   try {

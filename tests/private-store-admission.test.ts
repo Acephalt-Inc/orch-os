@@ -137,6 +137,10 @@ it("outside_values_cannot_select_store_authority", () => {
   const { result, calls, home } = run("authority");
   // K1.03
   fixedFailure(result.rawSeam, "IO_UNAVAILABLE");
+  expect.soft(result.augmentedSeam, "augmented-seam").toEqual({
+    code: "IO_UNAVAILABLE", message: "private storage request refused", same: false });
+  expect.soft(result.accessorSeam, "accessor-seam").toEqual({
+    code: "IO_UNAVAILABLE", message: "private storage request refused" });
   for (const value of result.cases.slice(0, 16)) fixedFailure(value, "BAD_BINDING");
   for (const value of result.cases.slice(16, -1)) fixedFailure(value, "BAD_INPUT");
   fixedFailure(result.cases.at(-1), "DEADLINE");
@@ -262,6 +266,8 @@ it("late_admission_cannot_start_next_io", () => {
   // K1.10
   for (const entry of result.lateCloses) {
     expect.soft(entry.result, "late-" + entry.operation).toEqual({ code: "DEADLINE", message: "private storage request refused" });
+    if (entry.closeCalls !== undefined) expect.soft(entry.closeCalls, entry.operation).toBe(1);
+    if (entry.closeCalls !== undefined) continue;
     const phase = calls.filter((call) => call.label === "late-" + entry.operation);
     const closed = phase.find((call) => call.op === "seam.close" && call.event === "complete")!;
     expect(submissions(phase).filter((call) => call.at > closed.at)).toEqual([]);

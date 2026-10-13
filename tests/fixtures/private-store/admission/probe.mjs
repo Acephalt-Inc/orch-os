@@ -5,6 +5,7 @@ import { chmod, link, lstat, mkdir, open, realpath, rename, rm, statfs, symlink,
 import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { once } from "node:events";
+import { PrivateStoreError } from "../../../../dist/private-store/errors.js";
 import { bindWorkspace, partitionPaths } from "../../../../dist/private-store/binding.js";
 import { inspectPartition, preparePartition, openPrivateFile, readBounded } from "../../../../dist/private-store/privacy.js";
 const [workspace, scenario = "binding"] = process.argv.slice(2);
@@ -12,7 +13,7 @@ const home = await realpath(process.env.HOME);
 const setPhase = globalThis[Symbol.for("admission.trace")] ?? (() => {});
 const observed = globalThis[Symbol.for("admission.await")] ?? ((_name, action) => action());
 const nextBudget = () => performance.now() + 5_000;
-async function call(label, action, deadline = nextBudget(), clock) {
+async function call(label, action, deadline = nextBudget(), clock, original) {
   setPhase(label, deadline, clock);
   try {
     const value = await action(deadline);
@@ -22,7 +23,8 @@ async function call(label, action, deadline = nextBudget(), clock) {
     }
     return { value };
   } catch (error) {
-    return { code: error.code, message: error.message, cause: error.cause };
+    return { code: error.code, message: error.message, cause: error.cause, path: error.path,
+      ...(original ? { same: error === original } : {}) };
   } finally {
     setPhase();
   }
@@ -139,10 +141,17 @@ async function authorityCases() {
   }
   cases.push(await call("expired-budget", () => inspectPartition(binding, performance.now() - 1)));
   const rawSeam = await call("raw-seam", () => partitionPaths(binding, { platform: () => {
-    throw Object.assign(new Error("/tmp/review-path"), { cause: new Error("raw cause") });
+    throw Object.assign(new Error("/tmp/review-path"), { cause: new Error("raw cause"), path: "/tmp/review-path" });
+  } }));
+  const augmented = Object.assign(new PrivateStoreError("IO_UNAVAILABLE"), { cause: new Error("raw cause") });
+  const augmentedSeam = await call("augmented-seam", () => partitionPaths(binding, { platform: () => {
+    throw augmented;
+  } }), nextBudget(), undefined, augmented);
+  const accessorSeam = await call("accessor-seam", () => partitionPaths(binding, { platform: () => {
+    throw { get code() { throw Object.assign(new Error("/tmp/review-path"), { cause: new Error("raw cause") }); } };
   } }));
   const paths = await call("fixed-paths", () => partitionPaths(binding));
-  return { cases, paths, rawSeam, privateInventory: inventory(folders[0]) };
+  return { cases, paths, rawSeam, augmentedSeam, accessorSeam, privateInventory: inventory(folders[0]) };
 }
 async function prepareCases() {
   const binding = await bind();
@@ -432,24 +441,35 @@ async function deadlineCases() {
     cases.push({ operation, result: await call("late-" + operation, action, 100, () => now) });
   }
   const lateCloses = [];
-  for (const operation of ["refusal-close", "directory-close-reject", "release-reject"]) {
-    await chmod(folders[0], operation === "refusal-close" ? 0o755 : 0o700);
+  for (const operation of ["refusal-close", "refusal-close-reject", "directory-close-reject", "release-reject",
+    "refusal-close-sync", "directory-close-sync", "release-sync"]) {
+    await chmod(folders[0], operation.startsWith("refusal-close") ? 0o755 : 0o700);
     let now = 0;
+    let closeCalls = 0;
+    let cleanup;
     const result = await call("late-" + operation, () => inspectPartition(binding, 100, {
       clock: () => now,
       open: async (...args) => observed("open", async () => {
         const handle = await open(...args);
         const close = handle.close.bind(handle);
-        handle.close = async () => observed("close", async () => {
+        if (operation.endsWith("-sync")) {
+          cleanup = close;
+          handle.close = () => {
+            closeCalls++;
+            now = 101;
+            throw Object.assign(new Error("close fault"), { code: "EIO" });
+          };
+        } else handle.close = async () => observed("close", async () => {
           await close();
           now = 101;
           if (operation !== "refusal-close") throw Object.assign(new Error("close fault"), { code: "EIO" });
         });
-        if (operation === "release-reject") now = 101;
+        if (operation.startsWith("release-")) now = 101;
         return handle;
       }),
     }), 100, () => now);
-    lateCloses.push({ operation, result });
+    await cleanup?.();
+    lateCloses.push({ operation, result, ...(operation.endsWith("-sync") ? { closeCalls } : {}) });
   }
   // The budget expires between two in-time operations; a second case rejects an operation late.
   let between = 0;
