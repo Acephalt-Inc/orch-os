@@ -44,7 +44,7 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 38 `skipIf` markers, 73 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with `skipIf(process.platform === "win32")` in the test file: 39 `skipIf` markers, 75 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
 
 | Test file | Skipped | Why |
 |---|---|---|
@@ -84,6 +84,7 @@ The `windows` CI job runs every test file. The tests below are skipped there, ea
 | `tests/doctor-install-entry.test.ts` | `guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one` | it runs the macOS group's already-installed check of the install guide |
 | `tests/doctor-install-entry.mutations.test.ts` | `mutation_guide_installed_check_restored_to_npm_ls` | it changes that macOS check and reruns the test above |
 | `tests/package-pack.test.ts` | `the publish step keeps a pre-release off the latest tag and stops when the version is unreadable` | it runs the bash text of the release job's publish step with stand-ins for `node` and `npm`; the release job runs on Linux |
+| `tests/learning-probe-attribution.test.ts` | all of `path shapes with a colon` (2): `W1 attributes top-level, dynamic-import, timer and getter reads to the program: %s` (one per shape) | the test makes a directory whose name contains a colon, which Windows does not allow |
 
 Five more tests run on Windows without their `orch review watch` or `orch worker start` part; everything else in them runs:
 

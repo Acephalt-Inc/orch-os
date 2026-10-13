@@ -105,7 +105,9 @@ void object.value;
     expect(record.runtime.env.filter((name) => CANARIES.includes(name)), "no canary variable is a runtime read").toEqual([]);
   };
   it.each(SHAPES)(W1, attributesReadsToTheProgram);
-  it.skipIf(process.platform === "win32").each(COLON_SHAPES)(W1, attributesReadsToTheProgram);
+  describe.skipIf(process.platform === "win32")("path shapes with a colon", () => {
+    it.each(COLON_SHAPES)(W1, attributesReadsToTheProgram);
+  });
 
   it("W2 known limit: a new Function timer callback without a program file on the stack records its environment read as runtime", () => {
     const { root, probe } = world();
