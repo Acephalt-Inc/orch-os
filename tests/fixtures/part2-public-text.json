@@ -5,14 +5,14 @@
   {
    "id": "docs/commands.md: which commands read the config file",
    "file": "docs/commands.md",
-   "text": "All commands except `update check` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`).",
-   "sha256": "45f7b4e63bd6c3c015aded617af56928c60151246a06f9a2a5a3349c31a0f51d"
+   "text": "All commands except `update check`, `resume`, `preference`, `knowledge` and `learning` read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`).",
+   "sha256": "2f7e60b2ae4c3af45b279a78a127840d7118d19cb76f0ad243cebff61342d1ee"
   },
   {
    "id": "docs/commands.md: shared exit codes",
    "file": "docs/commands.md",
-   "text": "Exit codes shared by all commands: `0` ok · `1` a \"no\" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).",
-   "sha256": "7dc23a8314c88bae49b047c8344eb8890b50e3a61395da97b255c7787fe86263"
+   "text": "Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a \"no\" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).",
+   "sha256": "f9f85c0143656eabb5921dfd395d3ba32eecbb85ba2aab850ff0f9ade27b9906"
   },
   {
    "id": "docs/commands.md: orch update check section",

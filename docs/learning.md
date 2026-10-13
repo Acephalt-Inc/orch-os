@@ -52,6 +52,6 @@ The output of `review` and `reject` contains the source events, notes included, 
 
 ## Limits
 
-The fixture in `tests/fixtures/learning` has fixed dates: its events are eligible from 2026-10-12T12:00:00.000Z until 2026-11-12T12:00:00.000Z, and the tests run it on a clock frozen at 2026-10-13T12:00:00.000Z.
+The test example has fixed dates: its events are eligible from 2026-10-12T12:00:00.000Z until 2026-11-12T12:00:00.000Z, and the tests run it on a clock frozen at 2026-10-13T12:00:00.000Z.
 The input deadline has been measured on macOS only; native Windows behaviour of the command is not verified.
 The module guarantees inspectable draft processing, not natural-language correctness, live-store freshness, authenticated authorship, private shell-redirection enforcement, or improved future behavior.

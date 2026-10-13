@@ -585,8 +585,15 @@ describe("UpdateCheckPackage", () => {
     const dist = join(out, "package", "dist");
     const update = readFileSync(join(dist, "update.js"), "utf8");
     const cli = readFileSync(join(dist, "cli.js"), "utf8");
+    const walkJs = (dir: string, prefix = ""): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      return entry.isDirectory() ? walkJs(join(dir, entry.name), name) : entry.isFile() && entry.name.endsWith(".js") ? [name] : [];
+    });
+    const compiled = walkJs(dist);
+    expect(compiled, "compiled JavaScript files walked below dist").toContain("cli.js");
+    expect(compiled.some((file) => file.includes("/")), "compiled JavaScript files walked below dist include a nested file").toBe(true);
     // no other module of the package can reach a network
-    for (const file of readdirSync(dist).filter((f) => f !== "update.js")) {
+    for (const file of compiled.filter((f) => f !== "update.js")) {
       expect(readFileSync(join(dist, file), "utf8").match(/node:(?:http2?|https|net|tls|dgram|dns)\b|["'](?:http2?|https|net|tls|dgram|dns)["']|\bfetch\s*\(|WebSocket|XMLHttpRequest|undici/g),
         `network modules or calls in dist/${file}`).toBeNull();
     }
@@ -603,7 +610,7 @@ describe("UpdateCheckPackage", () => {
     const handler = /^const cmdUpdateCheck = async \(a, io\) => \{\n([\s\S]*?)\n\};$/m.exec(cli)?.[1] ?? "";
     expect(handler, "the handler in dist/cli.js").toContain("await checkLatest(VERSION, a._updateUrl)");
     expect(handler.match(/\bprocess\b|\benv\b|\bC\.|Sync\(|spawn|setTimeout|setInterval/g), "environment, config, file, process or timer use in the handler").toBeNull();
-    for (const file of readdirSync(dist)) {
+    for (const file of compiled) {
       const text = readFileSync(join(dist, file), "utf8");
       expect(text.match(/ORCH_UPDATE|UPDATE_CHECK|update-check\.|update_check|npm_config_registry|registry\.npmjs\.org/gi) ?? [], `update switches, state files or registry addresses in dist/${file}`)
         .toEqual(file === "update.js" ? ["registry.npmjs.org"] : []);

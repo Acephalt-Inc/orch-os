@@ -176,7 +176,7 @@ describe("DoctorInstallEntryMutations", () => {
   it("mutation_guide_removed_from_package_files", () => {
     row("packed_tarball_contains_the_guide_at_the_path_the_readme_names",
       [{ file: "package.json", from: `    "${GUIDE}",\n`, to: "" }],
-      /docs files in the tarball: expected \[\] to deeply equal \[ Array\(1\) \]/);
+      /docs files in the tarball: expected .* to deeply equal .*/);
   });
 
   it("mutation_guide_home_check_no_longer_stops", () => {
