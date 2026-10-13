@@ -1,16 +1,16 @@
 # Private continuation notes
 
-The resume command is available after registration in the packaged command.
+`orch resume` is a command of the packaged `orch` program.
 
-`resume save --workspace PATH --expected-revision N` reads one JSON note from standard input.
+`orch resume save --workspace PATH --expected-revision N` reads one JSON note from standard input.
 
 Standard input has to be closed promptly: a save that has not received its whole note within two seconds saves nothing and exits with status 2.
 
 The note contains only `objective`, `next_step`, and `reported_progress` text fields.
 
-`resume show --workspace PATH` labels saved text as unverified caller text.
+`orch resume show --workspace PATH` labels saved text as unverified caller text.
 
-`resume forget --workspace PATH --expected-revision N` removes the note body and retains its revision marker.
+`orch resume forget --workspace PATH --expected-revision N` removes the note body and retains its revision marker.
 
 Notes are stored under the operating-system user's home in `.orch-private/resume-v1` and are not covered by the legacy backup flow.
 

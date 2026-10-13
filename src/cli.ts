@@ -1287,6 +1287,11 @@ export function buildTree(): CmdSpec<Run> {
               opt("reason", ["--reason"], "str", "one line: why it no longer holds")] },
         ],
       },
+      {
+        name: "resume", help: "a private continuation note for one workspace: save, show, forget (shown as unverified caller text)",
+        run: async (a) => (await import("./resume/command.js")).main(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
     ],
   };
 }
@@ -1306,6 +1311,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     println(io, `orch ${VERSION}`);
     return 0;
   }
+  // `resume` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "resume") argv = ["resume", "--", ...argv.slice(1)];
   const tree = buildTree();
   let parsed;
   try {

@@ -196,6 +196,7 @@ The commands above apply a few rules. Each row names the command that applies it
 - [Migration](docs/migration.md) — moving from v1.1 to v2.
 - [Test map](docs/tests-map.md) — correspondence between v1.1 and v2 tests.
 - [Demo](docs/DEMO.md) — a scripted offline walkthrough.
+- [Continuation notes](docs/resume.md) — `orch resume`: a private continuation note for one workspace (save, show, forget).
 
 ## License
 

@@ -323,6 +323,23 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 
 `update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
 
+## orch resume
+
+```text
+orch resume save --workspace PATH --expected-revision N
+orch resume show --workspace PATH
+orch resume forget --workspace PATH --expected-revision N
+```
+
+One private continuation note per workspace; `save` reads the note, one JSON object, from stdin. [resume.md](resume.md) describes the note, where it is stored and what is refused. `orch resume` does not load `config.toml`. It reads its own arguments: `orch resume --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Saved, shown or forgotten. `show` also exits 0 when there is no note |
+| `2` | Invalid arguments, an invalid note, or a note that did not arrive on stdin in time |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the note store cannot be used |
+
 ## Config keys
 
 | Key | Default | Meaning |
