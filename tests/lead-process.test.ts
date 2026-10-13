@@ -11,7 +11,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync,
+  appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync,
   unlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -611,6 +611,104 @@ describe.skipIf(!RUN)("orch lead: real processes", () => {
     expect.soft(result.stderr, "the reason is reported").toContain("nothing was created");
   });
 
+  it("lead_reserved_state_file_collision_stops_install", async () => {
+    const points = [
+      ["objects", "mkdirSync"], ["manifest.tmp", "openSync"], ["manifest.json", "linkSync"],
+      ["objects/00", "openSync"], ["directories.json", "openSync"], ["complete", "openSync"],
+    ];
+    for (const host of ["claude", "codex"] as Host[]) for (const [name, op] of points) {
+      const { w } = workspace();
+      const rel = `.orch-lead-install/${name}`;
+      const s = lead(["install", "--workspace", w, "--host", host], [
+        { op, match: rel, action: "block", name: "RESERVED" },
+      ]);
+      expect(await s.phase("RESERVED"), `${host}/${name}: reached the reserved creation`).toBe(true);
+      writeFileSync(at(w, rel), "foreign reserved file\n", { flag: "wx" });
+      const foreign = [idOf(at(w, rel)), hashOf(at(w, rel))];
+      const before = tree(w);
+      s.release();
+      s.child.stdin!.end();
+      const r = await s.done;
+      const word = ["objects", "manifest.tmp", "manifest.json"].includes(name) ? "UNVERIFIABLE_PREPARATION" : "PARTIAL";
+      expect.soft([r.code, resultOf(r.stdout), /^stopped at: .+ \(it already exists and was left unchanged\)$/m.test(r.stdout)],
+        `[reserved-file-stops] ${host}/${name}: collision stops install\n${r.stdout}${r.stderr}`).toEqual([2, word, true]);
+      expect.soft([idOf(at(w, rel)), hashOf(at(w, rel)), tree(w)],
+        `[reserved-file-stops] ${host}/${name}: foreign file preserved; nothing later created`).toEqual([...foreign, before]);
+    }
+  });
+
+  it("lead_reserved_collision_status_depends_on_manifest", async () => {
+    for (const host of ["claude", "codex"] as Host[]) for (const name of ["manifest.tmp", "objects/00"]) {
+      const { w } = workspace();
+      const rel = `.orch-lead-install/${name}`;
+      const args = ["--workspace", w, "--host", host];
+      const s = lead(["install", ...args], [{ op: "openSync", match: rel, action: "block", name: "COLLISION" }]);
+      expect(await s.phase("COLLISION"), `${host}/${name}: reached creation`).toBe(true);
+      writeFileSync(at(w, rel), "foreign file\n", { flag: "wx" });
+      s.release();
+      s.child.stdin!.end();
+      const install = await s.done;
+      const before = tree(w);
+      const manifestPresent = existsSync(at(w, ".orch-lead-install/manifest.json"));
+      const status = await run(["status", ...args]);
+      const word = name === "manifest.tmp" ? "UNVERIFIABLE_PREPARATION" : "PARTIAL";
+      expect.soft([install.code, resultOf(install.stdout), manifestPresent, status.code, resultOf(status.stdout), tree(w)],
+        `[collision-status-by-manifest] ${host}/${name}: status reads the collision residue\n${status.stdout}`)
+        .toEqual([2, word, name !== "manifest.tmp", 2, word, before]);
+      expect.soft(dests(host).filter((dest) => existsSync(at(w, dest))), "[collision-status-by-manifest] no payload was published").toEqual([]);
+    }
+  });
+
+  it("lead_unknown_state_name_does_not_stop_install", async () => {
+    for (const host of ["claude", "codex"] as Host[]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      const rel = ".orch-lead-install/foreign";
+      const s = lead(["install", ...args], [
+        { op: "mkdirSync", when: "after", match: ".orch-lead-install/objects", action: "block", name: "UNKNOWN" },
+      ]);
+      expect(await s.phase("UNKNOWN"), `${host}: state directories created`).toBe(true);
+      writeFileSync(at(w, rel), "unknown entry\n", { flag: "wx" });
+      const foreign = [idOf(at(w, rel)), hashOf(at(w, rel))];
+      s.release();
+      s.child.stdin!.end();
+      const install = await s.done;
+      const before = tree(w);
+      const status = await run(["status", ...args]);
+      expect.soft([install.code, resultOf(install.stdout), install.stdout.includes("files created: 20 of 20"),
+        /^stopped at:/m.test(install.stdout), existsSync(at(w, ".orch-lead-install/complete"))],
+        `[unknown-name-continues] ${host}: install finishes publication\n${install.stdout}`).toEqual([2, "PARTIAL", true, false, true]);
+      expect.soft([status.code, resultOf(status.stdout), status.stdout.includes(`unknown entry, not opened: ${at(w, rel)}`),
+        dests(host).map((dest) => rowStates(status.stdout, w)[dest]), idOf(at(w, rel)), hashOf(at(w, rel)), tree(w)],
+        `[unknown-name-continues] ${host}: status lists the unknown file and reads all payloads\n${status.stdout}`)
+        .toEqual([2, "PARTIAL", true, dests(host).map(() => "OWNED_MATCH"), ...foreign, before]);
+    }
+  });
+
+  it("lead_stopped_install_uninstall_can_retain_state_files", async () => {
+    for (const host of ["claude", "codex"] as Host[]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      const rel = ".orch-lead-install/manifest.tmp";
+      const s = lead(["install", ...args], [{ op: "openSync", match: rel, action: "block", name: "TMP" }]);
+      expect(await s.phase("TMP"), `${host}: temporary manifest not yet created`).toBe(true);
+      writeFileSync(at(w, rel), "foreign temporary file\n", { flag: "wx" });
+      const identity = idOf(at(w, rel));
+      s.release();
+      s.child.stdin!.end();
+      const install = await s.done;
+      const retained = ["dir .orch-lead-install", `file ${rel} ${sha("foreign temporary file\n")}`, "dir .orch-lead-install/objects"];
+      expect.soft([install.code, resultOf(install.stdout), tree(w), install.stdout.includes(FROZEN.cli_text.afterStop.text)],
+        `[stopped-state-files-retained] ${host}: this run's state directories remain after the stop`)
+        .toEqual([2, "UNVERIFIABLE_PREPARATION", retained, true]);
+      const uninstall = await run(["uninstall", ...args]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout), tree(w), idOf(at(w, rel)), describeMutations(uninstall)],
+        `[stopped-state-files-retained] ${host}: uninstall leaves the file for inspection\n${uninstall.stdout}`)
+        .toEqual([2, "UNVERIFIABLE_PREPARATION", retained, identity, []]);
+      expect.soft(uninstall.stdout, "[stopped-state-files-retained] the state directory to inspect is listed").toContain(at(w, ".orch-lead-install"));
+    }
+  });
+
   it("lead_second_process_wins_late_destination", async () => {
     const late = `${ROOT_OF.claude}/workflows/memory.md`;
     for (const kind of ["other bytes", "identical bytes"] as const) {
@@ -883,6 +981,104 @@ describe.skipIf(!RUN)("orch lead: reinstall, own directories, finished installs"
     .map((line) => /^ {2}dir left {8}(.+?) {2}\((.+)\)$/.exec(line)).filter((m) => m !== null).map((m) => [relOf(w, slash(m![1])), m![2]]));
   const rmdirs = (r: Result, w: string, ok: boolean) => r.trace.filter((ev) => ev.op === "rmdirSync" && (ev.code === "OK") === ok).map((ev) => relOf(w, ev.path));
   const STATE_DIRS = [".orch-lead-install", ".orch-lead-install/objects"];
+
+  it("lead_uninstall_removes_accepted_records_and_fixed_paths", async () => {
+    for (const host of ["claude", "codex"] as Host[]) {
+      const { base, w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      mkdirSync(at(w, "unrelated-empty"));
+      expect((await run(["install", ...args])).code, `${host}: install`).toBe(0);
+      const records = ["manifest.json", "directories.json", "complete"];
+      const manifest = readFileSync(at(w, ".orch-lead-install/manifest.json"));
+      expect(manifest.toString(), "accepted manifest bytes").toBe(manifestText(host, w, JSON.parse(manifest.toString()).pid));
+      expect(readFileSync(at(w, ".orch-lead-install/complete"), "utf8"), "accepted completion bytes")
+        .toBe(`{"schema":1,"manifest":"${sha(manifest)}","install":"complete"}\n`);
+      for (const name of records) {
+        const path = at(w, `.orch-lead-install/${name}`);
+        const bytes = readFileSync(path);
+        const identity = idOf(path);
+        renameSync(path, join(base, name));
+        writeFileSync(path, bytes, { flag: "wx" });
+        expect(idOf(path), `${name}: replacement has a different identity`).not.toBe(identity);
+      }
+      linkSync(at(w, ".orch-lead-install/manifest.json"), at(w, ".orch-lead-install/manifest.tmp"));
+      const uninstall = await run(["uninstall", ...args]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout), tree(w)],
+        `[accepted-records-fixed-paths] ${host}: payloads, anchors, accepted records and fixed empty directories go\n${uninstall.stdout}`)
+        .toEqual([0, "NOT_INSTALLED", ["dir unrelated-empty"]]);
+      const removedFiles = dests(host).map((dest) => `  removed         ${at(w, dest)}`);
+      const removedState = [...dests(host).map((dest) => anchorOf(host, dest)), ...records.map((name) => `.orch-lead-install/${name}`),
+        ".orch-lead-install/manifest.tmp", ".orch-lead-install/objects", ".orch-lead-install"].map((rel) => `  state removed   ${at(w, rel)}`);
+      expect.soft([...removedFiles, ...removedState].filter((line) => !uninstall.stdout.includes(line)),
+        "[accepted-records-fixed-paths] every removed payload, anchor and state path is listed").toEqual([]);
+      expect.soft(createdDirs(host).filter((rel) => !uninstall.stdout.includes(`  dir removed     ${at(w, rel)}`)),
+        "[accepted-records-fixed-paths] removal is limited to the fixed host and state layout").toEqual([]);
+    }
+  });
+
+  it("lead_recreated_state_directories_removed_only_when_cleanup_finishes", async () => {
+    for (const host of ["claude", "codex"] as Host[]) for (const name of [".orch-lead-install", ".orch-lead-install/objects"]) {
+      const { base, w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      expect((await run(["install", ...args])).code, `${host}: install`).toBe(0);
+      const path = at(w, name);
+      const original = idOf(path);
+      const parked = join(base, "parked");
+      renameSync(path, parked);
+      mkdirSync(path);
+      for (const entry of readdirSync(parked)) renameSync(join(parked, entry), join(path, entry));
+      const replacement = idOf(path);
+      expect(replacement, `${host}/${name}: recreated by another actor`).not.toBe(original);
+      const status = await run(["status", ...args]);
+      expect([status.code, resultOf(status.stdout)], "accepted manifest and records").toEqual([0, "INSTALLED"]);
+      const unknown = at(w, ".orch-lead-install/foreign");
+      writeFileSync(unknown, "block cleanup\n");
+      const blocked = await run(["uninstall", ...args]);
+      expect.soft([blocked.code, resultOf(blocked.stdout), idOf(path), existsSync(at(w, ".orch-lead-install/manifest.json"))],
+        `[recreated-state-cleanup-gated] ${host}/${name}: residue blocks state-directory removal`).toEqual([2, "PARTIAL", replacement, true]);
+      unlinkSync(unknown);
+      const finish = await run(["uninstall", ...args]);
+      expect.soft([finish.code, resultOf(finish.stdout), tree(w), rmdirs(finish, w, true)],
+        `[recreated-state-cleanup-gated] ${host}/${name}: clean finish removes both state directories by name\n${finish.stdout}`)
+        .toEqual([0, "NOT_INSTALLED", [], [".orch-lead-install/objects", ".orch-lead-install"]]);
+      const { w: empty } = workspace();
+      mkdirSync(at(empty, ".orch-lead-install/objects"), { recursive: true });
+      const residue = tree(empty);
+      const noManifest = await run(["uninstall", "--workspace", empty, "--host", host]);
+      expect.soft([noManifest.code, resultOf(noManifest.stdout), tree(empty), describeMutations(noManifest)],
+        "[recreated-state-cleanup-gated] empty directories alone do not authorize cleanup").toEqual([2, "UNVERIFIABLE_PREPARATION", residue, []]);
+    }
+  });
+
+  it("lead_help_cleanup_matches_recorded_directories_and_finish_gate", async () => {
+    for (const host of ["claude", "codex"] as Host[]) for (const blocked of [false, true]) {
+      const { w } = workspace();
+      const args = ["--workspace", w, "--host", host];
+      mkdirSync(at(w, PARENTS[host][0]));
+      expect((await run(["install", ...args])).code, `${host}: install`).toBe(0);
+      const records = ["manifest.json", "directories.json", "complete"].map((name) => `.orch-lead-install/${name}`);
+      const recorded = JSON.parse(readFileSync(at(w, ".orch-lead-install/directories.json"), "utf8")).created.map((row: { path: string }) => row.path);
+      expect(recorded, "only the directories this install created are recorded").toEqual(createdDirs(host).slice(1));
+      if (blocked) appendFileSync(at(w, BOOT[host]), "user edit\n");
+      const recordBytes = records.map((rel) => hashOf(at(w, rel)));
+      const uninstall = await run(["uninstall", ...args]);
+      expect.soft([uninstall.code, resultOf(uninstall.stdout)], "[help-cleanup-finish-gate] cleanup reports whether it could finish")
+        .toEqual(blocked ? [2, "PARTIAL"] : [0, "NOT_INSTALLED"]);
+      if (blocked) {
+        expect.soft([records.map((rel) => hashOf(at(w, rel))), recorded.filter((rel: string) => !existsSync(at(w, rel))),
+          existsSync(at(w, ".orch-lead-install/objects")), existsSync(at(w, BOOT[host])), existsSync(at(w, anchorOf(host, BOOT[host])))],
+          "[help-cleanup-finish-gate] edited payload, anchor, records and directories remain when cleanup is blocked")
+          .toEqual([recordBytes, [], true, true, true]);
+        expect.soft(dests(host).filter((dest) => dest !== BOOT[host] && existsSync(at(w, dest))),
+          "[help-cleanup-finish-gate] unchanged verified files are removed").toEqual([]);
+      } else {
+        expect.soft(tree(w), "[help-cleanup-finish-gate] verified files, anchors, accepted records and recorded empty directories go")
+          .toEqual([`dir ${PARENTS[host][0]}`]);
+        expect.soft(rmdirs(uninstall, w, true).sort(), "[help-cleanup-finish-gate] recorded host directories and both state directories are removed")
+          .toEqual([...recorded, ".orch-lead-install/objects", ".orch-lead-install"].sort());
+      }
+    }
+  });
 
   it("lead_reinstall_after_uninstall_round_trip", async () => {
     for (const host of ["claude", "codex"] as Host[]) {

@@ -2,6 +2,7 @@
 // `orch lead` command line: help and usage before any file access, the exit codes, and the text
 // checks on Windows-style workspace paths.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
@@ -151,6 +152,42 @@ describe("orch lead: command line", () => {
 });
 
 describe.skipIf(!RUN)("orch lead: exit codes", () => {
+  it("lead_install_file_errors_exit_one_with_optional_result", async () => {
+    for (const host of ["claude", "codex"]) for (const [op, rel, word] of [
+      ["mkdirSync", ".orch-lead-install", ""],
+      ["mkdirSync", ".orch-lead-install/objects", "UNVERIFIABLE_PREPARATION"],
+      ["openSync", ".orch-lead-install/objects/00", "PARTIAL"],
+    ]) {
+      const w = workspace();
+      const target = join(w, ...rel.split("/"));
+      let hits = 0;
+      const original = op === "mkdirSync" ? fs.mkdirSync : fs.openSync;
+      const faulty = { ...fs, [op]: (...args: unknown[]) => {
+        if (String(args[0]) === target) {
+          hits += 1;
+          throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC", path: target });
+        }
+        return (original as (...args: unknown[]) => unknown)(...args);
+      } };
+      const r = await inProcess(["lead", "install", "--workspace", w, "--host", host], { fs: faulty });
+      expect(hits, `${host}/${rel}: the intended fault happened`).toBe(1);
+      expect.soft([r.code, resultOf(r.out)], `[file-error-exit-one] ${host}/${rel}: exit 1 regardless of result line\n${r.out}${r.err}`).toEqual([1, word]);
+      expect.soft(word ? r.out : r.err, "[file-error-exit-one] the file error and its path are reported").toContain(target);
+      expect.soft(word ? r.out : r.err, "[file-error-exit-one] the reported error is ENOSPC").toContain("ENOSPC");
+      expect.soft(FROZEN.inventory[host].filter((row: string[]) => existsSync(join(w, ...row[1].split("/")))),
+        "[file-error-exit-one] no payload was published before these faults").toEqual([]);
+      expect.soft(existsSync(join(w, ".orch-lead-install")), "[file-error-exit-one] state exists only after its mkdir succeeded").toBe(word !== "");
+      expect.soft(existsSync(join(w, ".orch-lead-install/manifest.json")), "[file-error-exit-one] only the post-manifest fault has a manifest").toBe(word === "PARTIAL");
+    }
+    const usage = await inProcess(["lead", "install"]);
+    expect.soft([usage.code, resultOf(usage.out)], "[file-error-exit-one] wrong usage exits 1 without a result").toEqual([1, ""]);
+    const w = workspace();
+    const output = await inProcess(["lead", "install", "--workspace", w, "--host", "claude"], {
+      write: (_bytes: Buffer, done: (error: Error) => void) => done(Object.assign(new Error("EPIPE"), { code: "EPIPE" })),
+    });
+    expect.soft([output.code, resultOf(output.out), readdirSync(w)], "[file-error-exit-one] output failure exits 1 before mutation").toEqual([1, "", []]);
+  });
+
   it.skipIf(WINDOWS)("lead_names_from_disk_are_printed_with_control_characters_escaped", async () => {
     // A file name can hold a line break and terminal control codes (not on Windows, which refuses
     // such names). Printed as it is, the name below would add a second result line to the report.

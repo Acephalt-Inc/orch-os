@@ -378,6 +378,54 @@
    "test": "lead_finished_install_is_never_busy",
    "marker": "no-record-no-removal",
    "mutant": "no-record-removal"
+  },
+  "reserved-state-file-stops": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reserved_state_file_collision_stops_install",
+   "marker": "reserved-file-stops",
+   "mutant": "reserved-record-collision-ignored"
+  },
+  "collision-status-manifest-boundary": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reserved_collision_status_depends_on_manifest",
+   "marker": "collision-status-by-manifest",
+   "mutant": "collision-before-manifest-reported-partial"
+  },
+  "unknown-state-name-install-continues": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_unknown_state_name_does_not_stop_install",
+   "marker": "unknown-name-continues",
+   "mutant": "unknown-top-state-name-ignored"
+  },
+  "install-file-error-exit-one": {
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_install_file_errors_exit_one_with_optional_result",
+   "marker": "file-error-exit-one",
+   "mutant": "install-file-error-exits-two"
+  },
+  "uninstall-accepted-records-fixed-paths": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_accepted_records_and_fixed_paths",
+   "marker": "accepted-records-fixed-paths",
+   "mutant": "accepted-state-records-not-removed"
+  },
+  "recreated-state-directories-cleanup-gated": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_recreated_state_directories_removed_only_when_cleanup_finishes",
+   "marker": "recreated-state-cleanup-gated",
+   "mutant": "recreated-state-directories-not-removed"
+  },
+  "help-uninstall-recorded-directory-finish-gate": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_help_cleanup_matches_recorded_directories_and_finish_gate",
+   "marker": "help-cleanup-finish-gate",
+   "mutant": "help-recorded-host-directories-not-removed"
+  },
+  "stopped-install-state-files-can-remain": {
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_stopped_install_uninstall_can_retain_state_files",
+   "marker": "stopped-state-files-retained",
+   "mutant": "unverifiable-temporary-file-deleted"
   }
  },
  "mutants": [
@@ -1958,6 +2006,134 @@
      "file": "src/lead/cli.ts",
      "find": "  const deadline = now() + COMMAND_BUDGET_MS;",
      "replace": "  const deadline = argv.includes(\"--help\") ? 2_147_483_647 : now() + COMMAND_BUDGET_MS;"
+    }
+   ]
+  },
+  {
+   "id": "reserved-record-collision-ignored",
+   "why": "A directories-record collision is ignored and publication continues instead of stopping.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reserved_state_file_collision_stops_install",
+   "markers": [
+    "reserved-file-stops"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/install.ts",
+     "find": "      createExclusive(env, step, serializeDirectories(manifestSha, created), 0o600, deadline, true);",
+     "replace": "      try { createExclusive(env, step, serializeDirectories(manifestSha, created), 0o600, deadline, true); } catch (e) { if (errorCode(e) !== \"EEXIST\") throw e; }"
+    }
+   ]
+  },
+  {
+   "id": "collision-before-manifest-reported-partial",
+   "why": "A reserved collision before manifest publication is reported PARTIAL.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_reserved_collision_status_depends_on_manifest",
+   "markers": [
+    "collision-status-by-manifest"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "rows: rowsWithoutManifest(env, workspace, host, \"UNVERIFIABLE\", \"NO_MANIFEST\"), aggregate: \"UNVERIFIABLE_PREPARATION\",",
+     "replace": "rows: rowsWithoutManifest(env, workspace, host, \"UNVERIFIABLE\", \"NO_MANIFEST\"), aggregate: \"PARTIAL\","
+    }
+   ]
+  },
+  {
+   "id": "unknown-top-state-name-ignored",
+   "why": "An unknown top-level state file is neither listed nor reflected in the result.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_unknown_state_name_does_not_stop_install",
+   "markers": [
+    "unknown-name-continues"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/status.ts",
+     "find": "  for (const name of env.fs.readdirSync(top)) if (!KNOWN_TOP.has(name)) out.push(`${STATE_DIR}/${name}`);",
+     "replace": "  env.fs.readdirSync(top);"
+    }
+   ]
+  },
+  {
+   "id": "install-file-error-exits-two",
+   "why": "An install stopped by a file error exits 2 rather than 1.",
+   "test_file": "tests/lead-cli.test.ts",
+   "test": "lead_install_file_errors_exit_one_with_optional_result",
+   "markers": [
+    "file-error-exit-one"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/cli.ts",
+     "find": "    return outcome.stop === \"ERROR\" ? 1 : 2;",
+     "replace": "    return outcome.stop === \"ERROR\" ? 2 : 2;"
+    }
+   ]
+  },
+  {
+   "id": "accepted-state-records-not-removed",
+   "why": "Accepted directories and completion records remain instead of being removed.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_uninstall_removes_accepted_records_and_fixed_paths",
+   "markers": [
+    "accepted-records-fixed-paths"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      if (!recordsGone || record.state !== \"VALID\" || !record.file) continue;",
+     "replace": "      if (!recordsGone || record.state === \"VALID\" || !record.file) continue;"
+    }
+   ]
+  },
+  {
+   "id": "recreated-state-directories-not-removed",
+   "why": "Cleanup leaves both empty recreated state directories behind.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_recreated_state_directories_removed_only_when_cleanup_finishes",
+   "markers": [
+    "recreated-state-cleanup-gated"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "      for (const rel of [OBJECTS_DIR, STATE_DIR]) {",
+     "replace": "      for (const rel of [] as string[]) {"
+    }
+   ]
+  },
+  {
+   "id": "help-recorded-host-directories-not-removed",
+   "why": "Cleanup never removes the empty recorded host directories.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_help_cleanup_matches_recorded_directories_and_finish_gate",
+   "markers": [
+    "help-cleanup-finish-gate"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  directories(allAbsent);",
+     "replace": "  directories(false);"
+    }
+   ]
+  },
+  {
+   "id": "unverifiable-temporary-file-deleted",
+   "why": "Uninstall deletes the retained temporary file despite having no accepted manifest.",
+   "test_file": "tests/lead-process.test.ts",
+   "test": "lead_stopped_install_uninstall_can_retain_state_files",
+   "markers": [
+    "stopped-state-files-retained"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/uninstall.ts",
+     "find": "  if (before.state === \"INVALID\" || !before.manifest || !before.manifestFile) return outcome;",
+     "replace": "  if (before.state === \"INVALID\" || !before.manifest || !before.manifestFile) { const tmp = at(MANIFEST_TMP); if (!isAbsent(env, tmp)) env.fs.unlinkSync(tmp); return outcome; }"
     }
    ]
   }

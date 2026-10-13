@@ -1676,17 +1676,17 @@
    {
     "text": "If a file appears at one of the paths install reserves inside `.orch-lead-install` before install creates that path, install stops.",
     "class": "program-claim",
-    "claim": "stops-at-collision"
+    "claim": "reserved-state-file-stops"
    },
    {
     "text": "Status then reports `UNVERIFIABLE_PREPARATION` if this happened before the manifest was in place, and `PARTIAL` after.",
     "class": "program-claim",
-    "claim": "preparation-reported"
+    "claim": "collision-status-manifest-boundary"
    },
    {
     "text": "A file at another name inside `.orch-lead-install` does not stop install; status lists it as an unknown entry and reports `PARTIAL`.",
     "class": "program-claim",
-    "claim": "unknown-not-opened"
+    "claim": "unknown-state-name-install-continues"
    },
    {
     "text": "Files created before the stop stay until you run uninstall.",
@@ -1863,7 +1863,7 @@
    {
     "text": "With an accepted manifest and cleanup ready to finish, uninstall can remove the empty `.orch-lead-install` and `objects` directories by name without checking who created them.",
     "class": "program-claim",
-    "claim": "own-directories-removed"
+    "claim": "recreated-state-directories-cleanup-gated"
    },
    {
     "text": "When every installed file is gone, uninstall removes the directories that install created, deepest first, and only those that are empty.",
@@ -1940,7 +1940,7 @@
    {
     "text": "| 1 | wrong usage, or a file or output error; an install that stopped on a file error exits 1 even though its result line, when there is one, says `PARTIAL` or `UNVERIFIABLE_PREPARATION` |",
     "class": "program-claim",
-    "claim": "exit-1"
+    "claim": "install-file-error-exit-one"
    },
    {
     "text": "## What these commands do not do",
@@ -2091,7 +2091,7 @@
    {
     "text": "Uninstall can remove unchanged pack files and anchors, state records in the accepted byte format, and empty directories at the fixed host and state paths.",
     "class": "program-claim",
-    "claim": "uninstall-identity"
+    "claim": "uninstall-accepted-records-fixed-paths"
    },
    {
     "text": "### Limits of the notes guides",
@@ -2230,7 +2230,7 @@
   "helpUninstall": {
    "text": "remove verified pack files and anchors, clean up accepted state records, and remove empty recorded host directories and empty state directories when cleanup can finish",
    "class": "program-claim",
-   "claim": "uninstall-identity"
+   "claim": "help-uninstall-recorded-directory-finish-gate"
   },
   "optWorkspace": {
    "text": "the workspace folder; it must exist",
@@ -2335,7 +2335,7 @@
   "afterStop": {
    "text": "what this run created was left in place; `orch lead uninstall` can leave files in `.orch-lead-install` for you to inspect (same --workspace and --host)",
    "class": "program-claim",
-   "claim": "partial-is-cleanable"
+   "claim": "stopped-install-state-files-can-remain"
   },
   "activation": {
    "text": "host activation: unverified",
