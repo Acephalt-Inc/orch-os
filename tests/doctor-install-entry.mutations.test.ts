@@ -191,7 +191,7 @@ describe("DoctorInstallEntryMutations", () => {
       /macOS: steps in order: expected \[ Array\(8\) \] to deeply equal \[ Array\(8\) \]/);
   });
 
-  it.skipIf(WINDOWS)("mutation_guide_installed_check_restored_to_npm_ls", () => {
+  it.skipIf(process.platform === "win32")("mutation_guide_installed_check_restored_to_npm_ls", () => {
     row(INSTALLED_CHECK,
       [{
         file: GUIDE,

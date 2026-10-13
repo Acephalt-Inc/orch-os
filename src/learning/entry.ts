@@ -7,6 +7,9 @@
  */
 import { main } from "./command.js";
 import { type ErrorCode, LearningError, MAX_BYTES } from "./schema.js";
+import { ignoreClosedPipes } from "../closed-pipe.js";
+
+ignoreClosedPipes();
 
 /** How long to wait for standard input to end, in milliseconds. */
 const STDIN_DEADLINE_MS = 4500;

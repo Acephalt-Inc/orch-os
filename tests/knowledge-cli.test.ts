@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { withClosedReader } from "./fixtures/closed-reader.js";
 import { main } from "../src/knowledge/command.js";
 import { createDemoTransport } from "../src/knowledge/demo.js";
 import {
@@ -13,6 +14,17 @@ import {
 
 const USAGE = errorLine("USAGE");
 const WORDING = "Synthetic demo; no service connected.";
+
+// Reader-gone behavior is unverified on Windows.
+it.skipIf(process.platform === "win32")("knowledge help preserves success when its output reader is already gone", () => {
+  // Closing the FIFO's read/write anchor before spawning leaves its inherited writer with no reader.
+  const result = withClosedReader([ENTRY, "--help"], "stdout");
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  expect(result.stderr.toString()).toBe("");
+  expect(result.stderr.toString()).not.toMatch(/EPIPE|node:|at /);
+  expect(result.stderr.toString()).not.toContain(ROOT);
+});
 
 function runArgs(argv: string[]): Promise<Run> {
   return run(argv, createDemoTransport());

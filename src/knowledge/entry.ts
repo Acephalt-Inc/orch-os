@@ -2,6 +2,9 @@
 /** Direct module entry of the knowledge demo: process argv in, stdout/stderr and exit code out. */
 import { main } from "./command.js";
 import { createDemoTransport } from "./demo.js";
+import { ignoreClosedPipes } from "../closed-pipe.js";
+
+ignoreClosedPipes();
 
 const io = {
   out: (s: string) => process.stdout.write(s),

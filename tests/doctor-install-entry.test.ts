@@ -267,7 +267,7 @@ describe("InstallEntry", () => {
 
   // The macOS group's already-installed check, run as the guide writes it against real npm prefixes. Each prefix
   // is a new directory under the system temporary directory; npm reads no user config and uses no network.
-  it.skipIf(WINDOWS)("guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one", () => {
+  it.skipIf(process.platform === "win32")("guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one", () => {
     const check = steps(section(guideText(), "macOS"))[1]?.command ?? "";
     expect(check.length > 0, "the macOS group has a second step").toBe(true);
     const dirs: string[] = [];

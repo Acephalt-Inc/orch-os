@@ -163,7 +163,7 @@ describe("preferences store", () => {
       expect(await readdir(folders[index])).toEqual([]);
     });
 
-    it.runIf(process.platform !== "win32")("an existing folder owned by another user is refused", async () => {
+    it.skipIf(process.platform === "win32")("an existing folder owned by another user is refused", async () => {
       const { home, workspace } = await setup();
       const root = join(home, ".orch-private");
       await mkdir(root, { mode: 0o700 });
@@ -171,7 +171,7 @@ describe("preferences store", () => {
       expect(await readdir(root)).toEqual([]);
     });
 
-    it.runIf(process.platform !== "win32")("a state link installed immediately before open is refused without reading its target", async () => {
+    it.skipIf(process.platform === "win32")("a state link installed immediately before open is refused without reading its target", async () => {
       const { workspace, home } = await setup();
       await setPreference(workspace, "answer-length", "short", 0);
       const state = join(await stateDirectory(home, workspace), "state.json");

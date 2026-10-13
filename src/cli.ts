@@ -23,6 +23,7 @@ import { parseToml, TomlError } from "./toml.js";
 import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
+import { ignoreClosedPipes } from "./closed-pipe.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -1451,6 +1452,7 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
+  ignoreClosedPipes();
   main().then((code) => {
     process.exitCode = code;
   }, (e) => {

@@ -19,10 +19,10 @@ export const PROBE = join(HERE, "probe.mjs");
 export const SCENARIO = join(HERE, "scenario.mjs");
 export const CONTROL = join(HERE, "control.mjs");
 
-/** The files Node loads for the direct entry: the module and the published parser. */
+/** The files Node loads for the direct entry: the module, the published parser and the closed-pipe policy. */
 export const AUDITED = [
   ENTRY, join(DIST, "command.js"), join(DIST, "demo.js"), join(DIST, "query.js"), join(DIST, "schema.js"),
-  join(ROOT, "dist", "args.js"),
+  join(ROOT, "dist", "args.js"), join(ROOT, "dist", "closed-pipe.js"),
 ];
 
 export type Oracle = { answer: string; document_id: string; revision: number; fragment: string; sha256: string };

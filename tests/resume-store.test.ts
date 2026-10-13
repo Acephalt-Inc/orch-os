@@ -277,7 +277,7 @@ test("forget removes body and old revision cannot resurrect it", () => {
   expect(JSON.parse(run(env, ["show", "--workspace", workspace]).stdout)).toEqual({ status: "absent", revision: 2 });
 });
 
-test.runIf(process.platform !== "win32")("a record replaced by a link immediately before open is refused without reading its target", () => {
+test.skipIf(process.platform === "win32")("a record replaced by a link immediately before open is refused without reading its target", () => {
   const { home, env, workspace } = setup();
   expect(run(env, save(workspace, 0), note).status).toBe(0);
   const state = join(stateDirectory(home), "state.json");
