@@ -420,6 +420,23 @@ async function deadlineCases() {
     }
     cases.push({ operation, result: await call("late-" + operation, action, 100, () => now) });
   }
+  // The budget expires between two in-time operations; a second case rejects an operation late.
+  let between = 0;
+  const betweenAwaits = await call("between-awaits", () => inspectPartition(binding, 100, {
+    clock: () => between,
+    uid: () => {
+      between = 101;
+      return process.getuid();
+    },
+  }), 100, () => between);
+  let rejected = 0;
+  const lateRejection = await call("late-rejection", () => inspectPartition(binding, 100, {
+    clock: () => rejected,
+    open: async () => observed("open", async () => {
+      rejected = 101;
+      throw Object.assign(new Error("absent"), { code: "ENOENT" });
+    }),
+  }), 100, () => rejected);
   await rm(folders[0], { recursive: true });
   let now = 0;
   const mkdirLate = await call("late-mkdir", () => preparePartition(binding, 100, {
@@ -446,7 +463,7 @@ async function deadlineCases() {
   }), deadline);
   const elapsed = performance.now() - start;
   const [writerExit] = await writerDone;
-  return { cases, mkdirLate, retained, fifo, elapsed, writerExit };
+  return { cases, mkdirLate, retained, fifo, elapsed, writerExit, betweenAwaits, lateRejection };
 }
 async function inertCases() {
   const binding = await ready();

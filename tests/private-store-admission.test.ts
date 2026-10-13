@@ -253,6 +253,10 @@ it("late_admission_cannot_start_next_io", () => {
   for (const entry of result.cases) fixedFailure(entry.result, "DEADLINE");
   fixedFailure(result.mkdirLate, "DEADLINE");
   fixedFailure(result.fifo, "DEADLINE");
+  fixedFailure(result.betweenAwaits, "DEADLINE");
+  fixedFailure(result.lateRejection, "DEADLINE");
+  const between = calls.filter((call) => call.label === "between-awaits");
+  expect(submissions(between).map((call) => call.op)).toEqual(["fs.promises.open", "handle.stat", "handle.close"]);
   expect(result.elapsed).toBeGreaterThanOrEqual(300);
   expect(result.writerExit).toBe(0);
   const fifo = calls.filter((call) => call.label === "blocking-fifo");
