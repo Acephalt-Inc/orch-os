@@ -33,6 +33,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Lead pack tests on Windows (measurement, not required)
+        continue-on-error: true
+        if: ${{ !cancelled() }}
+        env:
+          ORCH_LEAD_UNMEASURED: "1"
+        run: node node_modules/vitest/vitest.mjs run tests/lead-cli.test.ts tests/lead-install.test.ts tests/lead-mutations.test.ts tests/lead-pack.test.ts tests/lead-process.test.ts
       - name: End-to-end install check (Windows PowerShell)
         if: ${{ !cancelled() }}
         shell: powershell
