@@ -460,7 +460,8 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
     };
     const results = await Promise.all([
       unread("stdout", out.w, "codex"),
-      unread("stderr", err.w, "x" + "\u200d".repeat(60_000)),
+      // 90,001 UTF-8 bytes: under the Linux 128 KiB limit for one argument; the error output (about 180 KB) still fills a pipe.
+      unread("stderr", err.w, "x" + "\u200d".repeat(30_000)),
     ]);
     for (const [i, r] of results.entries()) {
       const stream = i === 0 ? "stdout" : "stderr";
