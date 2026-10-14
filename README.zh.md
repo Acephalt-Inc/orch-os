@@ -165,6 +165,7 @@ orch worker list                            # 查看工作进程
 orch merge-gate 101 --fixture approved      # 使用离线样例试运行闸门
 orch load                                   # 采样机器负载
 orch mem search review                      # 搜索长期笔记
+orch lead install --workspace PATH --host claude  # 在新工作区创建负责人文本包
 ```
 
 完整参数和退出码见[命令参考](docs/commands.md)。
@@ -190,6 +191,7 @@ orch mem search review                      # 搜索长期笔记
 
 - [概念](docs/concepts.md) — 角色、租约、消息、认领、工作进程和笔记。
 - [命令](docs/commands.md) — 子命令、参数、退出码和配置。
+- [负责人文本包](docs/lead-install.md) — `orch lead install`、`status` 和 `uninstall`：把给负责人助手的说明文件放进一个新工作区。安装不会改动已存在的文件。已在 macOS 上实测；Windows 未验证。
 - [配置档](docs/profiles.md) — 声明的评审背景、`human-merge` 示例策略、每次判定报告的评审标签，以及如何迁移为已移除的内置策略表编写的配置档。
 - [常见问题](docs/faq.md) — Claude Code 与 Codex CLI 的设置、GitHub 身份和常见疑问。
 - [架构](docs/architecture.md) — 模块、本地状态文件和进程模型。

@@ -233,7 +233,7 @@ describe("learning command", () => {
         "",
         "commands:",
         "  review       Create draft proposals.",
-        "  show         Proposed display settings and quoted notes only; current instructions take precedence; nothing has been applied.",
+        "  show         Show draft proposals.",
         "  reject       Reject one exact proposal.",
         "",
       ].join("\n"),

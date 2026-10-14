@@ -599,14 +599,15 @@ describe("Windows portability: CLI through fake programs", () => {
 describe("Windows test coverage list", () => {
   it("docs/windows.md names every test that is skipped on Windows", () => {
     const doc = readFileSync(join(ROOT, "docs", "windows.md"), "utf8");
-    const marker = /\b(?:describe|it|test)\.skipIf\(process\.platform === "win32"[^)]*\)\(\s*"([^"]+)"/g;
+    const marker = /\b(?:describe|it|test)\.skipIf\((?:process\.platform === "win32"[^)]*|WINDOWS|!RUN)\)\(\s*"([^"]+)"/g;
     const names: string[] = [];
     for (const file of readdirSync(join(ROOT, "tests")).filter((f) => f.endsWith(".test.ts")).sort()) {
       for (const m of readFileSync(join(ROOT, "tests", file), "utf8").matchAll(marker)) names.push(`${file}: ${m[1]}`);
     }
     expect(names.length).toBeGreaterThan(0);
     for (const entry of names) {
-      const [file, name] = entry.split(": ");
+      const [file, ...parts] = entry.split(": ");
+      const name = parts.join(": ");
       expect(doc, entry).toContain(`\`tests/${file}\``);
       expect(doc, entry).toContain(`\`${name}\``);
     }

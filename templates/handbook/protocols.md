@@ -10,8 +10,10 @@ Every command here is an `orch` command; see `orch <command> --help`.
 
 ## Identity and roles
 
-- Every session sets a name once: `export ORCH_AGENT=<name>` (for example `lead`, `w1`,
-  `r1`). Messages, claims and reports use it.
+- Replace `<agent-name>` with your session name, for example `lead`, `w1` or `r1`. Messages,
+  claims and reports use it on each command.
+  `export ORCH_AGENT=<agent-name>` is optional when typing commands in one terminal.
+  A coding assistant must not rely on the export because each command starts in a fresh shell.
 - Roles are jobs, not vendors or models. Any agent CLI can fill any role.
 - One lead at a time, checked by `orch lease`. The lease epoch fences off a former lead:
   a lead that gets `NOT_HOLDER` or `STALE_EPOCH` stops acting as lead at once. The lease
@@ -33,10 +35,10 @@ pending for its reader until that reader acks it.
 | `BLOCKED` | You cannot continue and waiting will not fix it. | What blocks you, what you tried, what would unblock you. | Unblocks, reassigns, or escalates. |
 
 ```sh
-orch msg send QUESTION --to lead -m "Keep the old flag or drop it? Recommend: drop, it has no callers."
-orch msg read                        # my pending messages
-orch msg ack <id>                    # done with it
-orch msg watch --count 1             # wait for the next one
+orch msg send QUESTION --as <agent-name> --to lead -m "Keep the old flag or drop it? Recommend: drop, it has no callers."
+orch msg read --as <agent-name>                        # my pending messages
+orch msg ack <id> --as <agent-name>                    # done with it
+orch msg watch --as <agent-name> --count 1             # wait for the next one
 ```
 
 Unanswered questions are the most expensive thing in a team: the lead reads pending
@@ -47,12 +49,12 @@ assignments, status, hand-overs. It is append-only; nobody edits an entry.
 
 ## Task claims
 
-- Claim before you start: `orch task claim <id>`. Exit 3 (`BUSY`) means someone else holds
+- Claim before you start: `orch task claim <id> --as <agent-name>`. Exit 3 (`BUSY`) means someone else holds
   it; do not work on it.
 - The claim's epoch is your fencing token. Renew with
-  `orch task renew <id> --expected-epoch <epoch>`; a `STALE_EPOCH` answer means the task
+  `orch task renew <id> --as <agent-name> --expected-epoch <epoch>`; a `STALE_EPOCH` answer means the task
   moved on without you.
-- Release when done: `orch task release <id> --expected-epoch <epoch>`.
+- Release when done: `orch task release <id> --as <agent-name> --expected-epoch <epoch>`.
 - Silence and old heartbeats never transfer a task. A claim changes hands only by release,
   by expiry, or by an explicit decision from the lead.
 - An expired claim does not stop the earlier holder's process and does not prevent its Git
@@ -94,7 +96,7 @@ orch merge-gate <pr> --head <sha-you-reviewed>
 - Any push makes earlier approvals stale; the new head needs new approvals.
 - "Approve after fixes" is not an approval.
 - If every agent uses one code-host account, approvals are review comments instead:
-  `orch review approve <pr> --as <you> --head <sha>` posts one, and
+  `orch review approve <pr> --as <agent-name> --head <sha>` posts one, and
   `orch merge-gate <pr> --reviews comments --task <id>` checks them. The same rules hold,
   with agent names in place of accounts. Review comments are a process rule between cooperating
   agents; the account's token can post any name, so never post one for another agent.
@@ -107,7 +109,8 @@ orch merge-gate <pr> --head <sha-you-reviewed>
 `orch mem` keeps what the team should still know next week: rules, lessons, facts, pointers.
 
 - One fact or rule per entry: `orch mem add <name> --type rule -d "<one line>" -m "<why, and how to apply it>"`.
-- Read `mem/INDEX.md` at the start of every session. It has a line cap because it costs
+- Read `mem/INDEX.md` at the start of every session. The file does not exist until the first `orch mem add`.
+  It has a line cap because it costs
   context every time; when `add` warns about the cap, retire or merge entries.
 - When something stops being true, retire it:
   `orch mem retire <old> --superseded-by <new>`. The file is kept, marked retired, and
