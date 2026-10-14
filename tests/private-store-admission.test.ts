@@ -90,6 +90,16 @@ function noExternal(calls: Call[]) {
 function fixedFailure(value: any, code: string) {
   expect(value).toEqual({ code, message: "private storage request refused" });
 }
+function fixedTypedFailure(value: any, code: string) {
+  expect(value).toEqual({ code, message: "private storage request refused", typed: true });
+}
+it("contract_scope_is_closed_to_native_shaped_seams", () => {
+  const { result } = run("contractScope");
+  expect(result).toEqual({ caught: true, typed: true, code: "IO_UNAVAILABLE",
+    message: "private storage request refused" });
+  const contract = readFileSync("docs/private-store-contract-1.md", "utf8");
+  expect(contract).toContain("Product entries use no seam.");
+});
 it("inspect_missing_is_noncreating", () => {
   const { result, calls } = run("missing");
   // K1.01
@@ -260,6 +270,46 @@ it("bounded_read_loops_and_faults", () => {
   const fault = calls.filter((call) => call.label === "mid-fault");
   expect(fault.filter((call) => call.op === "handle.read" && call.event === "complete").map((call) => call.bytes)).toEqual([5]);
   expect(submissions(fault).filter((call) => call.op === "handle.close")).toHaveLength(5);
+});
+it("k1b_invalid_cap_keeps_handle", () => {
+  const { result, calls } = run("invalidCapKeepsHandle");
+  // B1: validation refuses before taking ownership of the admitted handle.
+  fixedTypedFailure(result.invalid, "BAD_INPUT");
+  expect(result.usable).toEqual({ value: { bytes: result.expected } });
+  expect(submissions(calls.filter((call) => call.label === "k1b-invalid-cap"))).toEqual([]);
+  const valid = calls.filter((call) => call.label === "k1b-valid-cap");
+  expect(submissions(valid).filter((call) => call.op === "handle.read")).toHaveLength(2);
+  expect(submissions(valid).filter((call) => call.op === "handle.close")).toHaveLength(1);
+});
+it("k1b_errno_shape", () => {
+  const { result, calls } = run("errnoShapeCases");
+  // B4/B5: native-shaped errno maps to fixed errors without raw fields or a payload read.
+  for (const { code, result: failure } of result.opens) {
+    fixedTypedFailure(failure, ["ELOOP", "ENOTDIR", "EISDIR"].includes(code) ? "UNSAFE_PATH" : "IO_UNAVAILABLE");
+    const phase = calls.filter((call) => call.label === "k1b-errno-open-" + code);
+    expect(contentReads(phase)).toEqual([]);
+    expect(submissions(phase).filter((call) => call.op === "fs.promises.open" && call.path.endsWith("state.json"))).toEqual([]);
+  }
+  fixedTypedFailure(result.readFault, "IO_UNAVAILABLE");
+  fixedTypedFailure(result.closeFault, "IO_UNAVAILABLE");
+  expect(result.closeCalls).toBe(1);
+  const read = calls.filter((call) => call.label === "k1b-errno-read");
+  expect(submissions(read).filter((call) => call.op === "handle.close")).toHaveLength(1);
+  const close = calls.filter((call) => call.label === "k1b-errno-close");
+  expect(submissions(close).filter((call) => call.op === "handle.close")).toHaveLength(1);
+});
+it("k1b_close_outcome", () => {
+  const { result, calls } = run("closeOutcomeCases");
+  // B8: close is attempted once and awaited; the wrapper actually completes native close.
+  for (const entry of result.cases) {
+    fixedTypedFailure(entry.result, "DEADLINE");
+    expect(entry.closeCalls).toBe(1);
+    expect(entry.nativeClosed).toBe(true);
+    const phase = calls.filter((call) => call.label === (entry.reject ? "k1b-close-reject" : "k1b-close-resolve"));
+    const completed = phase.find((call) => call.op === "seam.close" && call.event === "complete")!;
+    expect(completed).toBeDefined();
+    expect(submissions(phase).filter((call) => call.at > completed.at)).toEqual([]);
+  }
 });
 it("late_admission_cannot_start_next_io", () => {
   const { result, calls } = run("deadlines");

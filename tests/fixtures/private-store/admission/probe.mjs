@@ -13,7 +13,7 @@ const home = await realpath(process.env.HOME);
 const setPhase = globalThis[Symbol.for("admission.trace")] ?? (() => {});
 const observed = globalThis[Symbol.for("admission.await")] ?? ((_name, action) => action());
 const nextBudget = () => performance.now() + 5_000;
-async function call(label, action, deadline = nextBudget(), clock, original) {
+async function call(label, action, deadline = nextBudget(), clock, original, includeType = false) {
   setPhase(label, deadline, clock);
   try {
     const value = await action(deadline);
@@ -24,11 +24,14 @@ async function call(label, action, deadline = nextBudget(), clock, original) {
     return { value };
   } catch (error) {
     return { code: error.code, message: error.message, cause: error.cause, path: error.path,
+      ...(includeType ? { typed: error instanceof PrivateStoreError } : {}),
       ...(original ? { same: error === original } : {}) };
   } finally {
     setPhase();
   }
 }
+const typedCall = (label, action, deadline = nextBudget(), clock) =>
+  call(label, action, deadline, clock, undefined, true);
 const digest = (path) => createHash("sha256").update(path).digest("hex");
 const directory = join(home, ".orch-private", "memory-v1", "personal", digest(await realpath(workspace)));
 const folders = [dirname(dirname(dirname(directory))), dirname(dirname(directory)), dirname(directory), directory];
@@ -526,10 +529,94 @@ async function inertCases() {
   const shape = await call("inert-shape", (budget) => bindWorkspace({ ...JSON.parse(text), workspace }, "memory-v1", budget));
   return { bytes, expected: Buffer.from(text).toString("hex"), url, shape };
 }
+async function contractScopeCases() {
+  try {
+    await bindWorkspace(workspace, "memory-v1", nextBudget(), {
+      lstat: async () => { throw Object.assign(new Error("raw path"), { code: "EIO", path: "/raw/path" }); },
+    });
+    return { caught: false };
+  } catch (error) {
+    return { caught: true, typed: error instanceof PrivateStoreError,
+      code: error.code, message: error.message, cause: error.cause, path: error.path };
+  }
+}
+async function invalidCapKeepsHandle() {
+  const binding = await ready();
+  await writeFile(join(directory, "state.json"), "payload", { mode: 0o600 });
+  setPhase("k1b-open");
+  const opened = await openPrivateFile(binding, "state.json", nextBudget());
+  setPhase();
+  const invalid = await typedCall("k1b-invalid-cap", (budget) => readBounded(opened.handle, -1, budget));
+  const usable = await call("k1b-valid-cap", async (budget) =>
+    ({ bytes: (await readBounded(opened.handle, 7, budget)).toString("hex") }));
+  return { invalid, usable, expected: Buffer.from("payload").toString("hex") };
+}
+async function errnoShapeCases() {
+  const binding = await ready();
+  const state = join(directory, "state.json");
+  await writeFile(state, "payload", { mode: 0o600 });
+  const fault = (code) => Object.assign(new Error("raw private path"), {
+    code, path: state, cause: new Error("raw cause"),
+  });
+  const opens = [];
+  for (const code of ["ELOOP", "ENOTDIR", "EISDIR", "EACCES", "EIO"]) {
+    opens.push({ code, result: await typedCall("k1b-errno-open-" + code, (budget) =>
+      openPrivateFile(binding, "state.json", budget, {
+        open: (path, flags) => path === state ? Promise.reject(fault(code)) : open(path, flags),
+      })) });
+  }
+  setPhase("k1b-read-open");
+  const openedRead = await openPrivateFile(binding, "state.json", nextBudget());
+  setPhase();
+  const readFault = await typedCall("k1b-errno-read", (budget) => readBounded(openedRead.handle, 7, budget, {
+    read: async () => { throw fault("EIO"); },
+  }));
+  setPhase("k1b-close-open");
+  const openedClose = await openPrivateFile(binding, "state.json", nextBudget());
+  setPhase();
+  const nativeClose = openedClose.handle.close.bind(openedClose.handle);
+  let closeCalls = 0;
+  openedClose.handle.close = async () => {
+    closeCalls++;
+    await nativeClose();
+    throw fault("EACCES");
+  };
+  const closeFault = await typedCall("k1b-errno-close", (budget) => readBounded(openedClose.handle, 7, budget));
+  return { opens, readFault, closeFault, closeCalls };
+}
+async function closeOutcomeCases() {
+  const binding = await ready();
+  const cases = [];
+  for (const reject of [false, true]) {
+    let now = 0;
+    let closeCalls = 0;
+    let nativeClosed = false;
+    const label = reject ? "k1b-close-reject" : "k1b-close-resolve";
+    const result = await typedCall(label, () => inspectPartition(binding, 100, {
+      clock: () => now,
+      open: async (...args) => {
+        const handle = await open(...args);
+        const nativeClose = handle.close.bind(handle);
+        handle.close = async () => observed("close", async () => {
+          closeCalls++;
+          await nativeClose();
+          nativeClosed = true;
+          now = 101;
+          if (reject) throw Object.assign(new Error("raw close"), { code: "EIO" });
+        });
+        return handle;
+      },
+    }), 100, () => now);
+    cases.push({ reject, result, closeCalls, nativeClosed });
+  }
+  return { cases };
+}
 const scenarios = {
   binding: bindingCases, missing: missingCases, authority: authorityCases, prepare: prepareCases,
   directories: directoryCases, prepareFaults, leaves: leafCases, swap: swapCases, reads: readCases,
   windows: windowsCases, remote: remoteCases, deadlines: deadlineCases, inert: inertCases,
+  contractScope: contractScopeCases,
+  invalidCapKeepsHandle, errnoShapeCases, closeOutcomeCases,
 };
 try {
   const result = await scenarios[scenario]();
