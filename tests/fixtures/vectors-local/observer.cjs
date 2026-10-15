@@ -54,7 +54,9 @@ const connect = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (...args) {
   dials++;
   if (process.env.ORCH_VECTOR_EXPECT_NO_DIAL === "1") return forbidden("dial");
-  const options = typeof args[0] === "object" ? args[0] : { port: args[0], host: args[1] };
+  // http.Agent passes Node's normalized form: one array argument whose first item is the options object.
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  const options = typeof first === "object" ? first : { port: first, host: args[1] };
   const host = options.hostname ?? options.host;
   const port = Number(options.port);
   if (host !== "127.0.0.1" || port !== Number(process.env.ORCH_VECTOR_EXPECT_PORT)) return forbidden("dial target");
