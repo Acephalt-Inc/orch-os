@@ -16,9 +16,10 @@ const id = "00000000-0000-4000-8000-000000000001";
 const sourceId = "00000000-0000-4000-8000-000000000002";
 
 describe("memory fact schema", () => {
-  it("packaged memory guide is listed", () => {
+  it("memory guide is in the repository and out of the pinned npm docs set", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
-    expect(pkg.files).toContain("docs/memory.md");
+    expect(readFileSync("docs/memory.md", "utf8")).toContain("orch memory add");
+    expect(pkg.files).not.toContain("docs/memory.md");
   });
   it("uses the ruled 22-key fact with bounded nested objects", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
