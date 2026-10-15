@@ -1400,6 +1400,14 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     }
     return (await import("./memory/command.js")).runMemoryCommand(argv.slice(1), io);
   }
+  if (argv[0] === "vectors") {
+    try {
+      return await (await import("./vectors-local/command.js")).runVectorsCommand(argv.slice(1), io);
+    } catch {
+      io.err("vectors connect-local: REFUSED\n");
+      return 1;
+    }
+  }
   // `orch lead ...` runs here, before any configuration is read (see src/lead/cli.ts).
   if (argv[0] === "lead") {
     return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
