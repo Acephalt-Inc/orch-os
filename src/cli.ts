@@ -1394,6 +1394,9 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
   // `learning` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
   if (argv[0] === "learning") argv = ["learning", "--", ...argv.slice(1)];
+  if (argv[0] === "memory") {
+    return (await import("./memory-semantic/command.js")).runSemanticCommand(argv.slice(1), io);
+  }
   // `orch lead ...` runs here, before any configuration is read (see src/lead/cli.ts).
   if (argv[0] === "lead") {
     return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
