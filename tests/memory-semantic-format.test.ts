@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  check, fingerprint, makeFixture, makeHugeMetadataFixture, refreshShard, rowObjects, setRows,
+  check, fingerprint, makeFixture, makeHugeMetadataFixture, refreshShard, rowObjects, setRows, writeFixture,
 } from "./fixtures/memory-semantic/fixture.js";
 
 function refused(f: ReturnType<typeof makeFixture>, code = "BAD_FORMAT") {
@@ -33,6 +37,33 @@ describe("semantic directory format", () => {
     rows[1].revision = 2;
     setRows(f, rows);
     refused(f);
+  });
+
+  it("nil_and_max_uuid_refused", () => {
+    let commandFixture: ReturnType<typeof makeFixture> | undefined;
+    for (const id of ["00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"]) {
+      const f = makeFixture();
+      const rows = rowObjects(f);
+      rows[0].id = id;
+      setRows(f, rows);
+      refreshShard(f);
+      refused(f);
+      commandFixture ??= f;
+    }
+
+    const path = mkdtempSync(join(realpathSync(tmpdir()), "semantic-uuid-"));
+    try {
+      writeFixture(path, commandFixture!);
+      const result = spawnSync(process.execPath, [resolve("dist/cli.js"), "memory", "semantic", "validate", "--dir", path], {
+        encoding: "utf8", timeout: 5000,
+      });
+      expect(result.error).toBeUndefined();
+      expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({
+        status: 1, stdout: "", stderr: "semantic validate: REFUSED\n",
+      });
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
   });
 
   it("nonfinite_float_refused", () => {

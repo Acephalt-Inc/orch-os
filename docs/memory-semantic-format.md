@@ -32,8 +32,9 @@ zero-based position, its row count is 1–4096, its byte count equals the comple
 `rows.jsonl` has exactly `rowCount` LF-terminated UTF-8 lines in vector order. Every line is one
 strict JSON object with exactly `datasetId`, `scopeBinding`, `id`, `revision`, `digest`,
 `sourceRevision`, `sourceHash`, `chunkStart`, `chunkEnd`, `chunkHash`, `embeddingInputHash`,
-and `modelFingerprint`. Dataset, scope, and fingerprint equal the manifest values. `id` is a unique
-lowercase canonical UUID. Revisions are safe integers at least 1. Chunk offsets are safe integers
+and `modelFingerprint`. Dataset, scope, and fingerprint equal the manifest values. `id` is a lowercase UUID in canonical
+8-4-4-4-12 form with version 1 to 8 and the RFC 9562 variant; the nil and max UUIDs are refused. IDs are unique.
+Revisions are safe integers at least 1. Chunk offsets are safe integers
 with `0 <= chunkStart < chunkEnd`; they claim UTF-8 byte offsets. The four hash fields are 64
 lowercase hexadecimal characters. Blank lines, CR, BOM, and an unterminated final line are refused.
 
