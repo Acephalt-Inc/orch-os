@@ -155,7 +155,9 @@ async function names(path: string, clock: Clock): Promise<string[]> {
       result.push(entry.name);
       if (result.length > 32) fail("TOO_LARGE");
     }
-  } finally { await dir.close().catch(() => undefined); }
+  } finally {
+    await dir.close();
+  }
   clock.check();
   return result;
 }
@@ -187,15 +189,25 @@ async function acquire(path: string, clock: Clock): Promise<Identity> {
   const until = Math.min(clock.started + 2_000, clock.deadline);
   for (;;) {
     clock.check();
+    let created = false;
     try {
       await (clock.seam.mkdir ?? mkdir)(path, { mode: 0o700 });
+      created = true;
       if (clock.now() >= clock.deadline) fail("DEADLINE", false);
       const info = await (clock.seam.lstat ?? lstat)(path);
       if (clock.now() >= clock.deadline) fail("DEADLINE", false);
       if (!safe(info, true, clock.seam)) fail("UNSAFE_PATH", false);
       return { dev: info.dev, ino: info.ino };
     } catch (error) {
-      if (errno(error) !== "EEXIST") throw error;
+      if (error instanceof PrivateStoreError) {
+        throw error;
+      }
+      if (created) {
+        fail(normalize(error).code, false, true);
+      }
+      if (errno(error) !== "EEXIST") {
+        fail(normalize(error).code);
+      }
       if (clock.now() >= until) fail("LOCK_HELD");
       await new Promise((resolve) => setTimeout(resolve, Math.min(25, until - clock.now())));
       clock.check();

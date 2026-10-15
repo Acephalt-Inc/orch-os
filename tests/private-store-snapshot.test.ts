@@ -134,56 +134,55 @@ it("snapshot_readers_and_writers_share_one_mutex", async () => {
   console.log(JSON.stringify({ racePids: [first.child.pid, second.child.pid], outcomes }));
 }, 15_000);
 
-it("snapshot_lock_is_bounded_and_not_stolen", async () => {
-  const acquisitionCase = process.env.SNAPSHOT_ACQUISITION_CASE;
-  if (acquisitionCase === "post_mkdir_lstat" || acquisitionCase === "pre_mkdir") {
-    for (const kind of ["read", "commit", "mutate", "recover"] as const) {
-      const { binding, paths } = await fixture();
-      await preparePartition(binding, performance.now() + 5_000);
-      const trace: string[] = [];
-      const fault = Object.assign(new Error(`injected ${acquisitionCase}`), { code: "EIO" });
-      const seam = {
-        async mkdir(path: string, options: { mode: number }) {
-          trace.push(`mkdir:${path}`);
-          if (path === paths.lock && acquisitionCase === "pre_mkdir") throw fault;
-          return mkdir(path, options);
-        },
-        async lstat(path: string) {
-          trace.push(`lstat:${path}`);
-          if (path === paths.lock && acquisitionCase === "post_mkdir_lstat") throw fault;
-          return lstat(path);
-        },
-      };
-      const operation = kind === "read"
-        ? readSnapshot(binding, codec, performance.now() + 5_000, undefined, seam)
-        : kind === "commit"
-          ? commitSnapshot(binding, codec, 0, { text: "fault" }, performance.now() + 5_000, seam)
-          : kind === "mutate"
-            ? mutateSnapshot(binding, codec, 0, performance.now() + 5_000, () => ({ text: "fault" }), seam)
-            : recoverSnapshot(binding, codec, performance.now() + 5_000, seam);
-      const error = await operation.then(() => undefined, (reason: unknown) => reason);
-      const lockExists = existsSync(paths.lock);
-      const lockInode = lockExists ? lstatSync(paths.lock).ino : null;
-      console.log(JSON.stringify({ acquisitionCase, kind, trace, code: (error as { code?: string })?.code,
-        lockReleased: (error as { lockReleased?: boolean })?.lockReleased,
-        warnings: (error as { warnings?: string[] })?.warnings, lockExists, lockInode,
-        entries: readdirSync(paths.directory) }));
-      if (acquisitionCase === "post_mkdir_lstat") {
-        expect(error).toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: false, warnings: ["LOCK_LEFT"] });
-        expect(lockExists).toBe(true);
-        expect(lstatSync(paths.lock).ino).toBe(lockInode);
-      } else {
-        expect(error).toMatchObject({ code: "IO_UNAVAILABLE" });
-        expect(lockExists).toBe(false);
-        expect((error as { warnings?: string[] }).warnings ?? []).not.toContain("LOCK_LEFT");
-        if ((error as { lockReleased?: boolean }).lockReleased !== undefined) {
-          expect((error as { lockReleased?: boolean }).lockReleased).toBe(true);
-        }
+it.each(["post_mkdir_lstat", "pre_mkdir"] as const)("snapshot_lock_acquisition_%s", async (acquisitionCase) => {
+  for (const kind of ["read", "commit", "mutate", "recover"] as const) {
+    const { binding, paths } = await fixture();
+    await preparePartition(binding, performance.now() + 5_000);
+    const trace: string[] = [];
+    const fault = Object.assign(new Error(`injected ${acquisitionCase}`), { code: "EIO" });
+    const seam = {
+      async mkdir(path: string, options: { mode: number }) {
+        trace.push(`mkdir:${path}`);
+        if (path === paths.lock && acquisitionCase === "pre_mkdir") throw fault;
+        return mkdir(path, options);
+      },
+      async lstat(path: string) {
+        trace.push(`lstat:${path}`);
+        if (path === paths.lock && acquisitionCase === "post_mkdir_lstat") throw fault;
+        return lstat(path);
+      },
+    };
+    const operation = kind === "read"
+      ? readSnapshot(binding, codec, performance.now() + 5_000, undefined, seam)
+      : kind === "commit"
+        ? commitSnapshot(binding, codec, 0, { text: "fault" }, performance.now() + 5_000, seam)
+        : kind === "mutate"
+          ? mutateSnapshot(binding, codec, 0, performance.now() + 5_000, () => ({ text: "fault" }), seam)
+          : recoverSnapshot(binding, codec, performance.now() + 5_000, seam);
+    const error = await operation.then(() => undefined, (reason: unknown) => reason);
+    const lockExists = existsSync(paths.lock);
+    const lockInode = lockExists ? lstatSync(paths.lock).ino : null;
+    console.log(JSON.stringify({ acquisitionCase, kind, trace, code: (error as { code?: string })?.code,
+      lockReleased: (error as { lockReleased?: boolean })?.lockReleased,
+      warnings: (error as { warnings?: string[] })?.warnings, lockExists, lockInode,
+      entries: readdirSync(paths.directory) }));
+    if (acquisitionCase === "post_mkdir_lstat") {
+      expect(error).toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: false, warnings: ["LOCK_LEFT"] });
+      expect(lockExists).toBe(true);
+      expect(lstatSync(paths.lock).ino).toBe(lockInode);
+    } else {
+      expect(error).toMatchObject({ code: "IO_UNAVAILABLE" });
+      expect(lockExists).toBe(false);
+      expect((error as { warnings?: string[] }).warnings ?? []).not.toContain("LOCK_LEFT");
+      if ((error as { lockReleased?: boolean }).lockReleased !== undefined) {
+        expect((error as { lockReleased?: boolean }).lockReleased).toBe(true);
       }
-      expect(existsSync(paths.state)).toBe(false);
     }
-    return;
+    expect(existsSync(paths.state)).toBe(false);
   }
+});
+
+it("snapshot_lock_is_bounded_and_not_stolen", async () => {
   const { binding, paths } = await fixture();
   await preparePartition(binding, performance.now() + 5_000);
   mkdirSync(paths.lock, { mode: 0o700 });
