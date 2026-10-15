@@ -70,3 +70,38 @@ Windows private-store access is unavailable in this version because its native p
 Linux refuses the four recognized remote-home filesystem identifiers before
 creation: `0x6969`, `0x517b`, `0xff534d42`, `0x65735546`. These are a bounded list.
 No native remote mount or second-user ACL verification is claimed here.
+
+## Bounded snapshots
+
+Import `readSnapshot`, `commitSnapshot`, `mutateSnapshot` and `recoverSnapshot` from
+`private-store/snapshot.js`. The importing code supplies a fixed codec that checks
+the complete payload shape. Reads return bounded serialized output from a trusted
+projector; mutations run a trusted reducer under the partition lock.
+
+A missing snapshot has generation zero; a committed change installs one complete bounded snapshot with the next generation.
+
+Corrupt committed state is refused rather than replaced with empty state or an old temporary snapshot.
+
+Snapshot reads and writes cooperate through one partition lock; a held lock is reported without automatic takeover.
+
+A snapshot is limited to 16 MiB, and managed state plus temporary files to 32 MiB.
+
+An interrupted process can leave a lock or temporary file that blocks access until explicit recovery.
+
+Before manually removing an interrupted lock, establish that no cooperating operation is active; recovery does not establish that from its age or PID.
+
+After a successful rename, a directory-flush or lock-cleanup failure is reported as a written change with warnings.
+
+durability:"synced" means fsync calls on the file and its folder returned without error.
+
+An uncertain rename outcome needs inspection before retry; it is not a request to repeat the mutation.
+
+The operation budget stops the next I/O step after expiry, but an OS operation already submitted may complete later, and the call returns only after it has.
+
+If a caller's output pipe fails, already delivered bytes may remain with the reader and an installed snapshot may already have changed.
+
+The macOS snapshot tests cover process interruption on the tested local filesystem; power-loss survival has not been established.
+
+The Linux snapshot tests cover the tested local filesystem; behaviour on unidentified remote or cloud-synced homes and power-loss survival has not been established.
+
+Windows snapshot storage is unavailable pending a verified native privacy adapter; its rename, locking and crash behaviour has not been verified by this card.
