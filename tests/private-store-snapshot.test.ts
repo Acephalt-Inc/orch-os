@@ -135,6 +135,55 @@ it("snapshot_readers_and_writers_share_one_mutex", async () => {
 }, 15_000);
 
 it("snapshot_lock_is_bounded_and_not_stolen", async () => {
+  const acquisitionCase = process.env.SNAPSHOT_ACQUISITION_CASE;
+  if (acquisitionCase === "post_mkdir_lstat" || acquisitionCase === "pre_mkdir") {
+    for (const kind of ["read", "commit", "mutate", "recover"] as const) {
+      const { binding, paths } = await fixture();
+      await preparePartition(binding, performance.now() + 5_000);
+      const trace: string[] = [];
+      const fault = Object.assign(new Error(`injected ${acquisitionCase}`), { code: "EIO" });
+      const seam = {
+        async mkdir(path: string, options: { mode: number }) {
+          trace.push(`mkdir:${path}`);
+          if (path === paths.lock && acquisitionCase === "pre_mkdir") throw fault;
+          return mkdir(path, options);
+        },
+        async lstat(path: string) {
+          trace.push(`lstat:${path}`);
+          if (path === paths.lock && acquisitionCase === "post_mkdir_lstat") throw fault;
+          return lstat(path);
+        },
+      };
+      const operation = kind === "read"
+        ? readSnapshot(binding, codec, performance.now() + 5_000, undefined, seam)
+        : kind === "commit"
+          ? commitSnapshot(binding, codec, 0, { text: "fault" }, performance.now() + 5_000, seam)
+          : kind === "mutate"
+            ? mutateSnapshot(binding, codec, 0, performance.now() + 5_000, () => ({ text: "fault" }), seam)
+            : recoverSnapshot(binding, codec, performance.now() + 5_000, seam);
+      const error = await operation.then(() => undefined, (reason: unknown) => reason);
+      const lockExists = existsSync(paths.lock);
+      const lockInode = lockExists ? lstatSync(paths.lock).ino : null;
+      console.log(JSON.stringify({ acquisitionCase, kind, trace, code: (error as { code?: string })?.code,
+        lockReleased: (error as { lockReleased?: boolean })?.lockReleased,
+        warnings: (error as { warnings?: string[] })?.warnings, lockExists, lockInode,
+        entries: readdirSync(paths.directory) }));
+      if (acquisitionCase === "post_mkdir_lstat") {
+        expect(error).toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: false, warnings: ["LOCK_LEFT"] });
+        expect(lockExists).toBe(true);
+        expect(lstatSync(paths.lock).ino).toBe(lockInode);
+      } else {
+        expect(error).toMatchObject({ code: "IO_UNAVAILABLE" });
+        expect(lockExists).toBe(false);
+        expect((error as { warnings?: string[] }).warnings ?? []).not.toContain("LOCK_LEFT");
+        if ((error as { lockReleased?: boolean }).lockReleased !== undefined) {
+          expect((error as { lockReleased?: boolean }).lockReleased).toBe(true);
+        }
+      }
+      expect(existsSync(paths.state)).toBe(false);
+    }
+    return;
+  }
   const { binding, paths } = await fixture();
   await preparePartition(binding, performance.now() + 5_000);
   mkdirSync(paths.lock, { mode: 0o700 });
@@ -493,6 +542,40 @@ it("snapshot_postrename_faults_report_written", async () => {
   rmdirSync(paths.lock);
 });
 
+it("snapshot_directory_iteration_faults", async () => {
+  const { binding, paths } = await fixture();
+  const initial = await commitSnapshot(binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
+  expect(initial.status).toBe("written");
+  const before = readdirSync(paths.directory);
+  const beforeState = lstatSync(paths.state);
+  const trace: Array<Record<string, unknown>> = [];
+  let partitionListings = 0;
+  const receipt = await commitSnapshot(binding, codec, 1, { text: "installed" }, performance.now() + 5_000, {
+    async opendir(path) {
+      const submitted = performance.now();
+      const directory = await opendir(path);
+      if (path === paths.directory && ++partitionListings === 2) {
+        const close = directory.close.bind(directory);
+        directory.close = async () => {
+          await close();
+          trace.push({ site: "directory-handle.close", path, submitted, completed: performance.now(),
+            errno: "EIO", dev: beforeState.dev, ino: beforeState.ino });
+          throw Object.assign(new Error("injected directory close"), { code: "EIO" });
+        };
+      }
+      return directory;
+    },
+  });
+  const after = readdirSync(paths.directory);
+  console.log(JSON.stringify({ row: 5, trace, before, after, receipt,
+    state: { dev: lstatSync(paths.state).dev, ino: lstatSync(paths.state).ino },
+    lockExists: existsSync(paths.lock) }));
+  expect(trace).toHaveLength(1);
+  expect(receipt).toMatchObject({ status: "written", generation: 2, inventoryVerified: false,
+    warnings: ["INVENTORY_UNVERIFIED"] });
+  expect(JSON.parse(readFileSync(paths.state, "utf8")).payload).toEqual({ text: "installed" });
+});
+
 it("snapshot_deadline_fences_late_continuations", async () => {
   const definite = ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EXDEV", "EINVAL", "EISDIR", "ENOTEMPTY", "EBUSY", "EROFS"];
   const fault = (code: string) => Object.assign(new Error(`injected ${code}`), { code });
@@ -744,4 +827,222 @@ it("snapshot_public_text_and_retry_matrix", async () => {
   expect(receipt).toEqual({ outputFailure: true, savedGeneration: 1, warnings: [] });
   expect(JSON.parse(readFileSync(paths.state, "utf8")).generation).toBe(1);
   expect(await readSnapshot(binding, codec, performance.now() + 5_000)).toMatchObject({ status: "read", generation: 1 });
+}, 15_000);
+
+// Direct-site audit. Each case uses a real private fixture and faults one lexical call.
+const auditSites = [
+  [1, "snapshot_directory_handle_faults"], [2, "snapshot_directory_handle_faults"],
+  [3, "snapshot_postrename_faults_report_written"], [4, "snapshot_directory_iteration_faults"],
+  [6, "snapshot_inventory_lstat_faults"], [9, "snapshot_cleanup_identity_faults"],
+  [10, "snapshot_postrename_faults_report_written"], [11, "snapshot_recovery_temp_unlink_faults"],
+  [12, "snapshot_prepublication_io_fault_matrix"], [13, "snapshot_temp_identity_and_close_faults"],
+  [14, "snapshot_prepublication_io_fault_matrix"], [15, "snapshot_prepublication_io_fault_matrix"],
+  [16, "snapshot_prepublication_io_fault_matrix"], [17, "snapshot_temp_identity_and_close_faults"],
+  [18, "snapshot_deadline_fences_late_continuations"], [19, "snapshot_rename_witness_faults"],
+  [20, "snapshot_postrename_faults_report_written"], [21, "snapshot_directory_handle_faults"],
+  [22, "snapshot_directory_handle_faults"],
+] as const;
+
+it.each(auditSites)("%s %s direct_site_probe", async (row, name) => {
+  void name;
+  const { binding, paths } = await fixture();
+  const prior = await commitSnapshot(binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
+  expect(prior.status).toBe("written");
+  const oldBytes = readFileSync(paths.state);
+  const oldInode = lstatSync(paths.state).ino;
+  const before = readdirSync(paths.directory);
+  const trace: Array<{ site: string; path: string; submitted: number; completed: number; errno: string }> = [];
+  const fault = () => Object.assign(new Error(`audit row ${row} EIO`), { code: "EIO" });
+  const hit = (site: string, path: string) => {
+    const submitted = performance.now();
+    trace.push({ site, path, submitted, completed: performance.now(), errno: "EIO" });
+    throw fault();
+  };
+  const seam: import("../src/private-store/snapshot.js").SnapshotSeam = {};
+  let listed = 0;
+  let installed = false;
+  let targetCount = 0;
+  let tempPath = "";
+  let clockShift = 0;
+  const deadline = performance.now() + 5_000;
+  const tempName = ".state-12345678-1234-4123-8123-123456789abc.tmp";
+  if (row === 2) seam.clock = () => performance.now() + clockShift;
+  if ([1, 2, 12, 13, 16, 17, 21, 22].includes(row)) {
+    seam.open = async (path, flags, mode) => {
+      if (row === 1 && installed && path === paths.directory) hit("open-folder", path);
+      if (row === 12 && path.endsWith(".tmp")) hit("open-temp", path);
+      const handle = await open(path, flags, mode);
+      if (row === 2 && installed && path === paths.directory) {
+        const close = handle.close.bind(handle);
+        handle.close = async () => { const submitted = performance.now(); await close();
+          trace.push({ site: "late-folder-close", path, submitted, completed: performance.now(), errno: "EIO" });
+          throw fault(); };
+        clockShift = 6_000;
+      }
+      if (row === 13 && path.endsWith(".tmp")) {
+        handle.stat = async () => hit("temp-stat", path);
+      }
+      if (row === 17 && path.endsWith(".tmp")) {
+        const close = handle.close.bind(handle);
+        handle.close = async () => { const submitted = performance.now(); await close();
+          trace.push({ site: "fallback-temp-close", path, submitted, completed: performance.now(), errno: "EIO" });
+          throw fault(); };
+      }
+      if (row === 22 && installed && path === paths.directory) {
+        const close = handle.close.bind(handle);
+        handle.close = async () => { const submitted = performance.now(); await close();
+          trace.push({ site: "fallback-folder-close", path, submitted, completed: performance.now(), errno: "EIO" });
+          throw fault(); };
+      }
+      return handle;
+    };
+  }
+  if ([3, 4].includes(row)) {
+    seam.opendir = async (path) => {
+      if (path === paths.directory) listed++;
+      if (row === 3 && path === paths.directory && listed === 2) hit("opendir", path);
+      const handle = await opendir(path);
+      if (row === 4 && path === paths.directory && listed === 2) {
+        handle.read = async () => hit("directory-read", path);
+      }
+      return handle;
+    };
+  }
+  if ([6, 9, 19].includes(row)) {
+    seam.lstat = async (path) => {
+      if (row === 6 && installed && path === paths.state) hit("inventory-lstat", path);
+      if (row === 9 && installed && path === paths.lock && ++targetCount === 2) hit("removal-lstat", path);
+      if (row === 19 && installed && path === paths.state) hit("rename-witness-lstat", path);
+      return lstat(path);
+    };
+  }
+  if (row === 10) seam.rmdir = async (path) => hit("lock-rmdir", path);
+  if (row === 2) {
+    seam.opendir = async (path) => { if (clockShift) hit("late-opendir", path); return opendir(path); };
+    seam.lstat = async (path) => { if (clockShift) hit("late-lstat", path); return lstat(path); };
+    seam.rmdir = async (path) => { if (clockShift) hit("late-rmdir", path); return rmdirSync(path); };
+    seam.sync = async (handle) => { if (clockShift) hit("late-sync", paths.directory); await handle.sync(); };
+  }
+  if (row === 11) {
+    tempPath = join(paths.directory, tempName);
+    writeFileSync(tempPath, "orphan", { mode: 0o600 });
+    seam.unlink = async (path) => hit("temp-unlink", path);
+  }
+  if (row === 14 || row === 17) seam.write = async (_handle, _bytes, _offset) => hit("temp-write", tempPath);
+  if ([15, 20, 22].includes(row)) seam.sync = async (handle) => {
+    if ((await handle.stat()).isDirectory() === (row !== 15)) hit(row === 15 ? "temp-sync" : "folder-sync", row === 15 ? tempPath : paths.directory);
+    await handle.sync();
+  };
+  if (row === 16 || row === 21) seam.close = async (handle) => {
+    const info = await handle.stat();
+    const isTarget = info.isDirectory() === (row === 21);
+    await handle.close();
+    if (isTarget) hit(row === 21 ? "folder-close" : "temp-close", row === 21 ? paths.directory : tempPath);
+  };
+  if ([1, 2, 6, 9, 18, 19, 21, 22].includes(row)) seam.rename = async (source, target) => {
+    if (row === 18) hit("rename", source);
+    if (row === 19) { installed = true; hit("rename", source); }
+    await rename(source, target);
+    installed = true;
+  };
+  if ([13, 14, 15, 16, 17].includes(row)) seam.open = async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    if (path.endsWith(".tmp")) {
+      tempPath = path;
+      if (row === 13) handle.stat = async () => hit("temp-stat", path);
+      if (row === 17) {
+        const close = handle.close.bind(handle);
+        handle.close = async () => { const submitted = performance.now(); await close();
+          trace.push({ site: "fallback-temp-close", path, submitted, completed: performance.now(), errno: "EIO" });
+          throw fault(); };
+      }
+    }
+    return handle;
+  };
+  const operation = row === 11
+    ? recoverSnapshot(binding, codec, deadline, seam)
+    : commitSnapshot(binding, codec, 1, { text: `row-${row}` }, deadline, seam);
+  const actual = await operation.then((value) => value, (error: unknown) => error);
+  const after = readdirSync(paths.directory);
+  const state = lstatSync(paths.state);
+  const summary = actual instanceof Error
+    ? { code: (actual as Error & { code?: string }).code,
+      lockReleased: (actual as Error & { lockReleased?: boolean }).lockReleased,
+      warnings: (actual as Error & { warnings?: string[] }).warnings }
+    : actual;
+  console.log(JSON.stringify({ auditRow: row, trace, before, after, oldInode, state: { dev: state.dev, ino: state.ino },
+    result: summary, lockExists: existsSync(paths.lock), tempExists: tempPath ? existsSync(tempPath) : undefined }));
+  expect(trace.some((event) => event.site !== "rename" || row === 18)).toBe(true);
+  if (row === 2) expect(trace.map((event) => event.site)).toEqual(["late-folder-close"]);
+  if ([1, 2, 20, 21, 22].includes(row)) {
+    expect(actual).toMatchObject({ status: "written", generation: 2, durability: "unverified",
+      warnings: expect.arrayContaining(["DIRECTORY_NOT_FLUSHED"]) });
+    expect(JSON.parse(readFileSync(paths.state, "utf8")).payload).toEqual({ text: `row-${row}` });
+  } else if ([3, 4, 6].includes(row)) {
+    expect(actual).toMatchObject({ status: "written", generation: 2, inventoryVerified: false,
+      warnings: expect.arrayContaining(["INVENTORY_UNVERIFIED"]) });
+  } else if ([9, 10].includes(row)) {
+    expect(actual).toMatchObject({ status: "written", generation: 2, lockReleased: false,
+      warnings: expect.arrayContaining(["LOCK_LEFT"]) });
+    expect(existsSync(paths.lock)).toBe(true);
+  } else if (row === 18 || row === 19) {
+    expect(actual).toEqual({ status: "uncertain", code: "WRITE_OUTCOME_UNKNOWN", lockReleased: false,
+      warnings: ["LOCK_LEFT"] });
+  } else {
+    expect(actual).toMatchObject({ code: "IO_UNAVAILABLE" });
+    expect(readFileSync(paths.state).equals(oldBytes)).toBe(true);
+    expect(lstatSync(paths.state).ino).toBe(oldInode);
+    if (row === 11 || row === 13) expect(existsSync(tempPath)).toBe(true);
+  }
+}, 15_000);
+
+// Shared direct sites must also refuse reads and recovery without publishing content.
+const sharedAuditSites = [3, 4, 6, 9, 10] as const;
+it.each(sharedAuditSites)("shared_site_probe row %s", async (row) => {
+  for (const kind of row <= 6 ? ["read", "mutate", "recover"] as const : ["read", "recover"] as const) {
+    const { binding, paths } = await fixture();
+    await commitSnapshot(binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
+    const bytes = readFileSync(paths.state);
+    const inode = lstatSync(paths.state).ino;
+    const entries = readdirSync(paths.directory);
+    const fault = () => Object.assign(new Error(`shared audit ${row} EIO`), { code: "EIO" });
+    const trace: Array<{ site: string; path: string; submitted: number; completed: number; errno: string }> = [];
+    const hit = (site: string, path: string) => {
+      const submitted = performance.now();
+      trace.push({ site, path, submitted, completed: performance.now(), errno: "EIO" });
+      throw fault();
+    };
+    let lockStats = 0;
+    const seam: import("../src/private-store/snapshot.js").SnapshotSeam = {};
+    if (row === 3 || row === 4) seam.opendir = async (path) => {
+      if (row === 3 && path === paths.directory) hit("opendir", path);
+      const handle = await opendir(path);
+      if (row === 4 && path === paths.directory) handle.read = async () => hit("directory-read", path);
+      return handle;
+    };
+    if (row === 6 || row === 9) seam.lstat = async (path) => {
+      if (row === 6 && path === paths.state) hit("inventory-lstat", path);
+      if (row === 9 && path === paths.lock && ++lockStats === 3) hit("removal-lstat", path);
+      return lstat(path);
+    };
+    if (row === 10) seam.rmdir = async (path) => hit("lock-rmdir", path);
+    const deadline = performance.now() + 5_000;
+    const operation = kind === "read"
+      ? readSnapshot(binding, codec, deadline, (value) => value, seam)
+      : kind === "mutate"
+        ? mutateSnapshot(binding, codec, 1, deadline, () => ({ text: "new" }), seam)
+        : recoverSnapshot(binding, codec, deadline, seam);
+    const actual = await operation.then(() => undefined, (error: unknown) => error);
+    const summary = { code: (actual as { code?: string })?.code,
+      lockReleased: (actual as { lockReleased?: boolean })?.lockReleased,
+      warnings: (actual as { warnings?: string[] })?.warnings };
+    console.log(JSON.stringify({ sharedAuditRow: row, kind, trace, before: entries, after: readdirSync(paths.directory),
+      beforeInode: inode, afterInode: lstatSync(paths.state).ino, result: summary, lockExists: existsSync(paths.lock) }));
+    expect(trace).toHaveLength(1);
+    expect(actual).toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: row <= 6,
+      warnings: row <= 6 ? [] : ["LOCK_LEFT"] });
+    expect(existsSync(paths.lock)).toBe(row >= 9);
+    expect(readFileSync(paths.state).equals(bytes)).toBe(true);
+    expect(lstatSync(paths.state).ino).toBe(inode);
+  }
 }, 15_000);
