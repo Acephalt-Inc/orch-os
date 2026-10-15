@@ -422,9 +422,7 @@ export async function recoverSnapshot<T>(
     const found = await inventory(paths.directory, clock);
     const snapshot = await current(binding, codec, found.state, clock);
     for (const temp of found.temps) {
-      const removed = await remove(join(paths.directory, temp.name), temp.info, false, clock);
-      clock.check(false);
-      if (!removed) fail("IO_UNAVAILABLE", false);
+      if (!await remove(join(paths.directory, temp.name), temp.info, false, clock)) fail("IO_UNAVAILABLE", false);
     }
     const released = await remove(paths.lock, id, true, clock);
     if (clock.now() >= deadline) fail("DEADLINE", released, true);
