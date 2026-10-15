@@ -372,4 +372,17 @@ describe.skipIf(process.platform === "win32")("installed memory command", () => 
       generation: 1, items: [{ id: fact.id, revision: 1, title: "Blue sky" }], nextAfter: null,
     }) + "\n" });
   });
+  it("title_bidi_controls_refused", () => {
+    const bidi = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+    const matched: number[] = [];
+    for (let code = 0; code <= 0x10ffff; code++) {
+      if (code < 0xd800 || code > 0xdfff) { if (/\p{Bidi_Control}/u.test(String.fromCodePoint(code))) matched.push(code); }
+    }
+    expect(matched).toEqual(bidi);
+    const place = fixture();
+    for (const code of bidi) refused(add(place, { ...sample, title: `a${String.fromCodePoint(code)}b` }), "add", "INVALID");
+    expect(add(place).status).toBe(0);
+    expect(state(place).generation).toBe(1);
+    expect(state(place).payload.facts).toHaveLength(1);
+  });
 });

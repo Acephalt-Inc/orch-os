@@ -48,6 +48,23 @@ describe("memory fact schema", () => {
     expect(() => codec.decode(payload({ ...fact, time: { ...fact.time, extra: null } }))).toThrow();
   });
 
+  it("refuses a stored title carrying a bidi control even with a matching digest", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
+    const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
+    const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
+    const codec = memoryCodec(binding);
+    const signed = (title: string) => {
+      const { digest: _digest, ...unsigned } = { ...fact, title };
+      return { ...unsigned, digest: hash(canonical(unsigned)) };
+    };
+    const payload = (value: unknown) => ({
+      schemaVersion: 1, facts: [value], tombstones: [], lastObservedAt: "2026-10-15T00:00:00.000Z",
+    });
+    expect(codec.decode(payload(signed("a b")))).toBeTruthy();
+    expect(() => codec.decode(payload(signed("a\u061cb")))).toThrow();
+    expect(() => codec.decode(payload(signed("a\u2067b")))).toThrow();
+  });
+
   it("matches private store canonical bytes and hashes the complete nested record", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);

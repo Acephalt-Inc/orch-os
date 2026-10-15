@@ -31,7 +31,7 @@ export type Submission = { title: string; assertion: string; polarity: Fact["pol
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HEX = /^[0-9a-f]{64}$/;
 const UTC = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
-const LABEL_CONTROL = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const LABEL_CONTROL = /[\p{Cc}\p{Bidi_Control}]/u;
 const EXPIRES_MS = 90 * 86_400_000;
 
 export class MemoryShapeError extends Error {
