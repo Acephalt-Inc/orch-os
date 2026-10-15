@@ -44,10 +44,11 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 46 `skipIf` markers, 293 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 47 `skipIf` markers, 317 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
 
 | Test file | Skipped | Why |
 |---|---|---|
+| `tests/memory-semantic-cli.test.ts` | all of `installed semantic validate command` (24) | the command refuses all directories when a no-follow file open is unavailable; native Windows path handling has not been measured |
 | `tests/workers.test.ts` | all of `WorkersTest` (4): `test_start_list_stop`, `test_high_load_blocks_start_unless_forced`, `test_bad_name_and_missing_command`, `test_stop_refuses_a_reused_pid` | workers are not available on Windows |
 | `tests/workers.test.ts` | all of `WorktreeV2` (14): `start_creates_a_worktree_on_its_own_branch_and_runs_there`, `stop_removes_a_clean_worktree_and_keeps_the_branch`, `stop_keeps_a_dirty_worktree`, `stop_keeps_a_worktree_that_holds_only_ignored_files`, `stop_kills_group_members_that_ignore_sigterm_before_touching_the_worktree`, `stop_reaches_members_left_behind_after_the_leader_exited`, `non_numeric_worker_limits_are_config_errors`, `base_and_branch_cannot_smuggle_git_options`, `a_live_pid_whose_start_time_cannot_be_read_is_never_signalled`, `a_pid_file_of_1_or_less_is_never_signalled`, `an_existing_worktree_is_attached_and_never_removed`, `existing_branch_is_checked_out_and_base_is_honoured`, `refuses_non_repo_foreign_dir_bad_branch_and_branch_without_worktree`, `keep_worktree_flag_keeps_even_a_clean_one` | worker worktrees: workers are not available on Windows |
 | `tests/cli.test.ts` | `test_worker_options_after_name_and_command_after_dashdash` | starts a worker |
