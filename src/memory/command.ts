@@ -6,6 +6,7 @@ import { PrivateStoreError } from "../private-store/errors.js";
 import { decodeStrictJson, StrictJsonError } from "../private-store/json.js";
 import { mutateSnapshot, readSnapshot, type SnapshotContext, type SnapshotSeam } from "../private-store/snapshot.js";
 import { display } from "./display.js";
+import { parseRecall, prepareRecall, projectRecall } from "./recall.js";
 import { canonical, makeFact, memoryCodec, MemoryShapeError, scopeFor, submission, UUID, type Payload } from "./schema.js";
 
 export interface MemoryIO { out(text: string): void; err(text: string): void; stdinBytes?(): Buffer }
@@ -102,6 +103,40 @@ function currentTime(deps: MemoryDeps): number { return (deps.now ?? Date.now)()
 /** Programmatic hooks are fixed by trusted callers; the CLI exposes none. */
 export async function runMemoryCommand(argv: string[], io: MemoryIO, deps: MemoryDeps = {}): Promise<number> {
   const verb = argv[0];
+  if (verb === "recall") {
+    let options: ReturnType<typeof parseRecall>;
+    try { options = parseRecall(argv); }
+    catch {
+      io.err("memory recall: USAGE\n");
+      return 2;
+    }
+    try {
+      const prepared = prepareRecall(options.query);
+      const deadline = performance.now() + 5000;
+      const binding = await bindWorkspace(process.cwd(), "memory-v1", deadline);
+      const codec = memoryCodec(binding);
+      const scope = scopeFor(binding);
+      const result = await readSnapshot(binding, codec, deadline, (payload, context) => {
+        const at = observed(payload, context, currentTime(deps));
+        return projectRecall(payload, context, at, scope, prepared, options);
+      }, deps.seam);
+      if (result.status === "absent") {
+        io.out('{"generation":0,"items":[],"omitted":0,"partial":false}\n');
+        return 0;
+      }
+      const output = result.output.toString("utf8");
+      const projected = JSON.parse(output) as { error?: string };
+      if (projected.error) {
+        io.err(`memory recall: REFUSED ${projected.error}\n`);
+        return 1;
+      }
+      io.out(output);
+      return 0;
+    } catch (error) {
+      io.err(`memory recall: REFUSED ${fixedError(error)}\n`);
+      return 1;
+    }
+  }
   if (!["add", "show", "list", "forget"].includes(verb)) {
     io.err("memory: USAGE\n");
     return 2;
