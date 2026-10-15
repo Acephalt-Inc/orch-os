@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { bindWorkspace, partitionPaths } from "../src/private-store/binding.js";
 import { preparePartition } from "../src/private-store/privacy.js";
-import { commitSnapshot, mutateSnapshot, readSnapshot, recoverSnapshot, type SnapshotCodec } from "../src/private-store/snapshot.js";
+import { commitSnapshot, mutateSnapshot, readSnapshot, recoverSnapshot, type SnapshotCodec, type SnapshotSeam } from "../src/private-store/snapshot.js";
 
 const homes: string[] = [];
 const codec: SnapshotCodec<{ text: string }> = {
@@ -1045,3 +1045,188 @@ it.each(sharedAuditSites)("shared_site_probe row %s", async (row) => {
     expect(lstatSync(paths.state).ino).toBe(inode);
   }
 }, 15_000);
+
+// Reviewer public-API probes: four entry-limit pairs, four deadline pairs, four read-EIO controls, and eight acquisition controls.
+for (const primary of ["TOO_LARGE", "EIO"] as const) {
+  for (const api of ["read", "commit", "mutate", "recover"] as const) {
+    it(`snapshot_names_primary_${primary}_close_EIO_api_${api}`, async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "review-k2-"));
+      homes.push(workspace);
+      const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
+      const paths = partitionPaths(binding);
+      await preparePartition(binding, performance.now() + 5_000);
+      await commitSnapshot(binding, codec, 0, { text: "old" }, performance.now() + 5_000);
+      const before = lstatSync(paths.state);
+      if (primary === "TOO_LARGE") {
+        for (let i = 0; i < 32; i++) {
+          writeFileSync(join(paths.directory, `.state-${i.toString(16).padStart(8, "0")}-1234-4123-8123-123456789abc.tmp`), "x", { mode: 0o600 });
+        }
+      }
+      let readFaults = 0;
+      let closeFaults = 0;
+      const seam: SnapshotSeam = {
+        opendir: async (path) => {
+          const dir = await opendir(path);
+          if (path === paths.directory) {
+            const close = dir.close.bind(dir);
+            dir.close = async () => {
+              await close();
+              closeFaults++;
+              throw Object.assign(new Error("injected close"), { code: "EIO" });
+            };
+            if (primary === "EIO") {
+              const read = dir.read.bind(dir);
+              dir.read = async () => {
+                if (++readFaults === 1) {
+                  throw Object.assign(new Error("injected read"), { code: "EIO" });
+                }
+                return read();
+              };
+            }
+          }
+          return dir;
+        },
+      };
+      const deadline = performance.now() + 5_000;
+      const action = api === "read" ? readSnapshot(binding, codec, deadline, (value) => value, seam)
+        : api === "commit" ? commitSnapshot(binding, codec, 1, { text: "new" }, deadline, seam)
+        : api === "mutate" ? mutateSnapshot(binding, codec, 1, deadline, () => ({ text: "new" }), seam)
+        : recoverSnapshot(binding, codec, deadline, seam);
+      const actual = await action.then((value) => value, (error: unknown) => error);
+      const summary = actual instanceof Error
+        ? { code: (actual as Error & { code?: string }).code, lockReleased: (actual as Error & { lockReleased?: boolean }).lockReleased,
+          warnings: (actual as Error & { warnings?: string[] }).warnings }
+        : actual;
+      console.log(JSON.stringify({ primary, api, closeFaults, readFaults, result: summary,
+        entries: readdirSync(paths.directory).length, canonicalSame: lstatSync(paths.state).ino === before.ino }));
+      expect(closeFaults).toBe(1);
+      expect(lstatSync(paths.state).ino).toBe(before.ino);
+      expect(readdirSync(paths.directory)).toHaveLength(primary === "TOO_LARGE" ? 33 : 1);
+      expect(readFaults).toBe(primary === "EIO" ? 1 : 0);
+      expect(actual).toMatchObject({ code: primary === "EIO" ? "IO_UNAVAILABLE" : "TOO_LARGE" });
+    });
+  }
+}
+
+for (const phase of ["pre_mkdir", "post_mkdir_lstat"] as const) {
+  for (const api of ["read", "commit", "mutate", "recover"] as const) {
+    it(`snapshot_acquisition_phase_${phase}_api_${api}`, async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "review-acquire-"));
+      homes.push(workspace);
+      const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
+      const paths = partitionPaths(binding);
+      await preparePartition(binding, performance.now() + 5_000);
+      const seam: SnapshotSeam = phase === "pre_mkdir"
+        ? { mkdir: async (path, options) => {
+          if (path === paths.lock) {
+            throw Object.assign(new Error("injected mkdir"), { code: "EIO" });
+          }
+          return mkdir(path, options);
+        } }
+        : { lstat: async (path) => {
+          if (path === paths.lock) {
+            throw Object.assign(new Error("injected lstat"), { code: "EIO" });
+          }
+          return lstat(path);
+        } };
+      const deadline = performance.now() + 5_000;
+      const action = api === "read" ? readSnapshot(binding, codec, deadline, (value) => value, seam)
+        : api === "commit" ? commitSnapshot(binding, codec, 0, { text: "new" }, deadline, seam)
+        : api === "mutate" ? mutateSnapshot(binding, codec, 0, deadline, () => ({ text: "new" }), seam)
+        : recoverSnapshot(binding, codec, deadline, seam);
+      const actual = await action.then((value) => value, (error: unknown) => error);
+      const retained = phase === "post_mkdir_lstat";
+      console.log(JSON.stringify({ phase, api, result: { code: (actual as { code?: string }).code,
+        lockReleased: (actual as { lockReleased?: boolean }).lockReleased,
+        warnings: (actual as { warnings?: string[] }).warnings }, lockExists: existsSync(paths.lock),
+        lockInode: existsSync(paths.lock) ? lstatSync(paths.lock).ino : null }));
+      expect(actual).toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: !retained,
+        warnings: retained ? ["LOCK_LEFT"] : [] });
+      expect(existsSync(paths.lock)).toBe(retained);
+    });
+  }
+}
+
+for (const api of ["read", "commit", "mutate", "recover"] as const) {
+  it(`snapshot_names_primary_DEADLINE_close_EIO_api_${api}`, async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "review-deadline-"));
+    homes.push(workspace);
+    const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
+    const paths = partitionPaths(binding);
+    await commitSnapshot(binding, codec, 0, { text: "old" }, performance.now() + 5_000);
+    const before = lstatSync(paths.state).ino;
+    let shift = 0;
+    let closeFaults = 0;
+    const seam: SnapshotSeam = {
+      clock: () => performance.now() + shift,
+      opendir: async (path) => {
+        const dir = await opendir(path);
+        if (path === paths.directory) {
+          const read = dir.read.bind(dir);
+          const close = dir.close.bind(dir);
+          dir.read = async () => {
+            const entry = await read();
+            shift = 6_000;
+            return entry;
+          };
+          dir.close = async () => {
+            await close();
+            closeFaults++;
+            throw Object.assign(new Error("injected close after deadline"), { code: "EIO" });
+          };
+        }
+        return dir;
+      },
+    };
+    const deadline = performance.now() + 5_000;
+    const action = api === "read" ? readSnapshot(binding, codec, deadline, (value) => value, seam)
+      : api === "commit" ? commitSnapshot(binding, codec, 1, { text: "new" }, deadline, seam)
+      : api === "mutate" ? mutateSnapshot(binding, codec, 1, deadline, () => ({ text: "new" }), seam)
+      : recoverSnapshot(binding, codec, deadline, seam);
+    const actual = await action.then((value) => value, (error: unknown) => error);
+    console.log(JSON.stringify({ primary: "DEADLINE", api, closeFaults, result: {
+      code: (actual as { code?: string }).code, lockReleased: (actual as { lockReleased?: boolean }).lockReleased,
+      warnings: (actual as { warnings?: string[] }).warnings }, lockExists: existsSync(paths.lock),
+      canonicalSame: lstatSync(paths.state).ino === before }));
+    expect(closeFaults).toBe(1);
+    expect(actual).toMatchObject({ code: "DEADLINE", lockReleased: false, warnings: ["LOCK_LEFT"] });
+    expect(existsSync(paths.lock)).toBe(true);
+    expect(lstatSync(paths.state).ino).toBe(before);
+    expect(readdirSync(paths.directory).sort()).toEqual([".lock", "state.json"]);
+  });
+}
+
+it.each(["before-install", "after-rename"] as const)("snapshot_standalone_directory_close_%s", async (phase) => {
+  const { binding, paths } = await fixture();
+  await commitSnapshot(binding, codec, 0, { text: "old" }, performance.now() + 5_000);
+  const before = readFileSync(paths.state);
+  const beforeInode = lstatSync(paths.state).ino;
+  let listings = 0;
+  let closeFaults = 0;
+  const operation = commitSnapshot(binding, codec, 1, { text: "new" }, performance.now() + 5_000, {
+    async opendir(path) {
+      const dir = await opendir(path);
+      if (path === paths.directory && ++listings === (phase === "before-install" ? 1 : 2)) {
+        const close = dir.close.bind(dir);
+        dir.close = async () => {
+          await close();
+          closeFaults++;
+          throw Object.assign(new Error("injected standalone close"), { code: "EIO" });
+        };
+      }
+      return dir;
+    },
+  });
+  if (phase === "before-install") {
+    await expect(operation).rejects.toMatchObject({ code: "IO_UNAVAILABLE", lockReleased: true, warnings: [] });
+    expect(readFileSync(paths.state).equals(before)).toBe(true);
+    expect(lstatSync(paths.state).ino).toBe(beforeInode);
+  } else {
+    await expect(operation).resolves.toMatchObject({ status: "written", generation: 2, durability: "synced",
+      inventoryVerified: false, lockReleased: true, warnings: ["INVENTORY_UNVERIFIED"] });
+    expect(JSON.parse(readFileSync(paths.state, "utf8")).payload).toEqual({ text: "new" });
+    expect(lstatSync(paths.state).ino).not.toBe(beforeInode);
+  }
+  expect(closeFaults).toBe(1);
+  expect(readdirSync(paths.directory)).toEqual(["state.json"]);
+});

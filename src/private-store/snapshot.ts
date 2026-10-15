@@ -147,6 +147,7 @@ async function names(path: string, clock: Clock): Promise<string[]> {
   clock.check();
   const dir = await (clock.seam.opendir ?? opendir)(path);
   const result: string[] = [];
+  let failed = false;
   try {
     clock.check();
     for (;;) {
@@ -155,8 +156,17 @@ async function names(path: string, clock: Clock): Promise<string[]> {
       result.push(entry.name);
       if (result.length > 32) fail("TOO_LARGE");
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    await dir.close();
+    try {
+      await dir.close();
+    } catch (error) {
+      if (!failed) {
+        throw error;
+      }
+    }
   }
   clock.check();
   return result;
