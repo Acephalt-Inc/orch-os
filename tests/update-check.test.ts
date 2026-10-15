@@ -596,11 +596,16 @@ describe("UpdateCheckPackage", () => {
     const compiled = walkJs(dist);
     expect(compiled, "compiled JavaScript files walked below dist").toContain("cli.js");
     expect(compiled.some((file) => file.includes("/")), "compiled JavaScript files walked below dist include a nested file").toBe(true);
-    // no other module of the package can reach a network
-    for (const file of compiled.filter((f) => f !== "update.js")) {
+    // no other module of the package can reach a network, except the local vector preview client below
+    for (const file of compiled.filter((f) => f !== "update.js" && f !== "vectors-local/client.js")) {
       expect(readFileSync(join(dist, file), "utf8").match(/node:(?:http2?|https|net|tls|dgram|dns)\b|["'](?:http2?|https|net|tls|dgram|dns)["']|\bfetch\s*\(|WebSocket|XMLHttpRequest|undici/g),
         `network modules or calls in dist/${file}`).toBeNull();
     }
+    // the local vector preview client: plain http to a loopback address only, nothing else that reaches a network
+    const vectorsClient = readFileSync(join(dist, "vectors-local", "client.js"), "utf8");
+    expect(vectorsClient.match(/node:(?:http2?|https|net|tls|dgram|dns)\b|["'](?:http2?|https|net|tls|dgram|dns)["']|\bfetch\s*\(|WebSocket|XMLHttpRequest|undici/g),
+      "network modules or calls in dist/vectors-local/client.js").toEqual(["node:http"]);
+    expect(vectorsClient.match(/\b(?:require|import)\s*\(/g), "dynamic loading in dist/vectors-local/client.js").toBeNull();
     // the update module: network only. No file system, no process, no environment, no other module of this package.
     expect([...update.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]).sort(), "modules dist/update.js imports").toEqual(["node:http", "node:https"]);
     expect(update.match(/\b(?:require|import)\s*\(/g), "dynamic loading in dist/update.js").toBeNull();
