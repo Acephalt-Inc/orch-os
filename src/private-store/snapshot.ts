@@ -129,13 +129,20 @@ class Clock {
     this.check();
   }
   now(): number { return (this.seam.clock ?? performance.now.bind(performance))(); }
-  check(): void { if (this.now() >= this.deadline) fail("DEADLINE"); }
+  check(lockReleased = true): void { if (this.now() >= this.deadline) fail("DEADLINE", lockReleased); }
   base(): TestSeam {
     const { write, sync, close, rename: replace, rmdir: removeLock, unlink: removeTemp, opendir: list, ...base } = this.seam;
     void write; void sync; void close; void replace; void removeLock; void removeTemp; void list;
     return base;
   }
-  async call<T>(action: () => Promise<T>): Promise<T> { this.check(); const result = await action(); this.check(); return result; }
+  async call<T>(action: () => Promise<T>): Promise<T> {
+    this.check();
+    let result: T;
+    try { result = await action(); }
+    catch (error) { this.check(); throw error; }
+    this.check();
+    return result;
+  }
 }
 async function opened(path: string, flags: number, clock: Clock, mode?: number): Promise<FileHandle> {
   clock.check();
@@ -145,7 +152,9 @@ async function opened(path: string, flags: number, clock: Clock, mode?: number):
 }
 async function names(path: string, clock: Clock): Promise<string[]> {
   clock.check();
-  const dir = await (clock.seam.opendir ?? opendir)(path);
+  let dir: Awaited<ReturnType<typeof opendir>>;
+  try { dir = await (clock.seam.opendir ?? opendir)(path); }
+  catch (error) { clock.check(); throw error; }
   const result: string[] = [];
   let failed = false;
   try {
@@ -163,10 +172,12 @@ async function names(path: string, clock: Clock): Promise<string[]> {
     try {
       await dir.close();
     } catch (error) {
+      clock.check();
       if (!failed) {
         throw error;
       }
     }
+    if (failed) clock.check();
   }
   clock.check();
   return result;
@@ -212,6 +223,7 @@ async function acquire(path: string, clock: Clock): Promise<Identity> {
       if (error instanceof PrivateStoreError) {
         throw error;
       }
+      clock.check(!created);
       if (created) {
         fail(normalize(error).code, false, true);
       }
@@ -251,6 +263,7 @@ async function withLock<T>(binding: Binding, clock: Clock, action: (id: Identity
   catch (error) {
     if (error instanceof PrivateStoreError && (error as PrivateStoreError & { retainLock?: boolean }).retainLock) throw error;
     const released = await remove(path, id, true, clock);
+    clock.check(released);
     const code = normalize(error).code;
     fail(code, released);
   }
@@ -281,8 +294,9 @@ export async function readSnapshot<T, O = SnapshotContext>(
       result = { status: "read", generation: snapshot.generation, output };
     }
     clock.check();
-    if (!await remove(paths.lock, id, true, clock)) fail("IO_UNAVAILABLE", false, true);
-    if (clock.now() >= deadline) fail("DEADLINE", true, true);
+    const released = await remove(paths.lock, id, true, clock);
+    if (clock.now() >= deadline) fail("DEADLINE", released, true);
+    if (!released) fail("IO_UNAVAILABLE", false, true);
     return result;
   });
 }
@@ -334,7 +348,8 @@ export async function mutateSnapshot<T>(
     let tempId: Identity | undefined;
     try {
       clock.check();
-      handle = await (seam.open ?? open)(temp, seam.flags?.(flags) ?? flags, 0o600);
+      try { handle = await (seam.open ?? open)(temp, seam.flags?.(flags) ?? flags, 0o600); }
+      catch (error) { clock.check(false); throw error; }
       if (clock.now() >= deadline) fail("DEADLINE", false);
       const info = await clock.call(() => handle!.stat());
       if (!safe(info, false, seam)) fail("UNSAFE_PATH", false);
@@ -361,6 +376,7 @@ export async function mutateSnapshot<T>(
     } catch (error) {
       if (handle) await handle.close().catch(() => undefined);
       if (tempId) await remove(temp, tempId, false, clock);
+      clock.check(false);
       throw error;
     }
     try {
@@ -375,8 +391,9 @@ export async function mutateSnapshot<T>(
       catch { return uncertain(); }
       if (!installed) {
         if (AMBIGUOUS.has(code ?? "")) return uncertain();
-        if (clock.now() < deadline) await remove(temp, tempId, false, clock);
-        fail("IO_UNAVAILABLE", false);
+        const late = clock.now() >= deadline;
+        if (!late) await remove(temp, tempId, false, clock);
+        fail("IO_UNAVAILABLE", false, late);
       }
     }
     let durability: "synced" | "unverified" = "unverified";
@@ -418,9 +435,13 @@ export async function recoverSnapshot<T>(
     const found = await inventory(paths.directory, clock);
     const snapshot = await current(binding, codec, found.state, clock);
     for (const temp of found.temps) {
-      if (!await remove(join(paths.directory, temp.name), temp.info, false, clock)) fail("IO_UNAVAILABLE", false);
+      const removed = await remove(join(paths.directory, temp.name), temp.info, false, clock);
+      clock.check(false);
+      if (!removed) fail("IO_UNAVAILABLE", false);
     }
-    if (!await remove(paths.lock, id, true, clock)) fail("IO_UNAVAILABLE", false, true);
+    const released = await remove(paths.lock, id, true, clock);
+    if (clock.now() >= deadline) fail("DEADLINE", released, true);
+    if (!released) fail("IO_UNAVAILABLE", false, true);
     return { status: "recovered", generation: snapshot?.generation ?? 0, discardedTemps: found.temps.length,
       lockReleased: true, warnings: [] };
   });
