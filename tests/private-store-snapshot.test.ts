@@ -4,10 +4,12 @@ import { lstat, mkdir, open, opendir, rename } from "node:fs/promises";
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { bindWorkspace, partitionPaths } from "../src/private-store/binding.js";
 import { preparePartition } from "../src/private-store/privacy.js";
 import { commitSnapshot, mutateSnapshot, readSnapshot, recoverSnapshot, type SnapshotCodec, type SnapshotSeam } from "../src/private-store/snapshot.js";
+
+describe.skipIf(process.platform === "win32")("POSIX private-store snapshots", () => {
 
 const homes: string[] = [];
 const codec: SnapshotCodec<{ text: string }> = {
@@ -1229,4 +1231,5 @@ it.each(["before-install", "after-rename"] as const)("snapshot_standalone_direct
   }
   expect(closeFaults).toBe(1);
   expect(readdirSync(paths.directory)).toEqual(["state.json"]);
+});
 });

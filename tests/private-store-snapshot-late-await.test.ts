@@ -2,10 +2,12 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { lstat, mkdir, open, opendir, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { bindWorkspace, partitionPaths } from "../src/private-store/binding.js";
 import { PrivateStoreError } from "../src/private-store/errors.js";
 import { commitSnapshot, readSnapshot, recoverSnapshot, type SnapshotSeam } from "../src/private-store/snapshot.js";
+
+describe.skipIf(process.platform === "win32")("POSIX private-store late awaits", () => {
 
 const homes: string[] = [];
 const tempName = ".state-00000000-0000-4000-8000-000000000001.tmp";
@@ -286,3 +288,4 @@ for (const probe of probes) {
   it(`${probe.name} control`, async () => { await run(probe, false); });
   it(`${probe.name} late`, async () => { await run(probe, true); });
 }
+});

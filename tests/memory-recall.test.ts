@@ -27,7 +27,7 @@ function place(): Place {
 function run(p: Place, args: string[], input?: string, at = instant): Result {
   const result = spawnSync(process.execPath, ["--require", p.clock, binary, "memory", ...args], {
     cwd: p.workspace, input, encoding: "utf8", timeout: 10000,
-    env: { ...process.env, HOME: p.home, TMPDIR: resolve(process.env.TMPDIR!), RECALL_TEST_TIME: String(at) },
+    env: { ...process.env, HOME: p.home, RECALL_TEST_TIME: String(at) },
   });
   if (result.error) throw result.error;
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
@@ -84,7 +84,7 @@ async function direct(p: Place, args: string[], deps: MemoryDeps): Promise<Resul
   }
 }
 
-describe("installed memory recall", () => {
+describe.skipIf(process.platform === "win32")("installed memory recall", () => {
   it("recall_english_casefold_exact", () => {
     const p = place();
     const f = add(p, sample("alpha"));

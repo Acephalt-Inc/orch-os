@@ -2,10 +2,12 @@ import { existsSync, linkSync, lstatSync, mkdtempSync, readdirSync, readFileSync
   rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { bindWorkspace, partitionPaths } from "../src/private-store/binding.js";
 import { preparePartition } from "../src/private-store/privacy.js";
 import { commitSnapshot, readSnapshot, recoverSnapshot, type SnapshotCodec } from "../src/private-store/snapshot.js";
+
+describe.skipIf(process.platform === "win32")("POSIX private-store recovery", () => {
 
 const homes: string[] = [];
 const codec: SnapshotCodec<{ text: string }> = {
@@ -89,4 +91,5 @@ it("snapshot_recovery_uses_canonical_state_only", async () => {
   expect(await recoverSnapshot(retry.binding, codec, performance.now() + 5_000))
     .toMatchObject({ status: "recovered", generation: 1, discardedTemps: 1 });
   expect(readdirSync(retry.paths.directory)).toEqual(["state.json"]);
+});
 });

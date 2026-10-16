@@ -30,7 +30,7 @@ function fixture() {
 function run(place: ReturnType<typeof fixture>, args: string[], input?: string | Buffer): Result {
   const result = spawnSync(process.execPath, [binary, "memory", ...args], {
     cwd: place.workspace,
-    env: { ...process.env, HOME: place.home, TMPDIR: resolve(process.env.TMPDIR!) },
+    env: { ...process.env, HOME: place.home },
     input,
     encoding: "utf8",
     timeout: 10000,
@@ -43,7 +43,7 @@ function runAsync(place: ReturnType<typeof fixture>, args: string[], input?: str
   return new Promise((resolveResult, reject) => {
     const child = spawn(process.execPath, [binary, "memory", ...args], {
       cwd: place.workspace,
-      env: { ...process.env, HOME: place.home, TMPDIR: resolve(process.env.TMPDIR!) },
+      env: { ...process.env, HOME: place.home },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -109,7 +109,7 @@ describe.skipIf(process.platform === "win32")("installed memory command", () => 
     } };
     const result = spawnSync(process.execPath, ["--require", observer, binary, "memory", "add", "--expected-generation", "0"], {
       cwd: place.workspace,
-      env: { ...process.env, HOME: place.home, TMPDIR: resolve(process.env.TMPDIR!) },
+      env: { ...process.env, HOME: place.home },
       input: JSON.stringify(value),
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe", "pipe"],

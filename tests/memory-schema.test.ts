@@ -21,7 +21,7 @@ describe("memory fact schema", () => {
     expect(readFileSync("docs/memory.md", "utf8")).toContain("orch memory add");
     expect(pkg.files).not.toContain("docs/memory.md");
   });
-  it("uses the ruled 22-key fact with bounded nested objects", async () => {
+  it.skipIf(process.platform === "win32")("uses the ruled 22-key fact with bounded nested objects", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
@@ -36,7 +36,7 @@ describe("memory fact schema", () => {
     expect(memoryCodec(binding).decode(payload)).toEqual(payload);
   });
 
-  it("refuses extra fact and time keys", async () => {
+  it.skipIf(process.platform === "win32")("refuses extra fact and time keys", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
@@ -48,7 +48,7 @@ describe("memory fact schema", () => {
     expect(() => codec.decode(payload({ ...fact, time: { ...fact.time, extra: null } }))).toThrow();
   });
 
-  it("refuses a stored title carrying a bidi control even with a matching digest", async () => {
+  it.skipIf(process.platform === "win32")("refuses a stored title carrying a bidi control even with a matching digest", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
@@ -65,7 +65,7 @@ describe("memory fact schema", () => {
     expect(() => codec.decode(payload(signed("a\u2067b")))).toThrow();
   });
 
-  it("matches private store canonical bytes and hashes the complete nested record", async () => {
+  it.skipIf(process.platform === "win32")("matches private store canonical bytes and hashes the complete nested record", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");

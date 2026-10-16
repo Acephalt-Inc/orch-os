@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, constants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
@@ -7,6 +7,9 @@ import { chmodSync, constants, lstatSync, mkdirSync, mkdtempSync, readdirSync, r
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { bindWorkspace } from "../src/private-store/binding.js";
+
+describe.skipIf(process.platform === "win32")("POSIX private-store admission", () => {
 interface Call {
   id: number;
   label: string;
@@ -437,4 +440,16 @@ it("admission_public_text_matches_entry_matrix", async () => {
   expect(exit).toBe(74);
   expect(diagnostic).toContain("output failed");
   expect(prefix.length).toBe(100);
+});
+});
+
+it("Windows binding refuses before any filesystem call", async () => {
+  let calls = 0;
+  const unexpectedIO = async () => { calls++; throw new Error("unexpected filesystem call"); };
+  // Native gate on Windows; platform-seam control on macOS/Linux. No successful binding is needed.
+  await expect(bindWorkspace("nonexistent-workspace", "memory-v1", performance.now() + 5_000, {
+    ...(process.platform === "win32" ? {} : { platform: () => "win32" as const }),
+    lstat: unexpectedIO, realpath: unexpectedIO, statfs: unexpectedIO,
+  })).rejects.toMatchObject({ code: "PRIVACY_UNAVAILABLE", message: "private storage request refused" });
+  expect(calls).toBe(0);
 });
