@@ -4,11 +4,15 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     # Repo variable CI_RUNS_ON (e.g. gcp-ci) moves this job to self-hosted runners;
     # unset -> GitHub-hosted ubuntu-latest (billed minutes).
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    # Fork pull requests never reach the self-hosted runners.
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
