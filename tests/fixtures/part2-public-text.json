@@ -11,20 +11,20 @@
   {
    "id": "docs/commands.md: shared exit codes",
    "file": "docs/commands.md",
-   "text": "Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a \"no\" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).",
+   "text": "Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok \u00b7 `1` a \"no\" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error \u00b7 `2` usage, input or config error, including a lock that could not be taken within 30 s \u00b7 `3` `BUSY` \u00b7 `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` \u00b7 `5` `UNVERIFIED` (read-back did not match, or the lock was lost).",
    "sha256": "f9f85c0143656eabb5921dfd395d3ba32eecbb85ba2aab850ff0f9ade27b9906"
   },
   {
    "id": "docs/commands.md: orch update check section",
    "file": "docs/commands.md",
-   "text": "## orch update check\n\n```text\norch update check\n```\n\nAsks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. It runs only when you type it: no other command contacts the registry. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.\n\nThe request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.\n\n| Line (`X` is the installed version, `Y` the offered one) | Exit |\n|---|---|\n| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |\n| `update check: no newer version: installed X, latest Y` | 0 |\n| `update check: unavailable (REASON); installed X` | 1 |\n\n`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.\n\n",
-   "sha256": "b8a39144acca0a9199cf659debc26a79d6ddd197340d7b42547d435d5f0d6f48"
+   "text": "## orch update check\n\n```text\norch update check\n```\n\nAsks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. This manual check runs only when you type it; the weekly background check may also contact the registry after an allowlisted stateful command. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.\n\nThe request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.\n\n| Line (`X` is the installed version, `Y` the offered one) | Exit |\n|---|---|\n| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |\n| `update check: no newer version: installed X, latest Y` | 0 |\n| `update check: unavailable (REASON); installed X` | 1 |\n\n`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.\n\n",
+   "sha256": "79842edb26770e5444515879ffacbe0e14c7756d9c533dd060f25a0145619705"
   },
   {
    "id": "docs/architecture.md: what calls out to the network",
    "file": "docs/architecture.md",
-   "text": "- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.",
-   "sha256": "09d76136961a94bbacc0dc84f589a034423fbe88ea01bb1990006ac4735d15f3"
+   "text": "- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. The default-on weekly background check may also contact the registry after `agents`, `lease status` or `doctor`; it installs nothing. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.",
+   "sha256": "16095271f9b8d1a15ff30b33a8ded887ae8bf922c068f59b208c4e1107ecab8c"
   },
   {
    "id": "help: usage line of orch",
@@ -55,6 +55,12 @@
    "file": "src/cli.ts",
    "text": "orch update check: output failed",
    "sha256": "7f2c4d0bfb778d759310422912c976e16b7862f98e4b9441d652122458fcfb05"
+  },
+  {
+   "id": "docs/commands.md: weekly auto-update section",
+   "file": "docs/commands.md",
+   "text": "## orch update on, off, status and auto\n\n`orch update on` enables the weekly background check; `orch update off` disables it. The default is on, and `ORCH_AUTO_UPDATE=0` forces it off. `orch update status` shows the effective switch and check state. `orch update auto --background` runs a due check without installing anything.\n\nAfter `agents`, `lease status` or `doctor`, a due check may run in a detached process. Checks occur at most once every seven days. The next allowlisted command prints a pending availability notice once to stderr. The updater installs nothing. Installation and package rollback are deferred; any later installer must back up only `config.toml`, keep the last two backups and never copy or restore live team state.\n",
+   "sha256": "d3202dec6675657953f5e3b4af688de0cdd8a530a4e40d9c51bafb51f952caa2"
   }
  ]
 }

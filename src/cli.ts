@@ -1473,7 +1473,35 @@ function isEntry(): boolean {
 
 if (isEntry()) {
   ignoreClosedPipes();
-  main().then((code) => {
+  const entryArgs = process.argv.slice(2);
+  import("./update-auto.js").then(async (auto) => {
+    const home = C.orchHome();
+    if (entryArgs[0] === "update" && entryArgs[1] === "off" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, false);
+      process.stdout.write("weekly update check: off\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "on" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, true);
+      process.stdout.write("weekly update check: on\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "status" && entryArgs.length === 2) {
+      process.stdout.write(auto.statusText(home));
+      return 0;
+    }
+    if (entryArgs.join(" ") === "update auto --background") {
+      await auto.runAutoUpdate(home, VERSION);
+      return 0;
+    }
+    const code = await main();
+    if (auto.isAllowlisted(entryArgs)) {
+      const notice = auto.consumeNotice(home);
+      if (notice) process.stderr.write(`${notice}\n`);
+      auto.scheduleAutoUpdate(fileURLToPath(import.meta.url), home);
+    }
+    return code;
+  }).then((code) => {
     process.exitCode = code;
   }, (e) => {
     // like v1.1's uncaught traceback: message on stderr, exit 1

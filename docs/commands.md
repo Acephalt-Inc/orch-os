@@ -71,7 +71,7 @@ Prints the resolved configuration as JSON, with the file it came from.
 orch update check
 ```
 
-Asks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. It runs only when you type it: no other command contacts the registry. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.
+Asks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. This manual check runs only when you type it; the weekly background check may also contact the registry after an allowlisted stateful command. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.
 
 The request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.
 
@@ -417,3 +417,9 @@ Drafts only; nothing is applied, and there is no accept or apply command. Each c
 | `[profile.agents] NAME = ID` | none | The account each agent (or GitHub login, in `github` mode) runs on. Names compare case-insensitively |
 
 The profile must be written as `[profile]`, `[profile.accounts]` and `[profile.agents]` tables with plain keys: a dotted key (`accounts.a1 = ...`), an inline table (`accounts = { ... }`) or `profile...` keys outside those tables are config errors. An unknown key in `[profile]` is a config error (exit 2 from the commands that read the profile: `merge-gate`, `worker start`, `profile`; a `FAIL` row in `doctor`).
+
+## orch update on, off, status and auto
+
+`orch update on` enables the weekly background check; `orch update off` disables it. The default is on, and `ORCH_AUTO_UPDATE=0` forces it off. `orch update status` shows the effective switch and check state. `orch update auto --background` runs a due check without installing anything.
+
+After `agents`, `lease status` or `doctor`, a due check may run in a detached process. Checks occur at most once every seven days. The next allowlisted command prints a pending availability notice once to stderr. The updater installs nothing. Installation and package rollback are deferred; any later installer must back up only `config.toml`, keep the last two backups and never copy or restore live team state.

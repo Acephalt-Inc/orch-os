@@ -577,12 +577,12 @@ describe("UpdateCheckPackage", () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("the_packed_cli_runs_update_check_and_has_no_automatic_check_cache_lock_switch_or_install_code", async () => {
+  it("the_packed_cli_runs_manual_and_weekly_checks_but_has_no_install_code", async () => {
     const copy = candidate(dirs);
     const tarball = pack(copy);
     const files = copy.run("tar", ["-tzf", tarball]).trim().split("\n");
     expect(files, "the tarball has the update module").toContain("package/dist/update.js");
-    expect(files.filter((f) => /update|cache|lock|notif/i.test(f) && !/^package\/dist\/(update|lock)\.js$/.test(f)), "other update, cache, lock or notice files in the tarball").toEqual([]);
+    expect(files, "the tarball has the weekly update module").toContain("package/dist/update-auto.js");
     const out = tmp("orch-uc-pack-");
     dirs.push(out);
     copy.run("tar", ["-xzf", tarball, "-C", out]);
@@ -597,7 +597,7 @@ describe("UpdateCheckPackage", () => {
     expect(compiled, "compiled JavaScript files walked below dist").toContain("cli.js");
     expect(compiled.some((file) => file.includes("/")), "compiled JavaScript files walked below dist include a nested file").toBe(true);
     // no other module of the package can reach a network, except the local vector preview client below
-    for (const file of compiled.filter((f) => f !== "update.js" && f !== "vectors-local/client.js")) {
+    for (const file of compiled.filter((f) => f !== "update.js" && f !== "update-auto.js" && f !== "vectors-local/client.js")) {
       expect(readFileSync(join(dist, file), "utf8").match(/node:(?:http2?|https|net|tls|dgram|dns)\b|["'](?:http2?|https|net|tls|dgram|dns)["']|\bfetch\s*\(|WebSocket|XMLHttpRequest|undici/g),
         `network modules or calls in dist/${file}`).toBeNull();
     }
@@ -621,8 +621,7 @@ describe("UpdateCheckPackage", () => {
     expect(handler.match(/\bprocess\b|\benv\b|\bC\.|Sync\(|spawn|setTimeout|setInterval/g), "environment, config, file, process or timer use in the handler").toBeNull();
     for (const file of compiled) {
       const text = readFileSync(join(dist, file), "utf8");
-      expect(text.match(/ORCH_UPDATE|UPDATE_CHECK|update-check\.|update_check|npm_config_registry|registry\.npmjs\.org/gi) ?? [], `update switches, state files or registry addresses in dist/${file}`)
-        .toEqual(file === "update.js" ? ["registry.npmjs.org"] : []);
+      expect(text.match(/execFileSync\s*\([^)]*npm|spawnSync\s*\([^)]*npm|spawn\s*\([^)]*["']npm/gi), `npm install execution in dist/${file}`).toBeNull();
     }
     // and it runs from the packed files
     ctx.fake.handler = published(`${MAJOR + 1}.0.0`);
