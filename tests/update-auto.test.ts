@@ -43,6 +43,34 @@ const cli = (h: string, ...args: string[]) => spawnSync(
   [join(process.cwd(), "dist", "cli.js"), ...args],
   { env: { ...process.env, ORCH_HOME: h }, encoding: "utf8" },
 );
+const observedCli = (h: string, args: string[], enabled = "1") => {
+  const preload = join(h, "observe-spawn.cjs");
+  const trace = join(h, "spawn-trace.jsonl");
+  writeFileSync(preload, `
+const fs = require("node:fs");
+const cp = require("node:child_process");
+const { syncBuiltinESMExports } = require("node:module");
+cp.spawn = (command, args, options) => {
+  if (args.join(" ") !== process.argv[1] + " update auto --background") {
+    throw new Error("unexpected spawn: " + JSON.stringify([command, args]));
+  }
+  fs.appendFileSync(process.env.ORCH_SPAWN_TRACE,
+    JSON.stringify({ command, args, detached: options.detached, stdio: options.stdio }) + "\\n");
+  return { unref() {
+    fs.appendFileSync(process.env.ORCH_SPAWN_TRACE, JSON.stringify({ unref: true }) + "\\n");
+  } };
+};
+syncBuiltinESMExports();
+`);
+  const result = spawnSync(process.execPath, ["--require", preload, join(process.cwd(), "dist", "cli.js"),
+    ...args], {
+    env: { ...process.env, ORCH_HOME: h, ORCH_AUTO_UPDATE: enabled, ORCH_SPAWN_TRACE: trace },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  const events = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
+  return { result, events };
+};
 
 afterEach(() => {
   for (const h of homes.splice(0)) {
@@ -90,7 +118,41 @@ describe("weekly auto-update acceptance", () => {
     ["A08 lease status schedules once", ["lease", "status"]],
     ["A08 doctor schedules once", ["doctor"]],
   ])("%s", (_name, args) => {
-    expect(isAllowlisted(args)).toBe(true);
+    const { result, events } = observedCli(home(), args);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(events).toEqual([
+      {
+        command: process.execPath,
+        args: [join(process.cwd(), "dist", "cli.js"), "update", "auto", "--background"],
+        detached: true,
+        stdio: "ignore",
+      },
+      { unref: true },
+    ]);
+  });
+  it("A08 excluded version command schedules nothing", () => {
+    const { result, events } = observedCli(home(), ["--version"]);
+    expect(result.status).toBe(0);
+    expect(events).toEqual([]);
+  });
+  // A scheduler that calls process.exit() can pass spawn assertions while changing the CLI exit.
+  it.each([
+    [["agents"], 0],
+    [["lease", "status"], 0],
+    [["doctor"], 1],
+  ])("A09 %s retains its foreground exit", (args, expectedStatus) => {
+    const h = home();
+    const baseline = observedCli(h, args, "0").result;
+    const { result, events } = observedCli(h, args);
+    expect(baseline.error).toBeUndefined();
+    expect(baseline.signal).toBeNull();
+    expect(baseline.status).toBe(expectedStatus);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(baseline.status);
+    expect(result.status).toBe(expectedStatus);
+    expect(events).toHaveLength(2);
   });
   it("A10 first permitted check makes exactly one registry request", async () => {
     const h = home();
@@ -107,6 +169,29 @@ describe("weekly auto-update acceptance", () => {
     await runAutoUpdate(h, "2.3.2", { address: `http://127.0.0.1:${port}/latest` });
     expect(requests).toBe(1);
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  // A lock-only cadence can check again when the ISO week changes before seven days have elapsed.
+  it("A11 reentry before seven days and across an ISO week makes no second request", async () => {
+    const h = home();
+    let requests = 0;
+    const server = createServer((_req, res) => {
+      requests++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"version":"2.3.2"}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const options = { address: `http://127.0.0.1:${port}/latest` };
+      await runAutoUpdate(h, "2.3.2", { ...options, now: () => new Date("2025-12-28T12:00:00Z") });
+      expect(requests).toBe(1);
+      await runAutoUpdate(h, "2.3.2", { ...options, now: () => new Date("2025-12-28T13:00:00Z") });
+      await runAutoUpdate(h, "2.3.2", { ...options, now: () => new Date("2025-12-29T12:00:00Z") });
+      expect(requests).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
   it("A12 exactly seven days is due", () => {
     const now = Date.parse("2026-01-08T00:00:00Z");
@@ -191,6 +276,31 @@ describe("weekly auto-update acceptance", () => {
     await runAutoUpdate(h, "2.3.2", { address: "http://127.0.0.1:1/latest" });
     expect(state(h).schema).toBe(1);
     expect(typeof state(h).last_check_at).toBe("string");
+  });
+  // A parser that accepts decoded lone surrogates can print attacker-controlled replacement text.
+  it("A32 rejects a lone-surrogate notice in an otherwise valid state", () => {
+    const invalid = home();
+    writeState(invalid, {
+      schema: 1,
+      last_check_at: "2026-01-01T00:00:00.000Z",
+      pending_notice: "UNTRUSTED-\ud800",
+    });
+    const bad = observedCli(invalid, ["agents"]);
+    expect(bad.result.error).toBeUndefined();
+    const output = `${bad.result.stdout}${bad.result.stderr}`;
+    expect(output).not.toContain("UNTRUSTED-");
+    expect(output).not.toContain("\ufffd");
+    expect(bad.events).toHaveLength(2);
+
+    const valid = home();
+    writeState(valid, {
+      schema: 1,
+      last_check_at: "2026-01-01T00:00:00.000Z",
+      pending_notice: "TRUSTED-NOTICE",
+    });
+    const good = observedCli(valid, ["agents"]);
+    expect(good.result.stderr).toContain("TRUSTED-NOTICE");
+    expect(good.events).toHaveLength(2);
   });
   it.each([
     ["A33 stable patch queues a notice", "2.3.3"],
