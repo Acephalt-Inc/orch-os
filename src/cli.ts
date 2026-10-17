@@ -1472,9 +1472,15 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
+  const autoAllowed = ["agents", "doctor"].includes(process.argv[2] ?? "")
+    || (process.argv[2] === "lease" && process.argv[3] === "status" && process.argv.length === 4);
   ignoreClosedPipes();
   const entryArgs = process.argv.slice(2);
-  import("./update-auto.js").then(async (auto) => {
+  const updateControl = entryArgs[0] === "update"
+    && ["off", "on", "status", "auto"].includes(entryArgs[1] ?? "");
+  (async () => {
+    if (!autoAllowed && !updateControl) return main();
+    const auto = await import("./update-auto.js");
     const home = C.orchHome();
     if (entryArgs[0] === "update" && entryArgs[1] === "off" && entryArgs.length === 2) {
       auto.setAutoUpdate(home, false);
@@ -1495,13 +1501,13 @@ if (isEntry()) {
       return 0;
     }
     const code = await main();
-    if (auto.isAllowlisted(entryArgs)) {
+    if (autoAllowed) {
       const notice = auto.consumeNotice(home);
       if (notice) process.stderr.write(`${notice}\n`);
       auto.scheduleAutoUpdate(fileURLToPath(import.meta.url), home);
     }
     return code;
-  }).then((code) => {
+  })().then((code) => {
     process.exitCode = code;
   }, (e) => {
     // like v1.1's uncaught traceback: message on stderr, exit 1

@@ -1,0 +1,35 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+ RUN  v3.2.7 /workspace/orch-os-ci-private
+
+ ✓ tests/network-sentence.test.ts (7 tests) 13155ms
+   ✓ NetworkSentence > live_merge_gate_reads_the_pull_request_through_gh_and_a_fixture_run_starts_no_gh  727ms
+   ✓ NetworkSentence > review_watch_reads_through_gh_and_starts_the_reviewer_command_unless_dry_run  2478ms
+   ✓ NetworkSentence > review_approve_changes_and_reject_post_one_comment_through_gh_unless_dry_run_and_read_the_head_without_head  5489ms
+   ✓ NetworkSentence > update_check_attempts_one_connection_to_the_registry_and_starts_no_gh  309ms
+   ✓ NetworkSentence > worker_start_and_load_start_the_configured_programs_and_no_gh  1682ms
+   ✓ NetworkSentence > commands_the_line_does_not_name_start_no_gh_and_attempt_no_connection  2441ms
+ ✓ tests/update-check.test.ts (29 tests) 22331ms
+   ✓ UpdateCheckAnswers > a_reply_that_drips_one_byte_every_700_ms_ends_at_the_one_deadline  824ms
+   ✓ UpdateCheckAnswers > a_server_that_accepts_and_never_answers_ends_at_the_one_deadline  819ms
+   ✓ UpdateCheckOperations > update_check_makes_one_connection_changes_no_file_and_starts_no_process  883ms
+   ✓ UpdateCheckOperations > without_an_injected_address_the_one_connection_goes_to_the_npm_registry  315ms
+   ✓ UpdateCheckOperations > a_connection_that_is_never_answered_ends_at_the_one_deadline_and_the_process_exits  1099ms
+   ✓ UpdateCheckOperations > update_check_does_not_load_the_config_file  587ms
+   ✓ UpdateCheckOperations > no_environment_variable_redirects_or_disables_the_request  612ms
+   ✓ UpdateCheckOperations > no_other_command_contacts_the_registry  3312ms
+   ✓ UpdateCheckOperations > a_real_process_whose_stdout_cannot_be_written_exits_nonzero  998ms
+   ✓ UpdateCheckPackage > the_packed_cli_runs_manual_and_weekly_checks_but_has_no_install_code  12659ms
+ ✓ tests/learning-registered.test.ts (6 tests) 19516ms
+   ✓ LearningRegistered > the_commands_of_the_page_review_show_and_reject_drafts_and_apply_nothing  875ms
+   ✓ LearningRegistered > the_exit_codes_of_the_command_reference_are_the_ones_the_command_gives  3056ms
+   ✓ LearningRegistered > an_input_that_is_never_closed_ends_with_timeout_and_an_oversized_one_with_limit  5161ms
+   ✓ LearningRegistered > arguments_input_output_and_exit_code_are_those_of_the_module_entry  9270ms
+   ✓ LearningRegistered > the_packaged_command_reads_no_environment_no_home_and_no_file_but_its_own_and_gives_one_result_in_two_worlds  879ms
+ ✓ tests/update-auto.test.ts (39 tests) 866ms
+
+ Test Files  4 passed (4)
+      Tests  81 passed (81)
+   Start at  22:39:27
+   Duration  57.61s (transform 891ms, setup 54ms, collect 1.12s, tests 55.87s, environment 0ms, prepare 106ms)
+

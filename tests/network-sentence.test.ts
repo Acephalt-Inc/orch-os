@@ -127,7 +127,10 @@ function configure(): void {
 describe("NetworkSentence", () => {
   it("the_network_services_line_names_exactly_the_commands_that_call_out_or_start_a_program", () => {
     const line = networkLine();
-    expect(commandsNamed(line), "docs/architecture.md: commands the Network services line names").toEqual(NAMED);
+    const weekly = ["agents", "doctor", "lease status"];
+    expect(commandsNamed(line), "docs/architecture.md: commands the Network services line names").toEqual(
+      [...NAMED, ...weekly].sort(),
+    );
     expect(line, "docs/architecture.md: the Network services line says only").not.toMatch(/\bonly\b/i);
     expect(line, "docs/architecture.md: the Network services line says nothing listens").toContain("Nothing listens on a port.");
   });
