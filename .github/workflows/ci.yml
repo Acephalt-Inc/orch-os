@@ -4,9 +4,15 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Repo variable CI_RUNS_ON (e.g. gcp-ci) moves this job to self-hosted runners;
+    # unset -> GitHub-hosted ubuntu-latest (billed minutes).
+    # Fork pull requests never reach the self-hosted runners.
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,11 +25,23 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Ensure pwsh (self-hosted Linux runners ship without it)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then exit 0; fi
+          set -euo pipefail
+          d="$RUNNER_TEMP/pwsh"; mkdir -p "$d"
+          curl -fsSL https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz | tar -xz -C "$d"
+          chmod +x "$d/pwsh"; echo "$d" >> "$GITHUB_PATH"; "$d/pwsh" -NoLogo -Command '$PSVersionTable.PSVersion.ToString()'
       - name: End-to-end install check
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/e2e-install.ps1
   windows:
+    # Windows minutes are billed: run only for release candidates (branch ci/release-*)
+    # or when the repo variable CI_WINDOWS is 'true'.
+    if: ${{ startsWith(github.ref, 'refs/heads/ci/release-') || vars.CI_WINDOWS == 'true' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

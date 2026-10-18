@@ -24,6 +24,7 @@ The CI job `windows` runs the test suite on `windows-latest`, and then `scripts/
 
 - `orch worker start`, `orch worker stop` and `orch review watch` exit 2 with `Windows support for workers and review watch is not available yet.` Workers rely on POSIX process groups and signals.
 - `orch load` reports `load_ratio=n/a swap=n/a temp=n/a`: Windows has no load average, and `[load] temp_command` is a shell command line. The tier stays `NORMAL`.
+- `orch memory` private-store access refuses with `REFUSED UNAVAILABLE`. Its native Windows privacy adapter has not been verified. The separate `orch mem` commands listed above remain available.
 - In PowerShell, a `--` on the command line is consumed by PowerShell before `orch.ps1` sees it. Nothing that works on Windows needs `--`.
 
 ## What differs
@@ -44,10 +45,18 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 46 `skipIf` markers, 293 tests. `tests/windows-portability.test.ts` checks that every marker is named on this page.
+The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 57 `skipIf` markers. `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
 
 | Test file | Skipped | Why |
 |---|---|---|
+| `tests/memory-cli.test.ts` | all of `installed memory command` (23) | the private store refuses Windows private access; native Windows behavior has not been measured |
+| `tests/memory-recall.test.ts` | all of `installed memory recall` (21) | the fixtures require a successful private-store write, which is unavailable on Windows |
+| `tests/memory-schema.test.ts` | `uses the ruled 22-key fact with bounded nested objects`, `refuses extra fact and time keys`, `refuses a stored title carrying a bidi control even with a matching digest`, `matches private store canonical bytes and hashes the complete nested record` (4) | these tests require a successful private-store binding; the documentation test still runs |
+| `tests/private-store-admission.test.ts` | all of `POSIX private-store admission` (15) | these probes require successful POSIX bindings, including the platform-seam control; the separate Windows binding refusal test still runs |
+| `tests/private-store-snapshot.test.ts` | all of `POSIX private-store snapshots` (60) | the fixtures require successful POSIX private-store bindings |
+| `tests/private-store-snapshot-late-await.test.ts` | all of `POSIX private-store late awaits` (50) | the fixtures require successful POSIX private-store bindings |
+| `tests/private-store-recovery.test.ts` | all of `POSIX private-store recovery` (1) | the fixture requires a successful POSIX private-store binding |
+| `tests/memory-semantic-cli.test.ts` | all of `installed semantic validate command` (24) | the command refuses all directories when a no-follow file open is unavailable; native Windows path handling has not been measured |
 | `tests/workers.test.ts` | all of `WorkersTest` (4): `test_start_list_stop`, `test_high_load_blocks_start_unless_forced`, `test_bad_name_and_missing_command`, `test_stop_refuses_a_reused_pid` | workers are not available on Windows |
 | `tests/workers.test.ts` | all of `WorktreeV2` (14): `start_creates_a_worktree_on_its_own_branch_and_runs_there`, `stop_removes_a_clean_worktree_and_keeps_the_branch`, `stop_keeps_a_dirty_worktree`, `stop_keeps_a_worktree_that_holds_only_ignored_files`, `stop_kills_group_members_that_ignore_sigterm_before_touching_the_worktree`, `stop_reaches_members_left_behind_after_the_leader_exited`, `non_numeric_worker_limits_are_config_errors`, `base_and_branch_cannot_smuggle_git_options`, `a_live_pid_whose_start_time_cannot_be_read_is_never_signalled`, `a_pid_file_of_1_or_less_is_never_signalled`, `an_existing_worktree_is_attached_and_never_removed`, `existing_branch_is_checked_out_and_base_is_honoured`, `refuses_non_repo_foreign_dir_bad_branch_and_branch_without_worktree`, `keep_worktree_flag_keeps_even_a_clean_one` | worker worktrees: workers are not available on Windows |
 | `tests/cli.test.ts` | `test_worker_options_after_name_and_command_after_dashdash` | starts a worker |

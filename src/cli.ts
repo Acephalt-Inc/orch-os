@@ -1394,6 +1394,20 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
   // `learning` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
   if (argv[0] === "learning") argv = ["learning", "--", ...argv.slice(1)];
+  if (argv[0] === "memory") {
+    if (argv.length === 1 || argv[1] === "semantic") {
+      return (await import("./memory-semantic/command.js")).runSemanticCommand(argv.slice(1), io);
+    }
+    return (await import("./memory/command.js")).runMemoryCommand(argv.slice(1), io);
+  }
+  if (argv[0] === "vectors") {
+    try {
+      return await (await import("./vectors-local/command.js")).runVectorsCommand(argv.slice(1), io);
+    } catch {
+      io.err("vectors connect-local: REFUSED\n");
+      return 1;
+    }
+  }
   // `orch lead ...` runs here, before any configuration is read (see src/lead/cli.ts).
   if (argv[0] === "lead") {
     return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
@@ -1458,8 +1472,42 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
+  const autoAllowed = ["agents", "doctor"].includes(process.argv[2] ?? "")
+    || (process.argv[2] === "lease" && process.argv[3] === "status" && process.argv.length === 4);
   ignoreClosedPipes();
-  main().then((code) => {
+  const entryArgs = process.argv.slice(2);
+  const updateControl = entryArgs[0] === "update"
+    && ["off", "on", "status", "auto"].includes(entryArgs[1] ?? "");
+  (async () => {
+    if (!autoAllowed && !updateControl) return main();
+    const auto = await import("./update-auto.js");
+    const home = C.orchHome();
+    if (entryArgs[0] === "update" && entryArgs[1] === "off" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, false);
+      process.stdout.write("weekly update check: off\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "on" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, true);
+      process.stdout.write("weekly update check: on\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "status" && entryArgs.length === 2) {
+      process.stdout.write(auto.statusText(home));
+      return 0;
+    }
+    if (entryArgs.join(" ") === "update auto --background") {
+      await auto.runAutoUpdate(home, VERSION);
+      return 0;
+    }
+    const code = await main();
+    if (autoAllowed) {
+      const notice = auto.consumeNotice(home);
+      if (notice) process.stderr.write(`${notice}\n`);
+      auto.scheduleAutoUpdate(fileURLToPath(import.meta.url), home);
+    }
+    return code;
+  })().then((code) => {
     process.exitCode = code;
   }, (e) => {
     // like v1.1's uncaught traceback: message on stderr, exit 1
