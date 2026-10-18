@@ -580,6 +580,12 @@ it("snapshot_directory_iteration_faults", async () => {
 it("snapshot_deadline_fences_late_continuations", async () => {
   const definite = ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EXDEV", "EINVAL", "EISDIR", "ENOTEMPTY", "EBUSY", "EROFS"];
   const fault = (code: string) => Object.assign(new Error(`injected ${code}`), { code });
+  // Keep setup in budget; expire only when the targeted continuation settles.
+  const deadlineClock = () => {
+    const deadline = 25;
+    let now = 0;
+    return { deadline, clock: () => now, expire: () => { now = deadline; } };
+  };
   for (const code of definite) {
     const { binding, paths } = await fixture();
     await commitSnapshot(binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
@@ -621,10 +627,12 @@ it("snapshot_deadline_fences_late_continuations", async () => {
     const before = readFileSync(paths.state);
     const trace: string[] = [];
     let renameReturned = false;
-    const operation = commitSnapshot(binding, codec, 1, { text: "late" }, performance.now() + 25, {
+    const budget = deadlineClock();
+    const operation = commitSnapshot(binding, codec, 1, { text: "late" }, budget.deadline, {
+      clock: budget.clock,
       async rename(source, target) {
         if (installs) await rename(source, target);
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        budget.expire();
         renameReturned = true;
         throw fault("ENOENT");
       },
@@ -649,10 +657,12 @@ it("snapshot_deadline_fences_late_continuations", async () => {
 
   const lateSuccess = await fixture();
   await commitSnapshot(lateSuccess.binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
-  const completed = await commitSnapshot(lateSuccess.binding, codec, 1, { text: "installed" }, performance.now() + 25, {
+  const successBudget = deadlineClock();
+  const completed = await commitSnapshot(lateSuccess.binding, codec, 1, { text: "installed" }, successBudget.deadline, {
+    clock: successBudget.clock,
     async rename(source, target) {
       await rename(source, target);
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      successBudget.expire();
     },
   });
   // K2.10: Awaited late success is written, while later flush, inventory and release remain skipped.
@@ -668,7 +678,9 @@ it("snapshot_deadline_fences_late_continuations", async () => {
     const before = readFileSync(paths.state);
     let renameRejected = false;
     const trace: string[] = [];
-    const operation = commitSnapshot(binding, codec, 1, { text: "delayed witness" }, performance.now() + 25, {
+    const budget = deadlineClock();
+    const operation = commitSnapshot(binding, codec, 1, { text: "delayed witness" }, budget.deadline, {
+      clock: budget.clock,
       async rename(source, target) {
         if (installs) await rename(source, target);
         renameRejected = true;
@@ -678,7 +690,7 @@ it("snapshot_deadline_fences_late_continuations", async () => {
         if (renameRejected && path === paths.state) {
           trace.push("witness submitted");
           const info = await lstat(path);
-          await new Promise((resolve) => setTimeout(resolve, 60));
+          budget.expire();
           trace.push("witness completed");
           return info;
         }
@@ -706,12 +718,14 @@ it("snapshot_deadline_fences_late_continuations", async () => {
   const lateRead = await fixture();
   await commitSnapshot(lateRead.binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
   const readTrace: string[] = [];
-  await expect(readSnapshot(lateRead.binding, codec, performance.now() + 25, (value) => value, {
+  const readBudget = deadlineClock();
+  await expect(readSnapshot(lateRead.binding, codec, readBudget.deadline, (value) => value, {
+    clock: readBudget.clock,
     async open(path, flags, mode) {
       const handle = await open(path, flags, mode);
       if (path === lateRead.paths.state) {
         readTrace.push("state open submitted");
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        readBudget.expire();
         readTrace.push("state open completed");
       }
       return handle;
@@ -726,11 +740,13 @@ it("snapshot_deadline_fences_late_continuations", async () => {
   const lateRelease = await fixture();
   await commitSnapshot(lateRelease.binding, codec, 0, { text: "prior" }, performance.now() + 5_000);
   const releaseTrace: string[] = [];
-  const lateReadRelease = readSnapshot(lateRelease.binding, codec, performance.now() + 25, (value) => value, {
+  const releaseBudget = deadlineClock();
+  const lateReadRelease = readSnapshot(lateRelease.binding, codec, releaseBudget.deadline, (value) => value, {
+    clock: releaseBudget.clock,
     async rmdir(path) {
       releaseTrace.push(`rmdir:${path}`);
       rmdirSync(path);
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      releaseBudget.expire();
     },
   });
   // K2.10: A late completed lock removal refuses content and reports the observed released lock.
