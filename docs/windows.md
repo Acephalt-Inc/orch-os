@@ -45,7 +45,7 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 57 `skipIf` markers. `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
+The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 57 `skipIf` markers covering 491 tests (nested skips counted once). `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
 
 | Test file | Skipped | Why |
 |---|---|---|
@@ -102,7 +102,7 @@ The `windows` CI job runs every test file. The tests below are skipped there, ea
 | `tests/lead-process.test.ts` | all of `orch lead: real processes` (18): `lead_both_full_outputs_end_within_budget`, `lead_stalled_output_ends_within_budget`, `lead_real_cli_has_install_status_uninstall`, `lead_packed_tarball_runs_without_checkout`, `lead_loader_and_cli_have_no_unrequested_effects`, `lead_preflight_conflict_has_zero_mutations`, `lead_prints_every_path_before_first_mutation`, `lead_reserved_state_file_collision_stops_install`, `lead_reserved_collision_status_depends_on_manifest`, `lead_unknown_state_name_does_not_stop_install`, `lead_stopped_install_uninstall_can_retain_state_files`, `lead_late_ordinary_parent_is_used`, `lead_second_process_wins_late_destination`, `lead_sigkill_between_publications_is_visible_and_cleanable`, `lead_kill_during_preparation_reports_retained_state`, `lead_uninstall_retry_after_kill_is_idempotent`, `lead_corrupt_manifest_never_opens_outside`, `lead_concurrent_install_reservation_and_busy_cleanup` | measured on macOS; skipped on Windows unless `ORCH_LEAD_UNMEASURED=1` |
 | `tests/lead-process.test.ts` | all of `orch lead: reinstall, own directories, finished installs` (6): `lead_uninstall_removes_accepted_records_and_fixed_paths`, `lead_recreated_state_directories_removed_only_when_cleanup_finishes`, `lead_help_cleanup_matches_recorded_directories_and_finish_gate`, `lead_reinstall_after_uninstall_round_trip`, `lead_uninstall_removes_only_its_own_empty_directories`, `lead_finished_install_is_never_busy` | measured on macOS; skipped on Windows unless `ORCH_LEAD_UNMEASURED=1` |
 
-Five more tests run on Windows without their `orch review watch` or `orch worker start` part; everything else in them runs:
+Five more test groups (33 tests) run on Windows without their `orch review watch` or `orch worker start` part; everything else in them runs:
 
 | Test file | Test | Left out on Windows |
 |---|---|---|
