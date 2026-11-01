@@ -10,6 +10,17 @@ import { run, useTmpHome } from "./_helpers.js";
 describe("InitHandbookV2", () => {
   const ctx = useTmpHome();
 
+  it("test_plain_init_writes_no_skills", async () => {
+    const [code, out] = await run("init");
+    expect(code).toBe(0);
+    expect(out).not.toContain("everyday skills:");
+    expect(existsSync(join(process.cwd(), ".claude", "skills"))).toBe(false);
+    const [everydayCode, everydayOut] = await run("init", "--everyday");
+    expect(everydayCode).toBe(0);
+    expect(everydayOut).toContain("orch skills install");
+    expect(existsSync(join(process.cwd(), ".claude", "skills"))).toBe(false);
+  });
+
   it("init_writes_the_four_handbook_files_flat", async () => {
     const [code, out] = await run("init");
     expect(code).toBe(0);

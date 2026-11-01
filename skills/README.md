@@ -1,10 +1,9 @@
-# ORCH-os skill pack (draft)
+# ORCH-os skill pack
 
-Status: **draft.** No `orch` command installs these files, and they are not part of the
-npm package. This release installs the role handbook that `orch init` writes
-(`lead-boot.md`, `worker-boot.md`, `review-boot.md`, `protocols.md`); that handbook is
-all a team needs. A skill here is an optional recipe a person chooses to use: copy its
-folder into your agent's skills directory by hand to try it.
+Status: install the bundled pack with `orch skills install`. Use `orch skills status`
+to check each copy, or `orch skills install --user` to install under your home directory.
+`orch init --everyday` shows the install command; `orch init --everyday --with-skills`
+installs the pack in the current workspace.
 
 These are agent skills for running a team of CLI coding agents with ORCH-os: what to do
 when the human leaves, returns or goes to sleep, how to fan one goal out, how to merge

@@ -25,6 +25,7 @@ import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 import { ignoreClosedPipes } from "./closed-pipe.js";
+import { installSkill, shippedSkills, skillRows, skillsTarget } from "./skills.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -300,6 +301,11 @@ const cmdInit: Run = (a, io) => {
     if (wrote.length < rows.length) println(io, `kept ${rows.length - wrote.length} existing handbook file(s) in ${dir} (--force-handbook rewrites them)`);
     println(io, `boot: point each agent session at its role file, e.g. ${targetFile(dir, "lead-boot", layout)} (see docs/faq.md)`);
   }
+  if (a.everyday) println(io, "everyday skills: run `orch skills install` to add the skill pack to this workspace");
+  if (a.with_skills) {
+    const code = cmdSkillsInstall({ _path: ["orch", "skills", "install"], user: false, only: null, dry_run: false, force: false }, io);
+    if (code !== 0) return code;
+  }
   if (keptProblem) {
     // the kept block is unchanged byte for byte, and it is not usable: say so instead of "next: orch doctor"
     eprintln(io, `init: the kept [profile] cannot be used as it is: ${keptProblem}`);
@@ -326,6 +332,32 @@ const cmdAgents: Run = (a, io) => {
   const known = new Set(rows.map((r) => r.name));
   for (const name of Object.keys(configured).filter((n) => !known.has(n)).sort()) {
     println(io, `${padEnd(name, 7)} ${padEnd("custom", 17)} ${padEnd("configured", 10)} ${(configured[name].command ?? []).join(" ")}`);
+  }
+  return 0;
+};
+
+const cmdSkillsInstall = (a: Args, io: IO): number => {
+  const shipped = shippedSkills();
+  const selected = a.only === null ? shipped : [...new Set(String(a.only).split(",").map((name) => name.trim()))];
+  if (selected.some((name) => !shipped.includes(name))) {
+    eprintln(io, `skills: unknown skill in --only; choose from ${shipped.join(", ")}`);
+    return 2;
+  }
+  const target = skillsTarget(Boolean(a.user));
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${installSkill(name, target, Boolean(a.force), Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
+};
+
+const cmdSkillsStatus: Run = (a, io) => {
+  const rows = skillRows();
+  if (a.json) println(io, JSON.stringify({ version: VERSION, skills: rows }));
+  else {
+    println(io, `skill pack ${VERSION}`);
+    for (const row of rows) println(io, `${row.name}: ${row.state}`);
   }
   return 0;
 };
@@ -358,6 +390,14 @@ const cmdDoctor: Run = (a, io) => {
   const major = Number(process.versions.node.split(".")[0]);
   // the same floor as `engines.node` in package.json
   add(major >= 22, "node>=22", process.versions.node);
+  try {
+    const skills = skillRows();
+    const installed = skills.filter((row) => row.state === "installed").length;
+    const modified = skills.filter((row) => row.state === "modified").length;
+    add(true, "skills", `${installed} installed/${skills.length} shipped, ${modified} modified${installed || modified ? "" : " (not installed)"}`);
+  } catch (e: any) {
+    add(true, "skills", `unavailable: ${e.message ?? e}`);
+  }
   if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
   else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
@@ -1140,6 +1180,20 @@ export function buildTree(): CmdSpec<Run> {
           opt("required_review", ["--required-review"], "str", "profile: weakest agent review that passes (no default)", { choices: P.STRENGTHS }),
           opt("max_workers", ["--max-workers"], "int", "profile: most workers running at once, an integer >= 1 (no default)", { metavar: "N" }),
           opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
+          opt("everyday", ["--everyday"], "bool", "show how to add the everyday skill pack"),
+          opt("with_skills", ["--with-skills"], "bool", "install the skill pack in this workspace"),
+        ],
+      },
+      {
+        name: "skills", help: "install or inspect the bundled skill pack",
+        sub: [
+          { name: "install", help: "copy bundled skills into .claude/skills", run: cmdSkillsInstall, opts: [
+            opt("user", ["--user"], "bool", "install in the home skills directory"),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+            opt("force", ["--force"], "bool", "back up and replace modified skills"),
+          ] },
+          { name: "status", help: "show each bundled skill and its installed state", run: cmdSkillsStatus, opts: [JSON_OPT] },
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
