@@ -18,6 +18,11 @@ export function runtimeSpecs(): CmdSpec[] {
       { dest: "tick", flags: ["--tick"], kind: "int", help: "required increasing tick number" },
       { dest: "approved", flags: ["--approved"], kind: "bool", help: "approve this fixed event-inspection tick" },
     ] },
+    { name: "dispatch", help: "reserve and launch one explicitly approved task", opts: [...common,
+      { dest: "expected_epoch", flags: ["--expected-epoch"], kind: "int", help: "required current lease epoch" },
+      { dest: "approved", flags: ["--approved"], kind: "bool", help: "approve this one task invocation" },
+      { dest: "task_file", flags: ["--task-file"], kind: "str", help: "JSON task file" },
+    ] },
   ];
 }
 
@@ -25,8 +30,9 @@ export function runLeadRuntime(argv: string[], io: { out(s: string): void; err(s
   try {
     const { args, cmd } = parse({ name: "lead", help: "lead loop", sub: runtimeSpecs() }, argv, ["orch", "lead"]);
     // Validate authorization and usage before loading config or creating any locks/files.
-    if (!args.session || (cmd.name === "tick" && (!args.approved || !args.expected_epoch || !args.tick))) {
-      throw new Error("--session is required; tick also requires --approved, --expected-epoch and --tick");
+    if (!args.session || (cmd.name === "tick" && (!args.approved || !args.expected_epoch || !args.tick))
+      || (cmd.name === "dispatch" && (!args.approved || !args.expected_epoch || !args.task_file))) {
+      throw new Error("--session is required; tick/dispatch also require --approved and --expected-epoch with their tick/task file");
     }
     const cfg = C.loadOrDefault(), l = cfg.lease ?? {}, m = cfg.messages ?? {};
     const lease = new Lease(C.expand(l.path ?? join(C.orchHome(), "lease.json")),
@@ -34,10 +40,13 @@ export function runLeadRuntime(argv: string[], io: { out(s: string): void; err(s
       C.configNumber(l.min_seconds, 60, "[lease] min_seconds", 1));
     const box = new Messages(C.expand(m.path ?? join(C.orchHome(), "messages.jsonl")),
       C.expand(m.cursors ?? join(C.orchHome(), "cursors")));
-    const [code, result] = new LeadLoop(lease, box).run(cmd.name as "boot" | "tick", {
+    const loop = new LeadLoop(lease, box, cfg);
+    const opts = {
       session: args.session, seconds: args.seconds ?? undefined, expectedEpoch: args.expected_epoch,
       tick: args.tick, approved: args.approved,
-    });
+    };
+    const [code, result] = cmd.name === "dispatch" ? loop.dispatch({ ...opts, taskFile: args.task_file })
+      : loop.run(cmd.name as "boot" | "tick", opts);
     io.out(JSON.stringify(result) + "\n");
     return code;
   } catch (e: any) {

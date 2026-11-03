@@ -252,7 +252,7 @@ function preservedLine(env: LeadEnv, workspace: string, p: Preserved): string {
 
 /** Run one `orch lead` command line (without the leading `lead`). Returns the exit code. */
 export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<number> {
-  if (argv[0] === "boot" || argv[0] === "tick") {
+  if (argv[0] === "boot" || argv[0] === "tick" || argv[0] === "dispatch") {
     return runLeadRuntime(argv, { out: deps.out ?? ((s) => { process.stdout.write(s); }), err: deps.err ?? ((s) => { process.stderr.write(s); }) });
   }
   const now = deps.now ?? (() => performance.now());
