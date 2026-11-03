@@ -32,6 +32,8 @@ export class LockLostError extends Error {
 export interface LockOptions {
   timeoutMs?: number;
   staleMs?: number;
+  /** All contenders preserve a marked live local owner, regardless of its age. */
+  protectLive?: boolean;
 }
 
 interface Owner {
@@ -39,6 +41,7 @@ interface Owner {
   host: string;
   token: string;
   created_ms: number;
+  protect_live?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -70,6 +73,7 @@ function staleMark(dir: string, staleMs: number): string | null {
   const o = readOwner(dir);
   if (o) {
     const dead = o.host === hostname() && !pidAlive(o.pid, false);
+    if (o.protect_live === true && o.host === hostname() && !dead) return null;
     const old = now - o.created_ms > staleMs;
     return dead || old ? "token:" + o.token : null;
   }
@@ -135,6 +139,7 @@ export class FileLock {
         mkdirSync(this.path, { mode: 0o700 });
         const token = randomUUID();
         const owner: Owner = { pid: process.pid, host: hostname(), token, created_ms: Date.now() };
+        if (this.opts.protectLive) owner.protect_live = true;
         writeFileSync(this.path + "/owner.json", JSON.stringify(owner));
         this.token = token;
         return;

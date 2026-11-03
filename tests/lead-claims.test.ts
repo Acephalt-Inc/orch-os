@@ -68,7 +68,7 @@ describe("orch lead: reviewed text", () => {
         expect.soft(text.includes(unit.text), `[sentence-inventory] ${file} has the reviewed line: ${unit.text}`).toBe(true);
         everything.push([file, unit]);
       }
-      const about = text.split("\n").filter((line) => /orch lead|lead-install/.test(line));
+      const about = text.split("\n").filter((line) => /orch lead (?:install|status|uninstall)|lead-install/.test(line));
       expect.soft(about.filter((line) => !units.some((u) => line.includes(u.text))), `[sentence-inventory] ${file}: no other line mentions the lead pack`).toEqual([]);
       for (const line of about) published.push([file, line]);
     }

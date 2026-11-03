@@ -38,6 +38,8 @@ On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and
 
 ## Why ORCH-os
 
+`orch lead boot` acquires or renews the lead lease and saves a restart receipt. `orch lead tick --approved` inspects a bounded event batch with a durable cursor. Scheduler, assistant wake, worker dispatch and memory integration remain unavailable in this first slice. See [lead runtime](docs/lead-runtime.md).
+
 One coding agent needs a prompt. A team of agents needs an operating layer: someone leads, work has one owner, messages are delivered and answered, a merge waits for a review by someone other than the author, and notes survive the session. ORCH-os provides that layer as local commands over plain files. You provide the agent accounts, and you make the final acceptance and merge decision.
 
 ## What ORCH-os provides
