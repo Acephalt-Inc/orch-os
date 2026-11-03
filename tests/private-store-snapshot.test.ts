@@ -1068,7 +1068,7 @@ it.each(sharedAuditSites)("shared_site_probe row %s", async (row) => {
 for (const primary of ["TOO_LARGE", "EIO"] as const) {
   for (const api of ["read", "commit", "mutate", "recover"] as const) {
     it(`snapshot_names_primary_${primary}_close_EIO_api_${api}`, async () => {
-      const workspace = mkdtempSync(join(tmpdir(), "review-k2-"));
+      const workspace = mkdtempSync(join(realpathSync(tmpdir()), "review-k2-"));
       homes.push(workspace);
       const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
       const paths = partitionPaths(binding);
@@ -1129,7 +1129,7 @@ for (const primary of ["TOO_LARGE", "EIO"] as const) {
 for (const phase of ["pre_mkdir", "post_mkdir_lstat"] as const) {
   for (const api of ["read", "commit", "mutate", "recover"] as const) {
     it(`snapshot_acquisition_phase_${phase}_api_${api}`, async () => {
-      const workspace = mkdtempSync(join(tmpdir(), "review-acquire-"));
+      const workspace = mkdtempSync(join(realpathSync(tmpdir()), "review-acquire-"));
       homes.push(workspace);
       const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
       const paths = partitionPaths(binding);
@@ -1167,7 +1167,7 @@ for (const phase of ["pre_mkdir", "post_mkdir_lstat"] as const) {
 
 for (const api of ["read", "commit", "mutate", "recover"] as const) {
   it(`snapshot_names_primary_DEADLINE_close_EIO_api_${api}`, async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "review-deadline-"));
+    const workspace = mkdtempSync(join(realpathSync(tmpdir()), "review-deadline-"));
     homes.push(workspace);
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
     const paths = partitionPaths(binding);
