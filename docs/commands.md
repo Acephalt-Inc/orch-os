@@ -11,6 +11,10 @@ ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.
 
 Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
 
+## orch setup
+
+`orch setup [--workspace PATH] [--preset coding|research|ops] [--scope workspace|user] [--yes] [--dry-run]` runs an ordered setup plan for Claude Code. It asks a few questions, reports missing capabilities, and keeps existing files under their installer's protection. See [Setup](setup.md) for defaults, steps, and exit codes.
+
 ## orch init
 
 ```text

@@ -32,6 +32,7 @@ import { installSkill, shippedSkills, skillRows, skillsTarget, uninstallSkill } 
 import { awakeCommandSpec } from "./service/awake-command.js";
 import type { AwakeRunner } from "./service/awake.js";
 import { serviceSpec, type ServiceDeps } from "./service/command.js";
+import { runSetup, setupSpec } from "./setup.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -1237,6 +1238,7 @@ export function buildTree(): CmdSpec<Run> {
     sub: [
       serviceSpec(),
       awakeCommandSpec(),
+      setupSpec((a, io) => runSetup(a, io, { tree: buildTree(), platform: a._platform })),
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [

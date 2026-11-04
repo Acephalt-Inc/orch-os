@@ -25,8 +25,10 @@ Requires Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or
 
 ```sh
 npm i -g orch-os
-# or: npx orch-os init
+# or: npx orch-os setup
 ```
+
+Quick start: `npx orch-os setup` — [set up Claude Code in one command](docs/setup.md).
 
 Or paste this one sentence to a coding assistant that can run commands on your machine:
 
