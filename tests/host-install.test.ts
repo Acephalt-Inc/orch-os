@@ -70,7 +70,7 @@ it('distinguishes missing hooks and agreement in status', async () => {
     const args = ['--workspace', workspace, '--host', 'claude'];
     expect(await runHost(['install', ...args], io, { home })).toBe(0);
     const fs = await import('node:fs'); const file = join(workspace, '.claude', 'settings.json');
-    const data = JSON.parse(fs.readFileSync(file, 'utf8')); data.hooks.Stop = []; fs.writeFileSync(file, JSON.stringify(data)); fs.unlinkSync(join(workspace, 'CLAUDE.md'));
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')); data.hooks.Stop = []; fs.writeFileSync(file, JSON.stringify(data)); fs.unlinkSync(join(workspace, '.claude', 'CLAUDE.md'));
     output = ''; expect(await runHost(['status', ...args], io, { home })).toBe(0);
     expect(output).toContain('hook stop-continue: MISSING'); expect(output).toContain('agreement: MISSING');
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -91,12 +91,12 @@ it('restores user-scope settings and rejects another workspace', async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-it('refuses a linked .claude directory', async () => {
+for (const scope of ['workspace', 'user']) it(`refuses a linked workspace .claude directory in ${scope} scope`, async () => {
   const root = mkdtempSync(join(tmpdir(), 'host '));
   try {
     const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
     fs.symlinkSync(home, join(workspace, '.claude'), 'dir');
-    expect(await runHost(['install', '--workspace', workspace, '--host', 'claude'], { out: () => {}, err: () => {} }, { home })).toBe(1);
+    expect(await runHost(['install', '--workspace', workspace, '--host', 'claude', '--scope', scope], { out: () => {}, err: () => {} }, { home })).toBe(1);
     expect(fs.readdirSync(home)).toEqual([]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -145,7 +145,7 @@ it('removes its exact agreement when the surrounding separator was edited', asyn
   const root = mkdtempSync(join(tmpdir(), 'host '));
   try {
     const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
-    const file = join(workspace, 'CLAUDE.md'); fs.writeFileSync(file, 'before\n');
+    mkdirSync(join(workspace, '.claude')); const file = join(workspace, '.claude', 'CLAUDE.md'); fs.writeFileSync(file, 'before\n');
     const io = { out: (_: string) => {}, err: (_: string) => {} }; const args = ['--workspace', workspace, '--host', 'claude'];
     expect(await runHost(['install', ...args], io, { home })).toBe(0);
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('before\n\n', 'before\n') + 'after\n');
@@ -192,7 +192,7 @@ it('restores original agreement before a user append', async () => {
   const root = mkdtempSync(join(tmpdir(), 'host '));
   try {
     const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
-    const file = join(workspace, 'CLAUDE.md'); fs.writeFileSync(file, 'before\n');
+    mkdirSync(join(workspace, '.claude')); const file = join(workspace, '.claude', 'CLAUDE.md'); fs.writeFileSync(file, 'before\n');
     const io = { out: (_: string) => {}, err: (_: string) => {} }; const args = ['--workspace', workspace, '--host', 'claude'];
     expect(await runHost(['install', ...args], io, { home })).toBe(0);
     fs.appendFileSync(file, 'after\n'); expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
@@ -218,7 +218,7 @@ it('cleans retained state once a modified hook is removed without reclaiming a r
     const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
     const io = { out: (_: string) => {}, err: (_: string) => {} }; const args = ['--workspace', workspace, '--host', 'claude'];
     expect(await runHost(['install', ...args], io, { home })).toBe(0);
-    const settings = join(workspace, '.claude', 'settings.json'), agreement = join(workspace, 'CLAUDE.md');
+    const settings = join(workspace, '.claude', 'settings.json'), agreement = join(workspace, '.claude', 'CLAUDE.md');
     const block = fs.readFileSync(agreement, 'utf8'); const data = JSON.parse(fs.readFileSync(settings, 'utf8')); data.hooks.Stop[0].hooks[0].timeout = 7; fs.writeFileSync(settings, JSON.stringify(data));
     expect(await runHost(['uninstall', ...args], io, { home })).toBe(2);
     const remaining = JSON.parse(fs.readFileSync(settings, 'utf8')); remaining.hooks.Stop = []; fs.writeFileSync(settings, JSON.stringify(remaining)); fs.writeFileSync(agreement, block);
@@ -236,7 +236,7 @@ it('reports interrupted install as incomplete and uninstalls it safely', async (
     const settings = join(workspace, '.claude', 'settings.json'), original = '{"permissions":{"allow":["Read"]}}\n'; fs.writeFileSync(settings, original);
     let output = ''; const io = { out: (s: string) => { output += s; }, err: (_: string) => {} }; const args = ['--workspace', workspace, '--host', 'claude'];
     const failing = { ...fs, writeFileSync: (p: fs.PathOrFileDescriptor, data: string, options?: any) => {
-      if (p === join(workspace, 'CLAUDE.md')) throw Object.assign(new Error('injected'), { code: 'EIO' });
+      if (p === join(workspace, '.claude', 'CLAUDE.md')) throw Object.assign(new Error('injected'), { code: 'EIO' });
       return fs.writeFileSync(p, data, options);
     } } as typeof fs;
     expect(await runHost(['install', ...args], io, { home, fs: failing })).toBe(1);
@@ -293,5 +293,19 @@ for (const scope of ['workspace', 'user']) it(`retains a user-owned prefix and n
     const data = JSON.parse(fs.readFileSync(file, 'utf8')); data.permissions.allow.push('Bash(git status)'); fs.writeFileSync(file, JSON.stringify(data));
     expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow).toEqual(['Bash(git status:*)', 'Bash(git status)']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('installs and removes user-scope agreement when workspace has no .claude directory', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'host user agreement '));
+  try {
+    const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
+    const args = ['--workspace', workspace, '--host', 'claude', '--scope', 'user'];
+    const io = { out: (_: string) => {}, err: (_: string) => {} };
+    const agreement = join(workspace, '.claude', 'CLAUDE.md');
+    expect(await runHost(['install', ...args], io, { home })).toBe(0);
+    expect(fs.readFileSync(agreement, 'utf8')).toContain('<!-- orch-host:start -->');
+    expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
+    expect(fs.existsSync(agreement)).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

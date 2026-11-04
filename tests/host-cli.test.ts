@@ -57,7 +57,7 @@ it("built settings invoke the Node hook entrypoint with stdin and paths containi
   const cli = join(process.cwd(), "dist", "cli.js");
   const installed = spawnSync(process.execPath, [cli, "host", "install", "--workspace", workspace, "--host", "claude"], { env, encoding: "utf8" });
   expect(installed.status, installed.stderr).toBe(0);
-  expect(readFileSync(join(workspace, "CLAUDE.md"), "utf8")).toContain("irreversible or outward-facing actions");
+  expect(readFileSync(join(workspace, ".claude", "CLAUDE.md"), "utf8")).toContain("irreversible or outward-facing actions");
   const settings = JSON.parse(readFileSync(join(workspace, ".claude", "settings.json"), "utf8"));
   const hook = settings.hooks.PreToolUse.at(-1).hooks[0];
   const result = spawnSync(hook.command, hook.args, { env, encoding: "utf8", input: JSON.stringify({

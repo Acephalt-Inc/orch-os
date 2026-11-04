@@ -17,7 +17,7 @@ export function hostSpec(): CmdSpec<any> {
   return { name: 'host', help: 'install, inspect, or remove Claude host settings', sub: ['install', 'status', 'uninstall'].map(name => ({ name, help: `${name} host integration`, opts })) };
 }
 export function hostLocations(workspace: string, home: string, scope: string, path: PlatformPath = nodePath) {
-  return { settings: path.join(scope === 'user' ? home : workspace, '.claude', 'settings.json'), agreement: path.join(workspace, 'CLAUDE.md'), state: path.join(scope === 'user' ? home : workspace, `.orch-host-${scope}`) };
+  return { settings: path.join(scope === 'user' ? home : workspace, '.claude', 'settings.json'), agreement: path.join(workspace, '.claude', 'CLAUDE.md'), state: path.join(scope === 'user' ? home : workspace, `.orch-host-${scope}`) };
 }
 const object = (x: unknown): x is Obj => x !== null && typeof x === 'object' && !Array.isArray(x);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -90,12 +90,13 @@ export async function runHost(argv: string[], io: IO, deps: Deps = {}): Promise<
       io.out(`install ${loc.settings} and ${loc.agreement}${args.dry ? ' (dry run)' : ''}\n`);
       if (args.dry) return 0;
       { const candidate = path.join(workspace, '.orch-host-lock'); checkPath(fs, path, candidate, true); fs.mkdirSync(candidate); lock = candidate; }
-      checkPath(fs, path, path.dirname(loc.settings), true); checkPath(fs, path, loc.state, true);
+      checkPath(fs, path, path.dirname(loc.settings), true); checkPath(fs, path, path.dirname(loc.agreement), true); checkPath(fs, path, loc.state, true);
       fs.mkdirSync(loc.state, { mode: 0o700 });
       fs.writeFileSync(ignorePath, '*\n', { flag: 'wx', mode: 0o600 });
       const record = { version: 1, workspace, scope, before: raw, installed, agreementBefore: agreement, agreementInstalled, agreementPending: true, required: presets[preset], allow, groups };
       fs.writeFileSync(statePath, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
       fs.mkdirSync(path.dirname(loc.settings), { recursive: true });
+      fs.mkdirSync(path.dirname(loc.agreement), { recursive: true });
       if (read(fs, path, loc.settings) !== raw || read(fs, path, loc.agreement) !== agreement) throw Error('file changed during install');
       fs.writeFileSync(loc.settings, installed); fs.writeFileSync(loc.agreement, agreementInstalled);
       return 0;

@@ -193,9 +193,11 @@ describe("setup", () => {
       const workspace = join(base, "workspace"), home = join(base, "home");
       mkdirSync(workspace); mkdirSync(home);
       const env = { ...process.env, ORCH_HOME: home, HOME: home, USERPROFILE: home };
-      const run = () => spawnSync(process.execPath, [DIST_CLI, "setup", "--workspace", workspace, "--yes"], { cwd: workspace, env, encoding: "utf8" });
+      const run = () => spawnSync(process.execPath, [DIST_CLI, "setup", "--workspace", workspace, "--yes", "--preset", "ops"], { cwd: workspace, env, encoding: "utf8" });
       const first = run();
       expect(first.status, first.stderr + first.stdout).toBe(0);
+      const status = spawnSync(process.execPath, [DIST_CLI, "lead", "status", "--workspace", workspace, "--host", "claude"], { cwd: workspace, env, encoding: "utf8" });
+      expect(status.stdout + status.stderr).toContain("result: INSTALLED");
       const config = join(home, "config.toml"), lead = join(workspace, "CLAUDE.md");
       const configBytes = readFileSync(config), leadBytes = readFileSync(lead);
       const second = run();

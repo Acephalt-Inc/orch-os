@@ -6,7 +6,7 @@ orch host status --workspace PATH --host claude [--scope workspace|user]
 orch host uninstall --workspace PATH --host claude [--scope workspace|user] [--dry-run]
 ```
 
-Defaults are `coding` and `workspace`. Installation merges permission rules and three hooks into `.claude/settings.json` in the workspace, or `~/.claude/settings.json` with user scope. Both scopes add a marked working agreement to the workspace's `CLAUDE.md`. Existing settings and instructions are preserved, with backups and an ownership record for removal. A dry run writes nothing. Status reports permissions, each hook and the agreement as `INSTALLED`, `MODIFIED-BY-USER` or `MISSING`.
+Defaults are `coding` and `workspace`. Installation merges permission rules and three hooks into `.claude/settings.json` in the workspace, or `~/.claude/settings.json` with user scope. Both scopes add a marked working agreement to the workspace's `.claude/CLAUDE.md`. Existing settings and instructions are preserved, with backups and an ownership record for removal. A dry run writes nothing. Status reports permissions, each hook and the agreement as `INSTALLED`, `MODIFIED-BY-USER` or `MISSING`.
 
 Uninstall restores the original bytes when the installed file is unchanged. If you changed it, uninstall removes only unchanged additions that it owns and preserves your edits. Keep the ownership record and backup until uninstall finishes. Status describes files; it does not prove that a running Claude session loaded them.
 

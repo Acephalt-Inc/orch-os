@@ -33,6 +33,6 @@ On a rerun, setup asks the installers for their status and skips verified instal
 
 The same plan runs on macOS and Windows, using native paths and Node child processes without a shell. A platform adapter reports its own availability and reason; setup does not infer support from the OS name. Automated tests cover both path styles and fake adapter results. Real Windows execution has not been verified for this command.
 
-Integration limit: installers that both own `CLAUDE.md` must agree on how they share it. If a host installer changes the lead bootstrap, a later lead status can report `PARTIAL`; setup stops and preserves the files. It does not replace that result with success. Builds combining those installers need a compatible ownership contract before a complete rerun can succeed.
+The lead bootstrap uses the workspace `CLAUDE.md`. The host working agreement uses `.claude/CLAUDE.md`, so each installer can track its own changes.
 
 After setup, open Claude Code in the workspace and say **"boot the lead"**. Setup installs local integration; it does not sign you into Claude Code or verify that a live assistant has loaded the files.
