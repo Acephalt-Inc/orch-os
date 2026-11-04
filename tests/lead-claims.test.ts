@@ -47,7 +47,7 @@ function unitsOf(file: string, text: string): string[] {
 describe("orch lead: reviewed text", () => {
   it("lead_reviewed_sentences_and_behavior_claims", () => {
     const reviewed: Record<string, string> = { ...FROZEN.sources, ...FROZEN.documents };
-    expect(Object.keys(FROZEN.sources).length, "21 packaged files").toBe(21);
+    expect(Object.keys(FROZEN.sources).length, "22 packaged files").toBe(22);
     expect(Object.keys(FROZEN.units).sort(), "every reviewed file has a sentence list").toEqual(Object.keys(reviewed).sort());
     const everything: [string, Unit][] = [];
     /** The sentences as they are in the files now, outside the pack: documentation, README lines, command text. */

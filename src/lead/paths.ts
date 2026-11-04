@@ -17,11 +17,12 @@ export const OBJECTS_DIR = `${STATE_DIR}/objects`;
 export const DIRECTORIES = `${STATE_DIR}/directories.json`;
 /** Written last: its presence says that install finished. */
 export const COMPLETE = `${STATE_DIR}/complete`;
-export const PAYLOAD_COUNT = 20;
+export const PAYLOAD_COUNT = 21;
 
 /** Packaged source (relative to the package) and destination relative to the host root. */
 const COMMON: readonly (readonly [string, string])[] = [
   ["templates/lead/SKILL.md", "SKILL.md"],
+  ["templates/handbook/lead-boot.md", "boot.md"],
   ["templates/lead/routing.md", "routing.md"],
   ["templates/lead/brief.md", "brief.md"],
   ["templates/lead/handoff.md", "handoff.md"],
@@ -70,7 +71,7 @@ export interface PayloadRow {
   bootstrap: boolean;
 }
 
-/** The 20 payload rows of a host, in code-point order of the destination, anchors numbered in that order. */
+/** The 21 payload rows of a host, in code-point order of the destination, anchors numbered in that order. */
 export function payloadRows(host: Host): PayloadRow[] {
   const layout = HOST_LAYOUT[host];
   const rows = COMMON.map(([source, rel]) => ({ source, dest: `${layout.root}/${rel}`, bootstrap: false }));

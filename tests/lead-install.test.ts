@@ -118,7 +118,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
       const r = status(w);
       expect.soft([r.code, resultOf(r.out), rowStates(r.out, w)], `[intent-not-completion] a manifest without anchors or files is PARTIAL, all rows MISSING\n${r.out}${r.err}`)
         .toEqual([2, "PARTIAL", all("claude", "MISSING")]);
-      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 20");
+      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 21");
     }
     // Manifest and every anchor complete, but no file was published.
     {
@@ -238,7 +238,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
     };
     const status = lead("status", ...args);
     expect.soft([status.code, resultOf(status.out)], `status\n${status.out}${status.err}`).toEqual([2, "PARTIAL"]);
-    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 20 paths").toEqual(expected);
+    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 21 paths").toEqual(expected);
 
     const identity = () => Object.fromEntries(kept.map((rel) => [rel, idOf(at(w, rel))]));
     const content = () => [readFileSync(at(w, p("brief.md")), "utf8").endsWith("my own line\n"), sha(readFileSync(at(w, p("handoff.md")))), readFileSync(at(w, p("routing.md")), "utf8"),
