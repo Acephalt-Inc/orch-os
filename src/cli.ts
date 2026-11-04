@@ -25,6 +25,7 @@ import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 import { ignoreClosedPipes } from "./closed-pipe.js";
+import { serviceSpec, type ServiceDeps } from "./service/command.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -1125,6 +1126,7 @@ export function buildTree(): CmdSpec<Run> {
     name: "orch",
     help: "ORCH-os: run several CLI coding agents as one team (lease, mailbox, messages, task claims, merge gate, workers, load governor, mem).",
     sub: [
+      serviceSpec(),
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [
@@ -1373,7 +1375,7 @@ export function buildTree(): CmdSpec<Run> {
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
 export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
-  runtime: { platform?: NodeJS.Platform; updateUrl?: string } = {}): Promise<number> {
+  runtime: { platform?: NodeJS.Platform; updateUrl?: string; service?: ServiceDeps } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1429,6 +1431,7 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   }
   const { args, cmd } = parsed;
   args._platform = runtime.platform ?? process.platform;
+  args._service = runtime.service;
   // only a caller of main() can name another address (the tests' local registry); no option or variable does
   args._updateUrl = runtime.updateUrl;
   args.cmd = rest;
