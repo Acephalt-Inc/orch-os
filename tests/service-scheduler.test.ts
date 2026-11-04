@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { mkdtempSync, rmSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { Scheduler, type Runner } from '../src/service/scheduler.js';
 
@@ -101,6 +101,14 @@ it('accepts native Windows paths and includes scoped logon and safe power settin
   expect(plan.definition).toContain('<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>');
   expect(plan.definition).toContain('<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>');
   expect(plan.definition).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>');
+});
+it('takes the path style from a drive-letter home when the job targets another platform', () => {
+  // On a Windows host every temporary path has a drive letter, including in tests that simulate darwin or linux.
+  const runner: Runner = () => { throw Error('called'); };
+  const common = { home: 'C:\\Users\\Jane\\orch', userHome: 'C:\\Users\\Jane', node: 'C:\\node.exe', cli: 'C:\\app\\cli.js', uid: 1, user: 'jane', runner };
+  expect(new Scheduler({ ...common, platform: 'linux' }).install(true).outcome).toBe('UNAVAILABLE');
+  expect(new Scheduler({ ...common, platform: 'darwin' }).install(true).plan!.path).toMatch(/^C:\\Users\\Jane\\Library\\LaunchAgents\\org\.orch\.[0-9a-f]{16}\.wake-watch\.plist$/);
+  expect(() => new Scheduler({ ...common, platform: 'darwin', node: 'node.exe' })).toThrow('Scheduler paths must be absolute');
 });
 it('reports an unknown query failure with an unknown loaded state', () => {
   const { scheduler } = fixture('darwin', () => ({ code: 1, out: '', err: '' }));
@@ -272,7 +280,7 @@ it.each(['darwin', 'win32'] as const)('generates and manages an owned periodic h
     if (args[0] === '/Query') return { code: loaded ? 0 : 1, out: loaded, err: loaded ? '' : 'not found' };
     if (args[0] === '/Create') loaded = readFileSync(args[args.indexOf('/XML') + 1], 'utf8');
     if (args[0] === 'bootstrap') {
-      const name = args[2].split('/').pop()!.replace('.plist', '');
+      const name = basename(args[2], '.plist');
       loaded = `gui/1/${name} = {\n arguments = {\n${[join(root,'node'), join(root,'cli'), 'service','run','health','--home',root].join('\n')}\n }\n}`;
     }
     return { code: 0, out: loaded || '{}', err: '' };

@@ -10,14 +10,18 @@ describe("skills install", () => {
   let workspace: string;
   let home: string;
   let oldHome: string | undefined;
+  let oldUserProfile: string | undefined;
   let oldOrchHome: string | undefined;
   const original = process.cwd();
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), "orch-skills-"));
     home = mkdtempSync(join(tmpdir(), "orch-skills-home-"));
     oldHome = process.env.HOME;
+    oldUserProfile = process.env.USERPROFILE;
     oldOrchHome = process.env.ORCH_HOME;
     process.env.HOME = home;
+    // On Windows the user scope is USERPROFILE (see "uses native path styles and Windows USERPROFILE").
+    process.env.USERPROFILE = home;
     process.env.ORCH_HOME = join(home, "orch-state");
     process.chdir(workspace);
   });
@@ -25,6 +29,8 @@ describe("skills install", () => {
     process.chdir(original);
     if (oldHome === undefined) delete process.env.HOME;
     else process.env.HOME = oldHome;
+    if (oldUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = oldUserProfile;
     if (oldOrchHome === undefined) delete process.env.ORCH_HOME;
     else process.env.ORCH_HOME = oldOrchHome;
     rmSync(workspace, { recursive: true, force: true });

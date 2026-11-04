@@ -26,7 +26,9 @@ export class Scheduler {
   constructor(private readonly options: Options) {
     const prefix = options.prefix ?? 'org.orch';
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(prefix)) throw new Error('Invalid scheduler prefix');
-    const paths = options.platform === 'win32' && win32.isAbsolute(options.home) && !posix.isAbsolute(options.home) ? win32 : posix;
+    // Path style follows the paths themselves, not the scheduler backend: the files live on the host that runs
+    // orch, so a drive-letter home is a Windows path even when the job definition targets another platform.
+    const paths = win32.isAbsolute(options.home) && !posix.isAbsolute(options.home) ? win32 : posix;
     if (![options.home, options.userHome, options.node, options.cli].every(paths.isAbsolute)) throw new Error('Scheduler paths must be absolute');
     this.serviceDir = paths.join(options.home, 'service');
     this.name = `${prefix}.${createHash('sha256').update(options.home).digest('hex').slice(0, 16)}.${options.job ?? 'wake-watch'}`;
@@ -135,7 +137,7 @@ export class Scheduler {
       if (q.code !== 0 && !this.absent(q)) return this.result('ERROR', q.err || q.out);
       if (q.code === 0 && (!existing || !this.matches(q.out))) return this.result('CONFLICT', 'A different scheduler job already exists');
       if (!existing) {
-        if (this.options.platform === 'darwin') mkdirSync(posix.join(this.options.userHome, 'Library', 'LaunchAgents'), { recursive: true });
+        if (this.options.platform === 'darwin') mkdirSync(this.definitionDir, { recursive: true });
         const record: Manifest = { platform: this.options.platform, job: this.name, path: this.path, definition: this.definition() };
         writeFileSync(this.manifest, JSON.stringify(record), { flag: 'wx' });
       }
