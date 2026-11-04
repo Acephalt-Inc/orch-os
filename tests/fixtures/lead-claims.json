@@ -456,6 +456,18 @@
    "test": "lead_both_full_outputs_end_within_budget",
    "marker": "both-full-ends",
    "mutant": "blocking-deadline-diagnostic-restored"
+  },
+  "completion-releases-slot": {
+   "test_file": "tests/lead-dispatch.test.ts",
+   "test": "lead_completion_release_allows_next_approved_task",
+   "marker": "completion-release",
+   "mutant": "completion-release-check-removed"
+  },
+  "completion-consumed-before-release": {
+   "test_file": "tests/lead-dispatch.test.ts",
+   "test": "lead_completion_cursor_required_before_release",
+   "marker": "completion-required",
+   "mutant": "completion-cursor-check-removed"
   }
  },
  "mutants": [
@@ -2239,6 +2251,36 @@
      "file": "src/lead/cli.ts",
      "find": "    process.exit(1);",
      "replace": "    process.stderr.write(\"orch lead: the command deadline was reached\\n\", () => process.exit(1));"
+    }
+   ]
+  },
+  {
+   "id": "completion-release-check-removed",
+   "test_file": "tests/lead-dispatch.test.ts",
+   "test": "lead_completion_release_allows_next_approved_task",
+   "markers": [
+    "completion-release"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/runtime.ts",
+     "find": "        if (action === \"tick\" && reservation && reservation.phase !== \"RESERVED\") this.releaseConsumed(reservation, state);",
+     "replace": "        if (false && reservation) this.releaseConsumed(reservation, state);"
+    }
+   ]
+  },
+  {
+   "id": "completion-cursor-check-removed",
+   "test_file": "tests/lead-dispatch.test.ts",
+   "test": "lead_completion_cursor_required_before_release",
+   "markers": [
+    "completion-required"
+   ],
+   "edits": [
+    {
+     "file": "src/lead/runtime.ts",
+     "find": "matches[0].seq > state.event_cursor",
+     "replace": "false"
     }
    ]
   }
