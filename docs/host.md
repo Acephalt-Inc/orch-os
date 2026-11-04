@@ -10,19 +10,90 @@ Defaults are `coding` and `workspace`. Installation merges permission rules and 
 
 Uninstall restores the original bytes when the installed file is unchanged. If you changed it, uninstall removes only unchanged additions that it owns and preserves your edits. Keep the ownership record and backup until uninstall finishes. Status describes files; it does not prove that a running Claude session loaded them.
 
-The pack does not grant permission for irreversible or outward actions. Existing user rules remain in effect. Test scripts run repository code: review a repository before granting its tests standing permission.
+The pack adds narrow command permissions and, in research, web tools. Existing user rules remain in effect. Test and build scripts run repository code: review a repository before granting its scripts standing permission.
 
 ## Permission presets
 
-Every preset allows exactly `Read`, `Grep`, `Glob`, `Bash(git status)`, `Bash(git diff)`, `Bash(git log)` and `Bash(pwd)`, plus these entries:
+The constants in `src/host/presets.ts` define the complete allow lists. Every preset includes every common rule below, then only its own additions. These are allow rules, not a deny policy; existing user permissions and Claude's permission mode still apply.
 
-| Preset | Additional allow entries |
+### Common rules (coding, research and ops)
+
+| Rule | Purpose |
 | --- | --- |
-| `coding` | `Bash(npm test)` |
-| `research` | `Bash(ls)`, `Bash(cat README.md)` |
-| `ops` | `Bash(ls)` |
+| `Read` | Read files with the host's file tool. |
+| `Grep` | Search file contents. |
+| `Glob` | Find files by pattern. |
+| `Bash(git status:*)` | Inspect worktree status, including format options. |
+| `Bash(git diff:*)` | Compare revisions or paths, such as `git diff main`. |
+| `Bash(git log:*)` | Inspect commit history with limits and paths. |
+| `Bash(git show:*)` | Inspect a commit or object. |
+| `Bash(git branch)` | List local branches; exact command only. |
+| `Bash(git branch --list)` | Explicitly list branches; exact command only. |
+| `Bash(pwd)` | Print the working directory; exact command only. |
+| `Bash(ls:*)` | List directories or paths, such as `ls src`. |
+| `Bash(orch mailbox read:*)` | Read mailbox entries with count/section options. |
+| `Bash(orch host status:*)` | Inspect host installation permissions, hooks and agreement. |
+| `Bash(orch lead status:*)` | Inspect lead-pack installation files. |
 
-These are exact command rules. Commands with extra arguments can still prompt. The presets add no push, publish, deletion, deployment, payment or messaging command, and no general shell, script runner or network permission.
+There is no `git branch` prefix: extra arguments can create, rename or delete branches. There is no broad `git`, `orch`, `node`, package-manager or shell-runner prefix. The ORCH entries above and below exist in the CLI command table; message reading with `--ack` is omitted because it changes state. There is no `orch mem read` or `orch mem recall` command in this CLI.
+
+### Coding additions
+
+These rules allow only the named script entrypoints, with arguments for filters and tool options. They do not allow arbitrary script names such as `test:deploy`.
+
+| Rule | Purpose |
+| --- | --- |
+| `Bash(npm test:*)` | Run the test script, for example `npm test -- parser`. |
+| `Bash(npm run test:*)` | Run the named test script. |
+| `Bash(npm run lint:*)` | Run the named lint script. |
+| `Bash(npm run typecheck:*)` | Run the named typecheck script. |
+| `Bash(npm run build:*)` | Run the named build script. |
+| `Bash(pnpm test:*)` | Run the test script with pnpm. |
+| `Bash(pnpm lint:*)` | Run the lint script with pnpm. |
+| `Bash(pnpm typecheck:*)` | Run the typecheck script with pnpm. |
+| `Bash(pnpm build:*)` | Run the build script with pnpm. |
+| `Bash(pnpm run test:*)` | Run the explicit pnpm test script. |
+| `Bash(pnpm run lint:*)` | Run the explicit pnpm lint script. |
+| `Bash(pnpm run typecheck:*)` | Run the explicit pnpm typecheck script. |
+| `Bash(pnpm run build:*)` | Run the explicit pnpm build script. |
+| `Bash(yarn test:*)` | Run the test script with Yarn. |
+| `Bash(yarn lint:*)` | Run the lint script with Yarn. |
+| `Bash(yarn typecheck:*)` | Run the typecheck script with Yarn. |
+| `Bash(yarn build:*)` | Run the build script with Yarn. |
+| `Bash(yarn run test:*)` | Run the explicit Yarn test script. |
+| `Bash(yarn run lint:*)` | Run the explicit Yarn lint script. |
+| `Bash(yarn run typecheck:*)` | Run the explicit Yarn typecheck script. |
+| `Bash(yarn run build:*)` | Run the explicit Yarn build script. |
+| `Bash(node --version)` | Inspect the Node version without allowing script execution. |
+
+Scripts and their lifecycle hooks execute repository code and may write build output or perform other actions. Review scripts, package-manager configuration and forwarded arguments before granting standing permission, especially in user scope. Git inspection prefixes also accept flags such as `--output` and external diff/text conversion configuration; these lists do not enforce that every possible argument is read-only.
+
+### Research additions
+
+| Rule | Purpose |
+| --- | --- |
+| `WebSearch` | Search the web through the host tool. |
+| `WebFetch` | Fetch web sources through the host tool from any domain. |
+
+Research grants network access through these tools. To limit fetches, replace `WebFetch` with specific rules such as `WebFetch(domain:example.com)`. It does not grant shell network clients.
+
+### Ops additions
+
+| Rule | Purpose |
+| --- | --- |
+| `Bash(orch task status:*)` | Inspect one task's holder and expiry. |
+| `Bash(orch task list:*)` | List task claims, optionally as JSON. |
+| `Bash(orch mem search:*)` | Search durable notes by terms or type. |
+
+Task inspection does not change claims, but the current lease implementation creates storage directories and takes a temporary lock while reading. No task claim/renew/release or memory add/retire permission is added.
+
+### Matching and safety limits
+
+Claude's [permission guide](https://code.claude.com/docs/en/permissions#compound-commands) documents that `:*` matches a command prefix at a word boundary and that compound commands are checked per subcommand. Thus `Bash(npm run test:*)` covers `npm run test -- parser`, while chaining `git status && git push` still requires permission for `git push`. The host performs this parsing; the preset tests check single-command rule shape and boundaries, not a replacement shell parser. Live Claude enforcement is not tested here.
+
+No preset contains bare `Bash`, `Bash(*)`, or a direct allow rule for `git push`, `git commit`, `git reset`, `git checkout`, `git clean`, `rm`, `mv`, `npm publish`, `npm install`, `curl`, `ssh`, `sudo`, deployment, sending or email commands. Exclusion tests check these commands and mutating ORCH entrypoints against every preset. This does not audit the behavior of repository scripts or cancel broader permissions already granted elsewhere.
+
+An existing install retains the rules recorded in its ownership manifest. To apply these new lists to an older install or change presets, uninstall from the owning workspace and reinstall with the desired preset; this preserves the existing backup and ownership contract.
 
 Ownership records contain the original file bytes. Workspace scope stores its record in `.orch-host-workspace/`; user scope uses `~/.orch-host-user/` and records the workspace that owns the agreement. A user-scope install is managed from that workspace; another workspace cannot replace its ownership record. Existing agreement markers cause an installation conflict rather than acquiring someone else's block. Use one scope per workspace.
 

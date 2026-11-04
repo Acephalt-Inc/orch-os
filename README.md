@@ -169,6 +169,8 @@ orch lead install --workspace PATH --host claude  # Create the lead text pack in
 orch host install --workspace PATH --host claude  # Add permissions and continuation hooks; see docs/host.md
 ```
 
+See [Claude host permission presets](docs/host.md#permission-presets) for every allowed rule and its safety limits.
+
 Full flags and exit codes: [Command reference](docs/commands.md).
 
 ## Built for multi-agent work

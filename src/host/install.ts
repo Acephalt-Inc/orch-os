@@ -4,18 +4,13 @@ import nodePath, { type PlatformPath } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parse, HelpRequested, UsageError, type CmdSpec } from '../args.js';
+import { HOST_PRESETS as presets } from './presets.js';
 
 type IO = { out: (s: string) => void; err: (s: string) => void };
 type Deps = { home?: string; platform?: NodeJS.Platform; path?: PlatformPath; fs?: typeof nodeFs };
 type Obj = Record<string, any>;
 const block = '<!-- orch-host:start -->\nContinue when no decision is needed.\nGive status and the next action in the same message.\nAsk before irreversible or outward-facing actions, including merges, pushes to shared branches, payments, sending messages, or deleting data.\nGive evidence before saying work is done.\n<!-- orch-host:end -->';
 const events = [['SessionStart', 'session-start'], ['PreToolUse', 'pre-tool-guard'], ['Stop', 'stop-continue']] as const;
-const common = ['Bash(git status)', 'Bash(git diff)', 'Bash(git log)', 'Bash(pwd)'];
-const presets: Record<string, string[]> = {
-  coding: [...common, 'Read', 'Grep', 'Glob', 'Bash(npm test)'],
-  research: [...common, 'Read', 'Grep', 'Glob', 'Bash(ls)', 'Bash(cat README.md)'],
-  ops: [...common, 'Read', 'Grep', 'Glob', 'Bash(ls)'],
-};
 const opt = (dest: string, flag: string, kind: 'str' | 'bool', choices?: string[]) => ({ dest, flags: [flag], kind, help: dest, choices });
 export function hostSpec(): CmdSpec<any> {
   const opts = [opt('workspace', '--workspace', 'str'), opt('host', '--host', 'str', ['claude']), opt('preset', '--preset', 'str', Object.keys(presets)), opt('scope', '--scope', 'str', ['workspace', 'user']), opt('dry', '--dry-run', 'bool')];

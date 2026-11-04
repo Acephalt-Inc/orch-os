@@ -154,7 +154,7 @@ it('removes its exact agreement when the surrounding separator was edited', asyn
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const scope of ['workspace', 'user']) it(`runs ${scope} lifecycle through an in-memory Windows filesystem`, async () => {
+for (const preset of ['coding', 'research', 'ops']) for (const scope of ['workspace', 'user']) it(`runs ${preset} ${scope} lifecycle through an in-memory Windows filesystem`, async () => {
   const fs = await import('node:fs'); const { win32 } = await import('node:path');
   const key = (p: string) => win32.resolve(p).toLowerCase();
   const entries = new Map<string, string | null>([[key('C:\\'), null], [key('C:\\work space'), null], [key('C:\\home'), null]]);
@@ -178,9 +178,11 @@ for (const scope of ['workspace', 'user']) it(`runs ${scope} lifecycle through a
     rmdirSync(p: string) { const k = key(p); if ([...entries.keys()].some(other => other !== k && other.startsWith(k + '\\'))) throw Error('not empty'); if (!entries.delete(k)) throw missing(); },
   } as unknown as typeof fs;
   const io = { out: (_: string) => {}, err: (_: string) => {} };
-  const args = ['--workspace', 'C:\\work space', '--host', 'claude', '--scope', scope];
+  const args = ['--workspace', 'C:\\work space', '--host', 'claude', '--scope', scope, '--preset', preset];
   const deps = { home: 'C:\\home', path: win32, platform: 'win32' as const, fs: adapter };
   expect(await runHost(['install', ...args], io, deps)).toBe(0);
+  const settingsPath = key(`C:\\${scope === 'user' ? 'home' : 'work space'}\\.claude\\settings.json`);
+  expect(JSON.parse(entries.get(settingsPath) as string).permissions.allow).toEqual(expectedPresets[preset]);
   expect(await runHost(['status', ...args], io, deps)).toBe(0);
   expect(await runHost(['uninstall', ...args], io, deps)).toBe(0);
   expect(entries.has(key(`C:\\${scope === 'user' ? 'home' : 'work space'}\\.claude\\settings.json`))).toBe(false);
@@ -242,5 +244,54 @@ it('reports interrupted install as incomplete and uninstalls it safely', async (
     expect(output).toContain('permission Read: INSTALLED'); expect(output).toContain('agreement: MISSING'); expect(output).toContain('uninstall');
     expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
     expect(fs.readFileSync(settings, 'utf8')).toBe(original); expect(fs.existsSync(join(workspace, '.orch-host-workspace'))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+const expectedCommon = ['Read', 'Grep', 'Glob', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git branch)', 'Bash(git branch --list)', 'Bash(pwd)', 'Bash(ls:*)', 'Bash(orch mailbox read:*)', 'Bash(orch host status:*)', 'Bash(orch lead status:*)'];
+const expectedPresets: Record<string, string[]> = {
+  coding: [...expectedCommon, 'Bash(npm test:*)', ...['test', 'lint', 'typecheck', 'build'].map(x => `Bash(npm run ${x}:*)`), ...['pnpm', 'yarn'].flatMap(p => ['test', 'lint', 'typecheck', 'build'].flatMap(x => [`Bash(${p} ${x}:*)`, `Bash(${p} run ${x}:*)`])), 'Bash(node --version)'],
+  research: [...expectedCommon, 'WebSearch', 'WebFetch'],
+  ops: [...expectedCommon, 'Bash(orch task status:*)', 'Bash(orch task list:*)', 'Bash(orch mem search:*)'],
+};
+
+for (const [preset, required] of Object.entries(expectedPresets)) for (const scope of ['workspace', 'user']) {
+  it(`installs and restores ${preset} permissions in ${scope} scope`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'host preset '));
+    try {
+      const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
+      const base = scope === 'user' ? home : workspace; mkdirSync(join(base, '.claude'));
+      const file = join(base, '.claude', 'settings.json'); const before = '{ "permissions": { "allow": ["Read", "Bash(git status)"] } }\n'; fs.writeFileSync(file, before);
+      let output = ''; const io = { out: (s: string) => { output += s; }, err: (_: string) => {} };
+      const args = ['--workspace', workspace, '--host', 'claude', '--scope', scope, '--preset', preset];
+      expect(await runHost(['install', ...args], io, { home })).toBe(0);
+      const installed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(installed.permissions.allow).toEqual(['Read', 'Bash(git status)', ...required.filter(x => x !== 'Read')]);
+      const record = JSON.parse(fs.readFileSync(join(base, `.orch-host-${scope}`, 'manifest.json'), 'utf8'));
+      expect(record.before).toBe(before); expect(record.required).toEqual(required); expect(record.allow).toEqual(required.filter(x => x !== 'Read'));
+      expect(await runHost(['uninstall', ...args], io, { home })).toBe(0); expect(fs.readFileSync(file, 'utf8')).toBe(before);
+      expect(await runHost(['install', ...args], io, { home })).toBe(0);
+      expect(await runHost(['install', ...args], io, { home })).toBe(0);
+      installed.permissions.allow = installed.permissions.allow.filter((x: string) => x !== 'Bash(git status:*)'); fs.writeFileSync(file, JSON.stringify(installed));
+      output = ''; expect(await runHost(['status', ...args], io, { home })).toBe(0); expect(output).toContain('permission Bash(git status:*): MISSING');
+      expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow).toEqual(['Read', 'Bash(git status)']);
+      expect(await runHost(['install', ...args], io, { home })).toBe(0);
+      expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
+      expect(fs.readFileSync(file, 'utf8')).toBe(JSON.stringify({ permissions: { allow: ['Read', 'Bash(git status)'] } }, null, 2) + '\n');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const scope of ['workspace', 'user']) it(`retains a user-owned prefix and newly added exact rule in ${scope}`, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'host ownership '));
+  try {
+    const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
+    const base = scope === 'user' ? home : workspace; mkdirSync(join(base, '.claude')); const file = join(base, '.claude', 'settings.json');
+    fs.writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(git status:*)'] } }));
+    const io = { out: (_: string) => {}, err: (_: string) => {} }; const args = ['--workspace', workspace, '--host', 'claude', '--scope', scope];
+    expect(await runHost(['install', ...args], io, { home })).toBe(0);
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')); data.permissions.allow.push('Bash(git status)'); fs.writeFileSync(file, JSON.stringify(data));
+    expect(await runHost(['uninstall', ...args], io, { home })).toBe(0);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow).toEqual(['Bash(git status:*)', 'Bash(git status)']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
