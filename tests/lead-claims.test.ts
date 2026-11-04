@@ -23,6 +23,7 @@ const WITNESS = JSON.parse(readFileSync(join(ROOT, "tests", "fixtures", "lead-cl
 interface Unit { text: string; class: string; claim?: string }
 const read = (rel: string): Buffer => (existsSync(join(ROOT, ...rel.split("/"))) ? readFileSync(join(ROOT, ...rel.split("/"))) : Buffer.alloc(0));
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const hasTest = (source: string, name: string) => ["it", "dispatchIt"].some((fn) => source.includes(`${fn}("${name}"`));
 
 /** The sentences of one file: headings, table rows, code lines and data lines whole; prose split at sentence ends. */
 function unitsOf(file: string, text: string): string[] {
@@ -103,7 +104,7 @@ describe("orch lead: reviewed text", () => {
       if (!witness) continue;
       tests[witness.test_file] ??= read(witness.test_file).toString("utf8");
       const mutant = mutants.find((m) => m.id === witness.mutant);
-      expect.soft([tests[witness.test_file].includes(`it("${witness.test}"`), tests[witness.test_file].includes(`[${witness.marker}]`),
+      expect.soft([hasTest(tests[witness.test_file], witness.test), tests[witness.test_file].includes(`[${witness.marker}]`),
         mutant?.test_file === witness.test_file && mutant?.test === witness.test && mutant?.markers.includes(witness.marker)],
       `[claim-witness] ${unit.claim}: the test, the labelled assertion and a falsifying change exist for: ${unit.text}`).toEqual([true, true, true]);
     }
@@ -114,7 +115,7 @@ describe("orch lead: reviewed text", () => {
     expect.soft(packClaims.map(([file, unit]) => `${file}: ${unit.text}`), "[sentence-inventory] no packaged sentence is a program claim").toEqual([]);
     for (const mutant of mutants) {
       tests[mutant.test_file] ??= read(mutant.test_file).toString("utf8");
-      expect.soft([tests[mutant.test_file].includes(`it("${mutant.test}"`), mutant.markers.filter((marker) => !tests[mutant.test_file].includes(`[${marker}]`))],
+      expect.soft([hasTest(tests[mutant.test_file], mutant.test), mutant.markers.filter((marker) => !tests[mutant.test_file].includes(`[${marker}]`))],
         `[claim-witness] mutant ${mutant.id} names an existing test and labels`).toEqual([true, []]);
     }
   });
