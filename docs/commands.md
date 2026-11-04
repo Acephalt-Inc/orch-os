@@ -286,6 +286,12 @@ Takes one sample, advances the tier and prints `load tier=... load_ratio=... swa
 orch mem add NAME -d DESCRIPTION [-t TYPE] [-m BODY]     # body from -m or stdin (optional)
 orch mem search [TERM ...] [-t TYPE] [--all] [--json]
 orch mem retire NAME (--superseded-by NEW | --reason TEXT)
+orch mem capture --from-hook                           # Claude hook JSON on stdin
+orch mem accept ID [--title TEXT]
+orch mem reject ID
+orch mem drafts
+orch mem recall --boot [--limit N]
+orch mem lint
 ```
 
 | Subcommand | Does |
@@ -293,6 +299,10 @@ orch mem retire NAME (--superseded-by NEW | --reason TEXT)
 | `add` | Writes `mem/NAME.md` and regenerates `INDEX.md`. NAME is letters, digits, `_ . @ -` (not `INDEX`, no leading dot). The description is one non-empty line. TYPE is one word (default `note`; for example `rule`, `lesson`, `fact`, `reference`). An existing NAME gives exit 2. At or over `[mem] index_max_lines` the entry is still written and a warning goes to stderr. |
 | `search` | Active entries whose name, description, type or body contain every term (case-insensitive), oldest first. `--all` includes retired entries. Exit 1 when nothing matches. |
 | `retire` | Sets `status: retired`, `retired_at`, and `superseded_by` and/or `retired_reason` in the file, and drops it from the index. The file is kept. The successor must exist and be active. |
+
+`capture --from-hook` reads Claude `SessionEnd` or `PreCompact` JSON with `session_id`, `transcript_path`, and optional `cwd`. Wire that command to those hooks; the hook passes its JSON on stdin. The hook input is limited to 16 KB and the transcript to 8 MB. It keeps the first ten top-level user text requests from the JSONL transcript, up to 500 characters per request, with a 180-character summary and at most 30 open task ID/status rows. If `cwd` is supplied, it reads only `next_step` from the private resume note and labels it unverified. A new capture fails if that workspace cannot be read safely. Captured text is unverified and may include material the user pasted into a request. The session ID is hashed in the draft name; the raw ID and transcript path are not stored. A repeated hook returns the same draft, accepted note, or rejected tombstone without reopening those sources.
+
+Drafts and rejected entries stay out of normal search and `INDEX.md`; `search --all` includes them. `drafts` lists all pending drafts without bodies, newest first. `accept` activates a draft and records its UTC verification date. `reject` clears the captured description, title, and body but keeps the session hash and rejected state so another hook cannot recreate it. `recall --boot` prints only compact titles, descriptions, and dates for up to eight newest accepted entries (up to 20 with `--limit`), plus one newest draft marked `draft, unverified`. It never prints note bodies. Retired, rejected, expired, superseded, and old unverified entries are excluded. `lint` returns 2 when it finds expired or invalid dates, supersession, or active entries or drafts older than `[mem] unverified_max_days` (default 90) without a verification date; otherwise it returns 0.
 
 ## orch profile
 

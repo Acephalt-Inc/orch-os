@@ -12,6 +12,7 @@ import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
+import { captureHook } from "./mem-capture.js";
 import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
@@ -110,7 +111,7 @@ function tasks(cfg: Record<string, any>): Tasks {
 
 function mem(cfg: Record<string, any>): Mem {
   const m = cfg.mem ?? {};
-  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1));
+  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1), num(m.unverified_max_days, 90, "[mem] unverified_max_days", 1));
 }
 
 function handbookDir(cfg: Record<string, any>): string {
@@ -885,6 +886,42 @@ const cmdMem: Run = (a, io) => {
   const m = mem(C.loadOrDefault());
   const action = a._path[2];
   try {
+    if (action === "capture") {
+      if (!a.from_hook) throw new MemError("capture requires --from-hook");
+      let input: unknown;
+      try {
+        const raw = io.stdin();
+        if (Buffer.byteLength(raw) > 16_384) throw new Error();
+        input = JSON.parse(raw);
+      } catch { throw new MemError("hook input must be valid JSON of at most 16 KB"); }
+      const e = captureHook(input, m, tasks(C.loadOrDefault()), { platform: a._platform });
+      println(io, `session draft ${e.name}: ${e.status}`);
+      return 0;
+    }
+    if (action === "accept" || action === "reject") {
+      const e = action === "accept" ? m.accept(a.name, a.title) : m.reject(a.name);
+      println(io, `${e.status} ${e.name}`);
+      return 0;
+    }
+    if (action === "lint") {
+      const rows = m.lint();
+      for (const r of rows) println(io, `${r.entry.name}: ${r.flags.join(", ")}`);
+      return rows.length ? 2 : 0;
+    }
+    if (action === "drafts") {
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      const rows = m.all().filter((e) => e.status === "draft").sort((a, b) => b.created_at.localeCompare(a.created_at) || a.name.localeCompare(b.name));
+      for (const e of rows) println(io, `${e.name} draft, unverified: ${clean(e.title ?? e.description, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
+    if (action === "recall") {
+      if (!a.boot) throw new MemError("recall requires --boot");
+      const { accepted, draft } = m.boot(a.limit ?? 8);
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      for (const e of accepted) println(io, `${clean(e.title ?? e.name, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      if (draft) println(io, `draft, unverified: ${clean(draft.title ?? draft.name, 120)} — ${clean(draft.description, 180)} (${clean(draft.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
     if (action === "add") {
       const text = a.message ?? (process.stdin.isTTY ? "" : safeStdin(io));
       const r = m.add(a.name, a.description, text, a.type ?? "note");
@@ -1338,6 +1375,15 @@ export function buildTree(): CmdSpec<Run> {
           { name: "retire", help: "mark an entry retired (the file is kept) and record what supersedes it", run: cmdMem, pos: [{ dest: "name" }],
             opts: [opt("superseded_by", ["--superseded-by"], "str", "the entry that replaces it", { metavar: "NAME" }),
               opt("reason", ["--reason"], "str", "one line: why it no longer holds")] },
+          { name: "capture", help: "create an unverified session draft from Claude hook JSON on stdin", run: cmdMem,
+            opts: [opt("from_hook", ["--from-hook"], "bool", "read SessionEnd or PreCompact hook JSON")] },
+          { name: "accept", help: "accept a captured draft", run: cmdMem, pos: [{ dest: "name" }],
+            opts: [opt("title", ["--title"], "str", "short title for boot recall")] },
+          { name: "reject", help: "reject a captured draft permanently", run: cmdMem, pos: [{ dest: "name" }] },
+          { name: "drafts", help: "list unverified captured drafts without bodies", run: cmdMem },
+          { name: "recall", help: "compact boot recall of accepted notes and the newest draft", run: cmdMem,
+            opts: [opt("boot", ["--boot"], "bool", "print boot summary"), opt("limit", ["--limit"], "int", "accepted note limit (1-20)")] },
+          { name: "lint", help: "flag expired, superseded, invalid-date and stale unverified entries", run: cmdMem },
         ],
       },
       {
