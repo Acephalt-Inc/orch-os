@@ -18,6 +18,8 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { withLock } from "./lock.js";
+import { recordWorkerOwnership } from "./worker-ownership.js";
 import { configNumber } from "./config.js";
 import * as loadmod from "./load.js";
 import { dumps } from "./pyjson.js";
@@ -133,7 +135,7 @@ export class Workers {
     const repo = realOrResolve(top.out.trim());
     const root = this.worktreeRoot();
     mkdirSync(root, { recursive: true });
-    const path = `${realOrResolve(root)}/${name}`;
+    const path = resolve(realOrResolve(root), name);
     const br = branch || `${this.cfg.worktree_branch_prefix ?? "orch/"}${name}`;
     if (git(["check-ref-format", "--branch", br], repo).code !== 0) throw new WorkerError(`bad branch name '${br}'`);
     if (br.startsWith("-")) throw new WorkerError(`bad branch name '${br}'`);
@@ -204,6 +206,11 @@ export class Workers {
     if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new WorkerError(`workdir is not a directory: ${wd}`);
     const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
     if (!which(probe[0])) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
+    return withLock(this.root + ".maintenance.lock", () => {
+    const current = this.pid(name);
+    if (current && pidAlive(current)) throw new WorkerError(`worker ${name} already running (pid ${current})`);
+    if (current && groupAlive(current)) throw new WorkerError(`worker ${name}: processes of its last run are still running (group ${current})`);
+    const created = !existsSync(d);
     mkdirSync(d, { recursive: true });
     let wt: Worktree | null = null;
     if (opts.worktree) {
@@ -212,6 +219,7 @@ export class Workers {
     } else if (opts.branch || opts.base) {
       throw new WorkerError("--branch and --base need --worktree");
     }
+    recordWorkerOwnership(this.root, name, created, wt);
     let argv = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
     const to = which("timeout") ?? which("gtimeout");
     if (minutes > 0 && to) argv = [to, String(Math.trunc(minutes * 60)), ...argv];
@@ -248,6 +256,7 @@ export class Workers {
     if (wt) meta.worktree = wt;
     writeFileSync(`${d}/worker.json`, dumps(meta, 1));
     return meta;
+    }, { staleMs: Infinity });
   }
 
   list(): { name: string; pid: number | null; state: string }[] {

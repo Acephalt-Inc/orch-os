@@ -308,3 +308,44 @@ it('preserves and reports a loaded foreign job when roster uninstall has no owne
   expect(scheduler.uninstall(false, true).outcome).toBe('CONFLICT');
   expect(calls).toEqual(['print']);
 });
+it.each(['darwin', 'win32'] as const)('generates and manages an owned daily disk job on %s', (platform) => {
+  const root = mkdtempSync(join(tmpdir(), 'disk-scheduler-')); dirs.push(root);
+  let loaded = ''; let definition = ''; const calls: string[] = [];
+  const runner: Runner = (_cmd, args) => {
+    calls.push(args[0]);
+    if (args[0] === 'print' || args[0] === '/Query') return { code: loaded ? 0 : 1, out: loaded, err: loaded ? '' : 'not found' };
+    if (args[0] === '/Create') { definition = readFileSync(args[args.indexOf('/XML') + 1], 'utf8'); loaded = definition; }
+    if (args[0] === 'bootstrap') {
+      definition = readFileSync(args[2], 'utf8');
+      const name = args[2].split('/').pop()!.replace('.plist', '');
+      loaded = `gui/1/${name} = {\n arguments = {\n${[join(root, 'node'), join(root, 'cli'), 'service', 'run', 'disk', '--home', root].join('\n')}\n }\n}`;
+    }
+    if (args[0] === 'bootout' || args[0] === '/Delete') loaded = '';
+    return { code: 0, out: '{}', err: '' };
+  };
+  const scheduler = new Scheduler({ platform, home: root, userHome: root, node: join(root, 'node'), cli: join(root, 'cli'), uid: 1, user: 'user', runner, job: 'disk' });
+  const plan = scheduler.install(true).plan!;
+  expect(plan.definition).toContain('disk');
+  if (platform === 'darwin') {
+    expect(plan.definition).toContain('<key>RunAtLoad</key><true/><key>StartInterval</key><integer>86400</integer>');
+    expect(plan.definition).not.toContain('<key>KeepAlive</key>');
+  } else expect(plan.definition).toContain('<Interval>PT24H</Interval>');
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  expect(scheduler.status().jobs[0].loaded).toBe(true);
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  if (platform === 'win32') {
+    loaded = definition.replace('<Interval>PT24H</Interval>', '<Interval>PT30M</Interval>');
+    expect(scheduler.install().outcome).toBe('CONFLICT');
+    expect(scheduler.uninstall().outcome).toBe('CONFLICT');
+    expect(calls).not.toContain('/Delete');
+    loaded = definition;
+  } else {
+    writeFileSync(plan.path, definition.replace('<integer>86400</integer>', '<integer>1800</integer>'));
+    expect(scheduler.install().outcome).toBe('CONFLICT');
+    expect(scheduler.uninstall().outcome).toBe('CONFLICT');
+    expect(calls).not.toContain('bootout');
+    writeFileSync(plan.path, definition);
+  }
+  expect(scheduler.uninstall().outcome).toBe('UNINSTALLED');
+  expect(scheduler.status().jobs[0].loaded).toBe(false);
+});
