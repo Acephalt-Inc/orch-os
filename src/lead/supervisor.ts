@@ -12,7 +12,7 @@ if (!path || !nonce) process.exit(2);
 try {
   const task = JSON.parse(readFileSync(path, "utf8"));
   if (task.nonce !== nonce || task.phase !== "CLAIMED" || !Number.isSafeInteger(task.claim_epoch) || task.claim_epoch < 1) process.exit(2);
-  const evidence = { id: task.id, nonce, task: task.task.id, pid: process.pid };
+  const evidence = { id: task.id, nonce, task: task.task.id, pid: process.pid, process_group: "inherited" };
   const child = withLock(task.lease_path + ".lead.lock.d", () => withLock(task.lease_path + ".lock.d", () => {
     const role = new Lease(task.lease_path).load();
     const [code, claim] = new Tasks(task.task_dir).status(task.task.id);
@@ -21,7 +21,7 @@ try {
       || claim.state.session_id !== task.holder || claim.state.epoch !== task.claim_epoch) throw new Error("launch fence changed");
     const gate = openSync(path + ".gate", "wx", 0o600);
     try { writeSync(gate, JSON.stringify(evidence) + "\n"); fsyncSync(gate); } finally { closeSync(gate); }
-    return spawn(task.timeout_bin, ["--kill-after=1s", `${task.task.timeout_seconds}s`, ...task.task.command], {
+    return spawn(task.timeout_bin, ["--foreground", "--kill-after=1s", `${task.task.timeout_seconds}s`, ...task.task.command], {
       cwd: task.task.workdir, stdio: ["pipe", "inherit", "inherit"],
     });
   }, { protectLive: true }), { protectLive: true });

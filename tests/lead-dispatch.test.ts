@@ -60,7 +60,7 @@ describe("approved lead dispatch", () => {
       expect(loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p }))
         .toEqual([2, { status: "BLOCKED", reason: "worker preflight reached" }]);
       expect(start).toHaveBeenCalledOnce();
-      expect(probe).toHaveBeenCalledWith(process.execPath, ["--kill-after=1s", "1s", process.execPath, "-e", expect.stringContaining("SIGTERM")]);
+      expect(probe).toHaveBeenCalledWith(process.execPath, ["--foreground", "--kill-after=1s", "1s", process.execPath, "-e", expect.stringContaining("SIGTERM")]);
     } finally { start.mockRestore(); }
   });
   it.each([0, 42, 124])("refuses a timeout probe without kill-after evidence (exit %i)", (status) => {
@@ -138,6 +138,160 @@ describe("approved lead dispatch", () => {
     expect(tick.value.events).toHaveLength(1);
     expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.events).toHaveLength(0);
     expect(readFileSync(join(ctx.home, "messages.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+  });
+  dispatchIt("lead_completion_release_allows_next_approved_task", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const first = cli(...approved(b.epoch, p));
+    expect(first.code, first.err).toBe(0);
+    await waitExit();
+    const tick = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved");
+    expect(tick.value.completion?.task).toBe("task-a");
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase, "[completion-release]").toBe("RELEASED");
+    const input = JSON.parse(readFileSync(p, "utf8"));
+    input.id = "task-b";
+    writeFileSync(p, JSON.stringify(input));
+    const second = cli(...approved(b.epoch, p));
+    expect(second.code, `[completion-release] ${second.err}`).toBe(0);
+    expect(second.value.task).toBe("task-b");
+    await waitExit();
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "2", "--approved").value.completion?.task).toBe("task-b");
+    expect(new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")).all().map((m) => m.id)).toEqual([
+      expect.stringContaining("lead-completion-"), expect.stringContaining("lead-completion-")]);
+  });
+  dispatchIt("recovers a committed cursor before its release tombstone", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").code).toBe(0);
+    const reservationPath = join(ctx.home, "lease.json.lead-task.json");
+    const reservation = JSON.parse(readFileSync(reservationPath, "utf8"));
+    delete reservation.proof;
+    reservation.phase = "CLAIMED";
+    writeFileSync(reservationPath, JSON.stringify(reservation));
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.status).toBe("DUPLICATE");
+    expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase, "[cursor-boundary]").toBe("RELEASED");
+    expect(new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")).all()).toHaveLength(1);
+  });
+  dispatchIt("recovers a released tombstone after one old sidecar was removed", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").code).toBe(0);
+    unlinkSync(join(ctx.home, "lease.json.lead-task.json.gate"));
+    const input = JSON.parse(readFileSync(p, "utf8")); input.id = "task-b"; writeFileSync(p, JSON.stringify(input));
+    const result = cli(...approved(b.epoch, p));
+    expect(result.code, `[partial-cleanup] ${result.err}`).toBe(0);
+    await waitExit();
+    expect(result.value.task).toBe("task-b");
+  });
+  dispatchIt("allows another holder to claim the completed task before the next dispatch", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").code).toBe(0);
+    expect(new Tasks(join(ctx.home, "tasks")).claim("task-a", "other-holder")[0]).toBe(0);
+    const input = JSON.parse(readFileSync(p, "utf8")); input.id = "task-b"; writeFileSync(p, JSON.stringify(input));
+    const result = cli(...approved(b.epoch, p));
+    expect(result.code, `[reclaimed-task] ${result.err}`).toBe(0);
+    await waitExit();
+  });
+  dispatchIt("keeps a live process group from releasing a consumed completion", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+      new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {},
+      { platform: "linux", find: () => null, probe: () => ({ status: null }) }, () => true);
+    const tick = loop.run("tick", { session: "session-a", expectedEpoch: b.epoch, tick: 1, approved: true });
+    expect(tick[0]).toBe(0);
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase, "[active-group]").toBe("CLAIMED");
+    expect(loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, taskFile: p, approved: true })[1].status).toBe("BLOCKED");
+  });
+  dispatchIt("keeps the slot while an ordinary task descendant survives its parent", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const ready = join(ctx.home, "descendant-ready"), stop = join(ctx.home, "descendant-stop");
+    const descendant = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(stop)})){clearInterval(timer);process.exit(0)}},20);setTimeout(()=>process.exit(0),20000)`;
+    const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore',detached:false}).unref()`;
+    writeFileSync(p, JSON.stringify({ id: "task-a", brief: "generic task", command: [process.execPath, "-e", parent], workdir: ctx.home, timeout_seconds: 3 }));
+    try {
+      expect(cli(...approved(b.epoch, p)).code).toBe(0);
+      await waitExit();
+      for (let i = 0; i < 100 && !existsSync(ready); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(existsSync(ready)).toBe(true);
+      const tick = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved");
+      expect(tick.code, tick.err).toBe(0);
+      expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase, "[descendant-blocked]").toBe("CLAIMED");
+      expect(cli(...approved(b.epoch, p)).value.status).toBe("BLOCKED");
+    } finally {
+      writeFileSync(stop, "stop");
+      if (existsSync(ready)) {
+        const pid = Number(readFileSync(ready, "utf8"));
+        let gone = false;
+        for (let i = 0; i < 100; i++) {
+          try { process.kill(pid, 0); } catch (e: any) { if (e.code === "ESRCH") { gone = true; break; } }
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+        expect(gone, `task descendant ${pid} did not stop`).toBe(true);
+      }
+    }
+  }, 12000);
+  dispatchIt("lead_completion_cursor_required_before_release", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    const reservation = JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8"));
+    const exit = JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json.exit"), "utf8"));
+    const completion = { id: reservation.id, task: reservation.task.id, status: exit.signal ? "SIGNALED" : "EXITED",
+      exit_code: exit.exit_code, signal: exit.signal, event_id: `lead-completion-${reservation.nonce}` };
+    const box = new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors"));
+    box.send("lead-supervisor", "lead", "DONE", JSON.stringify(completion), null, undefined, completion.event_id);
+    const input = JSON.parse(readFileSync(p, "utf8")); input.id = "task-b"; writeFileSync(p, JSON.stringify(input));
+    const result = cli(...approved(b.epoch, p));
+    if (result.code === 0) await waitExit();
+    expect(result.value.status, "[completion-required]").toBe("BLOCKED");
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase).toBe("CLAIMED");
+  });
+  dispatchIt("refuses a nonpositive completion sequence as consumed proof", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    const reservation = JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8"));
+    const exit = JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json.exit"), "utf8"));
+    const completion = { id: reservation.id, task: reservation.task.id, status: exit.signal ? "SIGNALED" : "EXITED",
+      exit_code: exit.exit_code, signal: exit.signal, event_id: `lead-completion-${reservation.nonce}` };
+    writeFileSync(join(ctx.home, "messages.jsonl"), JSON.stringify({ seq: 0, id: completion.event_id, ts: new Date().toISOString(),
+      from: "lead-supervisor", to: "lead", kind: "DONE", reply_to: null, body: JSON.stringify(completion) }) + "\n");
+    const input = JSON.parse(readFileSync(p, "utf8")); input.id = "task-b"; writeFileSync(p, JSON.stringify(input));
+    expect(cli(...approved(b.epoch, p)).value.status, "[positive-seq]").toBe("BLOCKED");
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase).toBe("CLAIMED");
+  });
+  dispatchIt("does not auto-release legacy launch evidence without inherited-group proof", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    for (const suffix of ["gate", "exit"]) {
+      const path = join(ctx.home, `lease.json.lead-task.json.${suffix}`), value = JSON.parse(readFileSync(path, "utf8"));
+      delete value.process_group;
+      writeFileSync(path, JSON.stringify(value));
+    }
+    const tick = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved");
+    expect(tick.code, tick.err).toBe(0);
+    expect(tick.value.completion?.task).toBe("task-a");
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase, "[legacy-gate-blocked]").toBe("CLAIMED");
+    expect(cli(...approved(b.epoch, p)).value.status).toBe("BLOCKED");
+  });
+  it("accepts an occupied receipt written by the previous runtime", () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const reservation = { version: 1, id: "invocation-a", nonce: "nonce-a", phase: "RESERVED",
+      task: JSON.parse(readFileSync(p, "utf8")), timeout_bin: "/bin/false", holder: "lead-nonce-a", claim_epoch: null,
+      task_dir: join(ctx.home, "tasks"), worker_root: join(ctx.home, "workers"), message_path: join(ctx.home, "messages.jsonl"),
+      lease_path: join(ctx.home, "lease.json"), lead_session: "session-a", lead_epoch: b.epoch };
+    writeFileSync(join(ctx.home, "lease.json.lead-task.json"), JSON.stringify(reservation));
+    expect(cli("boot", "--session", "session-a").code).toBe(0);
+    const statePath = join(ctx.home, "lease.json.lead.json"), state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.receipt.decision.reason = "one approved task slot is occupied; no further dispatch is available";
+    writeFileSync(statePath, JSON.stringify(state));
+    expect(cli("boot", "--session", "session-a").value.status).toBe("READY");
   });
   dispatchIt("serializes concurrent real-process dispatches into one reservation and launch", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
