@@ -140,10 +140,10 @@ export class Scheduler {
       if (enabled && q.code !== 0) {
         const r = this.options.platform === 'darwin' ? this.options.runner('launchctl', ['bootstrap', `gui/${this.options.uid}`, this.path]) : this.options.runner('schtasks', ['/Create', '/TN', this.name, '/XML', this.path]);
         if (r.code !== 0) return this.result('ERROR', r.err || r.out || 'Scheduler install failed');
-        if (this.options.platform === 'win32') {
-          const run = this.options.runner('schtasks', ['/Run', '/TN', this.name]);
-          if (run.code !== 0) return this.result('ERROR', run.err || run.out || 'Scheduler start failed');
-        }
+      }
+      if (this.options.platform === 'win32') {
+        const run = this.options.runner('schtasks', ['/Run', '/TN', this.name]);
+        if (run.code !== 0) return this.result('ERROR', run.err || run.out || 'Scheduler start failed');
       }
       return this.result('INSTALLED');
       });
@@ -164,6 +164,10 @@ export class Scheduler {
       if (q.code !== 0 && !this.absent(q)) return this.result('ERROR', q.err || q.out);
       if (q.code === 0) {
         if (!this.matches(q.out)) return this.result('CONFLICT', 'Scheduler job does not match ownership record');
+        if (this.options.platform === 'win32') {
+          const end = this.options.runner('schtasks', ['/End', '/TN', this.name]);
+          if (end.code !== 0 && !/\b(?:not currently running|not running)\b/i.test(end.err + ' ' + end.out)) return this.result('ERROR', end.err || end.out || 'Scheduler stop failed');
+        }
         const r = this.options.platform === 'darwin' ? this.options.runner('launchctl', ['bootout', `gui/${this.options.uid}/${this.name}`]) : this.options.runner('schtasks', ['/Delete', '/TN', this.name, '/F']);
         if (r.code !== 0) return this.result('ERROR', r.err || r.out || 'Scheduler removal failed');
       }

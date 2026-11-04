@@ -448,8 +448,9 @@ runtime metadata comes from `Get-ScheduledTaskInfo`. Query failures are reported
 
 `uninstall` requires the ownership record under `$ORCH_HOME/service` and checks
 both the generated definition and the OS job before removal. Changed or foreign
-jobs are preserved. Failed operations retain ownership records so they can be
-retried. A changed label prefix identifies a different job; restore the original
+jobs are preserved. Windows stops the verified task instance before deleting
+the task. Failed operations retain ownership records so they can be retried;
+reinstall also retries starting a registered Windows task. A changed label prefix identifies a different job; restore the original
 prefix to uninstall the previous job. Reinstall after moving the Node or ORCH
 installation only after uninstalling the existing job.
 

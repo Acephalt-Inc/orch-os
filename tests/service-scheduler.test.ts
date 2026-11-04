@@ -219,3 +219,47 @@ it('refuses a foreign SID and an extra trigger in normalized Windows XML', () =>
   expect(scheduler.uninstall().outcome).toBe('CONFLICT');
   expect(deletes).toBe(0);
 });
+it('ends an owned Windows task before deleting it and preserves ownership when end fails', () => {
+  let xml = ''; let failEnd = true; const calls: string[] = [];
+  const runner: Runner = (_cmd, args) => {
+    calls.push(args[0]);
+    if (args[0] === '/Query') return { code: xml ? 0 : 1, out: xml, err: xml ? '' : 'not found' };
+    if (args[0] === '/Create') xml = readFileSync(args[args.indexOf('/XML') + 1], 'utf8');
+    if (args[0] === '/End' && failEnd) return { code: 1, out: '', err: 'access denied' };
+    return { code: 0, out: '', err: '' };
+  };
+  const { scheduler } = fixture('win32', runner);
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  expect(scheduler.uninstall().outcome).toBe('ERROR');
+  expect(calls).not.toContain('/Delete');
+  failEnd = false;
+  expect(scheduler.uninstall().outcome).toBe('UNINSTALLED');
+  expect(calls.lastIndexOf('/End')).toBeLessThan(calls.indexOf('/Delete'));
+});
+it('retries starting an already registered owned Windows task after a failed run', () => {
+  let xml = ''; let runs = 0;
+  const runner: Runner = (_cmd, args) => {
+    if (args[0] === '/Query') return { code: xml ? 0 : 1, out: xml, err: xml ? '' : 'not found' };
+    if (args[0] === '/Create') xml = readFileSync(args[args.indexOf('/XML') + 1], 'utf8');
+    if (args[0] === '/Run' && ++runs === 1) return { code: 1, out: '', err: 'failed' };
+    return { code: 0, out: '', err: '' };
+  };
+  const { scheduler } = fixture('win32', runner);
+  expect(scheduler.install().outcome).toBe('ERROR');
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  expect(runs).toBe(2);
+});
+it('deletes an owned Windows task when its instance is already stopped', () => {
+  let xml = ''; let deleted = false;
+  const runner: Runner = (_cmd, args) => {
+    if (args[0] === '/Query') return { code: xml ? 0 : 1, out: xml, err: xml ? '' : 'not found' };
+    if (args[0] === '/Create') xml = readFileSync(args[args.indexOf('/XML') + 1], 'utf8');
+    if (args[0] === '/End') return { code: 1, out: '', err: 'task is not currently running' };
+    if (args[0] === '/Delete') deleted = true;
+    return { code: 0, out: '', err: '' };
+  };
+  const { scheduler } = fixture('win32', runner);
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  expect(scheduler.uninstall().outcome).toBe('UNINSTALLED');
+  expect(deleted).toBe(true);
+});
