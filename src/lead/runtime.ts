@@ -96,10 +96,21 @@ function validReceipt(v: any, state: State): boolean {
   return true;
 }
 
+export interface TimeoutAdapter {
+  platform: NodeJS.Platform;
+  find(name: string): string | null;
+  probe(command: string, args: string[]): { status: number | null; signal?: string | null; error?: unknown };
+}
+const TIMEOUT_ADAPTER: TimeoutAdapter = {
+  platform: process.platform, find: which,
+  probe: (command, args) => spawnSync(command, args, { encoding: "utf8", timeout: 6000, killSignal: "SIGKILL" }),
+};
+
 export class LeadLoop {
   readonly path: string;
   readonly taskPath: string;
-  constructor(readonly lease: Lease, readonly messages: Messages, readonly cfg: Record<string, any> = {}) {
+  constructor(readonly lease: Lease, readonly messages: Messages, readonly cfg: Record<string, any> = {},
+    readonly timeout: TimeoutAdapter = TIMEOUT_ADAPTER) {
     this.path = resolve(lease.path) + ".lead.json";
     this.taskPath = resolve(lease.path) + ".lead-task.json";
   }
@@ -138,11 +149,6 @@ export class LeadLoop {
     try { task = JSON.parse(readFileSync(opts.taskFile, "utf8")); } catch { throw new Error("task file is unreadable or invalid JSON"); }
     if (!this.validTask(task)) throw new Error("task must have id, brief, nonempty command argv, directory workdir and timeout_seconds 1..86400");
     task.workdir = resolve(task.workdir);
-    const timeoutBin = process.platform === "win32" ? null : which("timeout") ?? which("gtimeout");
-    if (!timeoutBin || !String(spawnSync(timeoutBin, ["--version"], { encoding: "utf8", timeout: 3000 }).stdout).includes("GNU coreutils")
-      || spawnSync(timeoutBin, ["--kill-after=1s", "1s", process.execPath, "-e", ""], { timeout: 3000 }).status !== 0) {
-      return [2, { status: "UNAVAILABLE", reason: "GNU timeout with --kill-after is required" }];
-    }
     return withLock(this.lease.path + ".lead.lock.d", () => {
       const state = this.load();
       if (!state.boot_count) throw new Error("lead boot is required before dispatch");
@@ -151,6 +157,18 @@ export class LeadLoop {
         if (held.session_id !== opts.session || held.epoch !== opts.expectedEpoch || held.state !== "ACTIVE"
           || held.lease_expires_at <= Date.now() / 1000) return [4, { status: "STALE_LEASE" }];
         if (this.reservation()) return [3, { status: "BLOCKED", reason: SLOT_REASON }];
+        if (this.timeout.platform === "win32") return [2, { status: "UNAVAILABLE",
+          reason: "task dispatch requires POSIX process control; no Windows adapter is available" }];
+        // Require a KILL exit from timeout around a TERM-resistant child, without vendor banners.
+        // Its own four-second exit bounds the probe even if a program ignores the flags.
+        const probeScript = "process.on('SIGTERM',()=>{});setTimeout(()=>process.exit(42),4000)";
+        const timeoutBin = ["timeout", "gtimeout"].map((name) => this.timeout.find(name)).find((bin) => {
+          if (!bin) return false;
+          const result = this.timeout.probe(bin, ["--kill-after=1s", "1s", process.execPath, "-e", probeScript]);
+          return !result.error && (result.status === 137 || result.signal === "SIGKILL");
+        });
+        if (held.lease_expires_at <= Date.now() / 1000) return [4, { status: "STALE_LEASE" }];
+        if (!timeoutBin) return [2, { status: "UNAVAILABLE", reason: "timeout with --kill-after support is required" }];
         const b = this.bindings();
         const id = randomUUID(), nonce = randomUUID(), holder = `lead-${nonce}`;
         const reservation: Reservation = { version: 1, id, nonce, phase: "RESERVED", task,

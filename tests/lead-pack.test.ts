@@ -239,6 +239,20 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
     }
   });
 
+  it("refuses a linked template even when open follows links", async () => {
+    const { w } = workspace();
+    const wrapped = {
+      ...fs,
+      lstatSync: ((path: fs.PathLike, options: { bigint: true }) => {
+        const stat = fs.lstatSync(path, options);
+        return String(path).endsWith(join("templates", "lead", "SKILL.md"))
+          ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { isSymbolicLink: () => true }) : stat;
+      }) as typeof fs.lstatSync,
+    };
+    const result = await inProcess(["install", "--workspace", w, "--host", "claude"], { fs: wrapped });
+    expect([result.code, tree(w)]).toEqual([1, []]);
+  });
+
   it("lead_short_io_never_publishes_partial_bytes", async () => {
     // File calls that pass through to the real ones, with reads and writes cut short or failing.
     type Rule = { short?: number; zeroAt?: string; errorAt?: string; lieAt?: string };

@@ -20,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { COMMAND_BUDGET_MS } from "../src/lead/pack.js";
+import { cmdInvocation } from "../src/util.js";
 import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
 import { candidate, npmCommand, pack } from "./_pack.js";
 
@@ -282,9 +283,12 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 function start(command: string, args: string[], rules: Rule[] = [], extraEnv: Record<string, string> = {}, cwd = isolated): Session {
   const traceFile = join(tmp("orch-lead-trace-"), "trace.jsonl");
   const viaNode = command === process.execPath;
-  const child = spawn(command, viaNode ? ["--import", preload(), ...args] : args, {
+  const viaCmd = WINDOWS && /\.(cmd|bat)$/i.test(command);
+  const [executable, commandArgs] = viaCmd ? cmdInvocation(command, args) : [command, viaNode ? ["--import", preload(), ...args] : args];
+  const child = spawn(executable, commandArgs, {
     cwd, stdio: ["pipe", "pipe", "pipe"], timeout: CHILD_DEADLINE_MS, killSignal: "SIGKILL",
-    env: childEnv({ LEAD_TEST_TRACE: traceFile, LEAD_TEST_RULES: JSON.stringify(rules), ...(viaNode ? {} : { NODE_OPTIONS: `--import=${preload()}` }), ...extraEnv }),
+    windowsVerbatimArguments: viaCmd,
+    env: childEnv({ LEAD_TEST_TRACE: traceFile, LEAD_TEST_RULES: JSON.stringify(rules), ...(viaNode ? {} : { NODE_OPTIONS: `--import="${preload()}"` }), ...extraEnv }),
   });
   let stdout = "";
   let stderr = "";
@@ -879,7 +883,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
     s.kill();
     const killed = await s.done;
     console.log(`[observation] ${process.platform}: abrupt termination by child.kill("SIGKILL"): exit code ${killed.code}, signal ${killed.signal}`);
-    expect([killed.code, killed.signal], "the process was killed, it did not exit by itself").toEqual(WINDOWS ? [1, null] : [null, "SIGKILL"]);
+    expect(WINDOWS ? [[1, null], [null, "SIGKILL"]] : [[null, "SIGKILL"]], "the process was killed, it did not exit by itself").toContainEqual([killed.code, killed.signal]);
     expect.soft(killed.stdout, "the killed process never reported a result").not.toMatch(/^result:/m);
 
     // No cleanup ran: the manifest, all 21 anchors, the record of the directories and exactly the first payload are on disk.
