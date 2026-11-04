@@ -27,6 +27,7 @@ async function run(a: Args, io: IO): Promise<number> {
   const execute = deps.runner ?? runner;
   const path = (p: string) => expand(p.replace(/\$\{ORCH_HOME\}|\$ORCH_HOME\b/g, () => home));
   if (a._path[2] === "run") {
+    if (a.dry_run && a.job !== "disk") throw new ConfigError("--dry-run is supported for disk only");
     const reader = s.reader ?? "lead";
     if (!validName(reader)) throw new ConfigError("[service] reader must be a valid agent name");
     const interval = configNumber(s.poll_seconds, 5, "[service] poll_seconds", 0.1) * 1000;
