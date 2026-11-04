@@ -25,6 +25,7 @@ import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 import { ignoreClosedPipes } from "./closed-pipe.js";
+import { runSetup, setupSpec } from "./setup.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -1125,6 +1126,7 @@ export function buildTree(): CmdSpec<Run> {
     name: "orch",
     help: "ORCH-os: run several CLI coding agents as one team (lease, mailbox, messages, task claims, merge gate, workers, load governor, mem).",
     sub: [
+      setupSpec((a, io) => runSetup(a, io, { tree: buildTree(), platform: a._platform })),
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [

@@ -244,6 +244,7 @@ describe("InstallEntry", () => {
       "docs/learning.md",
       "docs/preferences.md",
       "docs/resume.md",
+      "docs/setup.md",
     ]);
   });
 
@@ -258,6 +259,7 @@ describe("InstallEntry", () => {
         "package/docs/learning.md",
         "package/docs/preferences.md",
         "package/docs/resume.md",
+        "package/docs/setup.md",
       ]);
       expect(files, "the READMEs are in the tarball").toEqual(expect.arrayContaining(["package/README.md", "package/README.zh.md"]));
     } finally {
