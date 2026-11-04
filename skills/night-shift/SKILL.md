@@ -1,6 +1,6 @@
 ---
 name: night-shift
-description: Use when the team should keep working overnight but only on work that is reversible and costs nothing ("night shift", "only safe work tonight"), or /night-shift. Sorts queued tasks into ALLOW and DENY, failing closed, and freezes merges, deploys, production data, configuration switches, spending, outward messages and force-pushes until the morning report. Usually runs together with /caffeine. Not /sleep (the team stops).
+description: Use when asked to run unattended overnight work restricted to reversible, zero-cost actions. Exclude stopping all work or ordinary daytime status.
 ---
 
 # /night-shift — only reversible, zero-cost work while nobody watches

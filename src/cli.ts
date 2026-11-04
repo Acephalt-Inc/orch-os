@@ -25,7 +25,7 @@ import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 import { ignoreClosedPipes } from "./closed-pipe.js";
-import { installSkill, shippedSkills, skillRows, skillsTarget } from "./skills.js";
+import { installSkill, shippedSkills, skillRows, skillsTarget, uninstallSkill } from "./skills.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -336,14 +336,28 @@ const cmdAgents: Run = (a, io) => {
   return 0;
 };
 
-const cmdSkillsInstall = (a: Args, io: IO): number => {
+function selectedSkills(a: Args, io: IO): string[] | null {
   const shipped = shippedSkills();
   const selected = a.only === null ? shipped : [...new Set(String(a.only).split(",").map((name) => name.trim()))];
   if (selected.some((name) => !shipped.includes(name))) {
     eprintln(io, `skills: unknown skill in --only; choose from ${shipped.join(", ")}`);
-    return 2;
+    return null;
   }
-  const target = skillsTarget(Boolean(a.user));
+  return selected;
+}
+
+function skillsDestination(a: Args, io: IO): string | null {
+  if (a.user && a.scope === "workspace") {
+    eprintln(io, "skills: --user conflicts with --scope workspace");
+    return null;
+  }
+  return skillsTarget({ scope: a.user ? "user" : a.scope ?? "workspace", platform: a._platform });
+}
+
+const cmdSkillsInstall = (a: Args, io: IO): number => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
   let errors = 0;
   for (const name of selected) {
     try { println(io, `${name}: ${installSkill(name, target, Boolean(a.force), Boolean(a.dry_run))}`); }
@@ -353,13 +367,27 @@ const cmdSkillsInstall = (a: Args, io: IO): number => {
 };
 
 const cmdSkillsStatus: Run = (a, io) => {
-  const rows = skillRows();
+  const target = skillsDestination(a, io);
+  if (!target) return 2;
+  const rows = skillRows(target);
   if (a.json) println(io, JSON.stringify({ version: VERSION, skills: rows }));
   else {
     println(io, `skill pack ${VERSION}`);
     for (const row of rows) println(io, `${row.name}: ${row.state}`);
   }
   return 0;
+};
+
+const cmdSkillsUninstall: Run = (a, io) => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${uninstallSkill(name, target, Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
 };
 
 /** Is `p` a writable directory, or creatable under the nearest existing ancestor? */
@@ -1189,11 +1217,25 @@ export function buildTree(): CmdSpec<Run> {
         sub: [
           { name: "install", help: "copy bundled skills into .claude/skills", run: cmdSkillsInstall, opts: [
             opt("user", ["--user"], "bool", "install in the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
             opt("only", ["--only"], "str", "comma-separated skill names"),
             opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
             opt("force", ["--force"], "bool", "back up and replace modified skills"),
           ] },
-          { name: "status", help: "show each bundled skill and its installed state", run: cmdSkillsStatus, opts: [JSON_OPT] },
+          { name: "status", help: "show each bundled skill and its installed state", run: cmdSkillsStatus, opts: [
+            JSON_OPT,
+            opt("user", ["--user"], "bool", "inspect the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+          ] },
+          { name: "uninstall", help: "remove owned, unchanged bundled skills", run: cmdSkillsUninstall, opts: [
+            opt("user", ["--user"], "bool", "remove from the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+          ] },
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },

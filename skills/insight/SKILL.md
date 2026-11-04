@@ -1,6 +1,6 @@
 ---
 name: insight
-description: Use whenever the human shares material to read or research (a URL, video, paper, repo, file or topic) or invokes /insight. Produces a teaching digest that leaves the human able to explain the material, plus a short insight section held to explicit rails. The source is graded first, every insight is falsifiable or marked SPECULATIVE, and "no insight worth reporting" is a valid result.
+description: Use for a teaching digest and testable insights from material the user asks to understand. Exclude simple translation, formatting, or research archival alone.
 ---
 
 # /insight — teach it first, then add only insight that survives a test
@@ -44,7 +44,7 @@ better than an invented insight. Say it plainly.
 
 **Step 4 — Keep a trace.** Save durable material next to the team's other research
 (see `/research-library`), and leave a pointer:
-`orch mem add research-<slug> -d "<one line: what it is and what it is good for>"`.
+`orch mem add research-<slug> --description "<one line: what it is and what it is good for>"`.
 Confidential inputs stay local.
 
 ## When another agent does the reading

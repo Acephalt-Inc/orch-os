@@ -1,6 +1,6 @@
 ---
 name: away
-description: Use when the human says they are leaving and the team should keep working without them ("I'm heading out, keep going", "report when I'm back", "you drive for a while"), or invokes /away. Writes a snapshot to diff against later, sets the unattended rules (questions are queued, not asked; no interim status messages; nothing irreversible the human has not already approved), and owes one consolidated report when the human explicitly returns (/back). Not for stopping everything at the end of the day (/sleep) and not for a short pause in the conversation.
+description: Use when a person leaves and explicitly wants work to continue unattended; snapshot the starting state and queue decisions for their return. Exclude stopping work or a brief conversational pause.
 ---
 
 # /away — the human leaves, the team keeps working
@@ -13,38 +13,16 @@ the first thing this skill does is write that edge down.
 
 ## On invocation
 
-1. **Write the snapshot** to `$ORCH_HOME/away.json` (default `~/.orch/away.json`):
+1. **Write the snapshot** to `$ORCH_HOME/away.json` (default `~/.orch/away.json`),
+   creating its parent directory if needed. Capture `away_at` (an absolute timestamp),
+   `open_prs` from `gh pr list --state open --limit 200 --json number,title,headRefOid`,
+   and `task_claims` from `orch task list --json`. Record unavailable sources as
+   `UNAVAILABLE`, never from recollection. Record `merges` as `hold` and `spend_cap`
+   as 0 unless the human has already specified otherwise.
 
-   ```sh
-   ORCH_HOME="${ORCH_HOME:-$HOME/.orch}"
-   python3 - "$ORCH_HOME" <<'EOF'
-   import json, subprocess, sys, time
-   home = sys.argv[1]
-   def run(*cmd):
-       r = subprocess.run(cmd, capture_output=True, text=True)
-       return r.stdout if r.returncode == 0 else None
-   prs = run("gh", "pr", "list", "--state", "open", "--limit", "200",
-             "--json", "number,title,headRefOid")
-   tasks = run("orch", "task", "list", "--json")
-   snap = {
-       "away_at": time.time(),
-       "away_at_human": time.strftime("%Y-%m-%d %H:%M %Z"),
-       "open_prs": json.loads(prs) if prs else "UNAVAILABLE",
-       "tasks": json.loads(tasks) if tasks else "UNAVAILABLE",
-       "merges": "hold",          # or "continue" if the human said so before leaving
-       "spend_cap": 0,            # money the human pre-approved for this absence
-   }
-   json.dump(snap, open(f"{home}/away.json", "w"), indent=1)
-   print("snapshot written", snap["away_at_human"])
-   EOF
-   ```
-
-   Record an unavailable source as `UNAVAILABLE`. Never fill it from recollection.
-
-2. **Ask two questions before the human is gone**, and write both answers into the
-   snapshot:
-   - Do merges continue while you are away (`merges: continue`), or hold?
-   - Is there any money I may spend while you are away (`spend_cap`)? Default 0.
+2. **Confirm any specified limits.** Merges are performed by a human; if a human
+   will merge while away, record that arrangement, otherwise hold. Record any
+   explicitly approved spending cap; leave it at 0 if none was provided.
 
 3. **Confirm the posture in one short table.** The human is walking out the door:
    send a table, not paragraphs.
@@ -52,7 +30,7 @@ the first thing this skill does is write that edge down.
    | Item | While you are away |
    |---|---|
    | Work | continues; each worker keeps one claimed task |
-   | Merges | `continue` (one at a time, gate passes) or `hold`, as you said |
+   | Merges | human performs each merge after the gate passes, or `hold` |
    | Money | up to `spend_cap`; beyond it, queued as a question |
    | Decisions for you | queued in `$ORCH_HOME/decisions.md`, not asked |
    | Reports | none until you say you are back |

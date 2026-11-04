@@ -1,6 +1,6 @@
 ---
 name: serial-merge
-description: Use when merging PRs that have passed review ("merge what's ready", "why isn't anything merging?"), on /serial-merge, and before any merge done without a human watching. Merges one PR at a time, only when `orch merge-gate` passes for the current head commit, reads the result back, and re-checks every remaining PR before the next merge. Never batches.
+description: Use to prepare reviewed pull requests for a human to merge one at a time, checking the current head and rechecking the remaining queue. Exclude unreviewed work and automatic merging.
 ---
 
 # /serial-merge — one PR, re-check, next PR
@@ -11,9 +11,8 @@ now conflict, or merge cleanly and break.
 
 ## Who may merge
 
-This skill does not grant merge authority. Use it only when the human has said that
-merges may happen: a standing "merge whatever passes the gate", or a one-off "merge
-#N once it passes review". A one-off covers only the PR it names.
+A human performs every merge. Present the gate result and current head to the human;
+then verify the result and re-check the remaining queue.
 
 ## The gate: one command
 
@@ -29,11 +28,11 @@ not keep a second hand-written checklist beside it: two sources of truth drift a
 
 If the team's agents share one GitHub account, use review comments
 (`orch merge-gate <PR> --reviews comments --task <id>`, approvals posted with
-`orch review approve`).
+`orch review approve <PR>`).
 
 ## Merge and re-check
 
-1. `gh pr merge <PR> --squash` (or the team's merge style).
+1. Ask the human to merge the PR using the team's merge style.
 2. **Read it back:** `gh pr view <PR> --json state,mergeCommit` must show `MERGED`
    and a commit. Anything else did not merge.
 3. **Re-check the rest before the next merge.** `mergeable` often reads `UNKNOWN` for
@@ -45,7 +44,7 @@ If the team's agents share one GitHub account, use review comments
 
 ## Stacked PRs
 
-Before merging a parent, retarget each child to the base branch
+Before the human merges a parent, retarget each child to the base branch
 (`gh pr edit <child> --base main`). Deleting the parent's branch on merge otherwise
 closes the children.
 

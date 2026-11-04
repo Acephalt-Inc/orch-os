@@ -1,6 +1,6 @@
 ---
 name: caffeine
-description: Use when the machine must stay awake while the team keeps working without the human ("I'm going to bed but keep it running", "I'll be out for hours, let it run", "turn caffeine off"), or /caffeine. Keeps the system awake (the screen may sleep) with a hard time cap, and optionally ends on an observable condition such as a PR merging or a task's DONE message. Not for a short absence (/away) and not for stopping the team (/sleep).
+description: Use when asked to keep a machine awake for bounded unattended work or turn that keep-awake off. Exclude ordinary absences and requests to stop the team.
 ---
 
 # /caffeine — the machine stays awake, the team keeps working
@@ -30,23 +30,17 @@ Three recipes, kept distinct:
    open `QUESTION` or `BLOCKED` message, its `DONE` may never come and the machine
    stays awake until the cap. Resolve the question first, or pick another condition.
 
-4. **Start it** and record the pid in `$ORCH_HOME/caffeine.json`:
+4. **Start a supported keep-awake helper** with the approved cap. On macOS,
+   `caffeinate -ims -t <seconds>` keeps the system awake while allowing display sleep.
+   On Linux, use `systemd-inhibit` if available. On Windows, report `UNAVAILABLE`
+   with the reason unless a supported keep-awake method is actually available and
+   verified. Do not report success without verification.
 
-   ```sh
-   CAP=<seconds, the cap the human named>
-   # macOS: keep the system awake, let the display sleep (never -d)
-   caffeinate -ims -t "$CAP" & echo $! > "$ORCH_HOME/caffeine.pid"
-   # Linux with systemd
-   systemd-inhibit --what=sleep:idle --why="orch team running" sleep "$CAP" & echo $! > "$ORCH_HOME/caffeine.pid"
-   ```
-
-   For `until`, run a small watcher next to it that polls the condition and then
-   kills the keep-awake pid (and, if the human asked for it, runs `/sleep`):
-
-   ```sh
-   until gh pr view 42 --json state -q .state | grep -qx MERGED; do sleep "$POLL"; done   # POLL: seconds between checks, chosen by the operator
-   kill "$(cat "$ORCH_HOME/caffeine.pid")"
-   ```
+   Record the task-owned helper's PID, start time, command identity, cap, and any
+   watcher identity in `$ORCH_HOME/caffeine.json`. For `until`, use a watcher only
+   with an authorized cadence and stop condition; it must recheck ownership before
+   stopping the helper. If ownership cannot be verified, leave it running and report
+   the limitation.
 
 5. **Tell the team** which mode and cap are active:
    `orch mailbox post lead -m "Caffeine <mode>, cap <time>, stop condition <...>."`
@@ -59,8 +53,10 @@ Three recipes, kept distinct:
 
 ## Off
 
-Kill the pid in `$ORCH_HOME/caffeine.pid` and the watcher, then check the assertion is
-gone. Another program may hold a short keep-awake of its own. Name it; do not chase it.
+Recheck the recorded PID, start time, and command identity immediately before
+stopping each task-owned helper or watcher. Stop only a verified match, then verify
+exit and check the assertion. If identity cannot be established, preserve the process
+and report the limitation. Leave other programs alone.
 
 ## Limits
 

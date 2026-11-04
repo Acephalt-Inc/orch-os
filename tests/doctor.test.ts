@@ -9,7 +9,7 @@ describe("doctor skill pack", () => {
     expect((await run("init", "--no-profile", "--no-handbook"))[0]).toBe(0);
     const [code, out] = await run("doctor");
     expect(code).toBe(0);
-    expect(out).toMatch(/PASS {2}skills\s+0 installed\/13 shipped, 0 modified \(not installed\)/);
+    expect(out).toMatch(/PASS {2}skills\s+0 installed\/16 shipped, 0 modified \(not installed\)/);
     expect(out).toContain("doctor: PASS (0 required check(s) failed)");
   });
 });

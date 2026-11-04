@@ -1,6 +1,6 @@
 ---
 name: orch-swarm
-description: Use when the lead wants to run one goal as parallel work across subagents or orch workers ("swarm this", "fan this out"), or on /orch-swarm. First decides whether parallel work helps at all. Then builds a task graph (one writer per file, explicit evidence per task), dispatches each task under the operator's configured policy, claims through `orch task`, accepts each task only on evidence, and closes with a DONE report. Loading it grants no new authority.
+description: Use when asked to coordinate one goal across parallel agents or ORCH workers with explicit task ownership and evidence. Exclude work that is best performed serially or has an unclear goal.
 ---
 
 # /orch-swarm — one goal, many agents, one owner
@@ -21,8 +21,7 @@ needs one of these stops with a `QUESTION` to that person. It does not continue
   not fan out on an unclear goal.
 - A serial bottleneck (one file everyone must touch, one shared database) does not
   get faster with more agents. Keep it serial.
-- Do not create tasks for work already running elsewhere: check `orch task list`
-  first.
+- Do not create tasks for work already running elsewhere: check `orch task list` for existing claims and the team's task source first.
 
 ## 2. Build the task graph
 
@@ -30,7 +29,7 @@ Each task has:
 
 | Field | Meaning |
 |---|---|
-| `id` | short and unique, used for `orch task claim` |
+| `id` | short and unique, used for `orch task claim <id>` |
 | `goal` | one sentence: the outcome |
 | `write_scope` | the exact file paths this task may write; no globs |
 | `evidence` | the exact command and the predicate that must hold ("tests pass" is not enough) |
