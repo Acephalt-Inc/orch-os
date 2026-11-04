@@ -5,7 +5,7 @@
  *
  * Limits: the hash check accepts only the reviewed bytes, but nothing here protects against a
  * program running as the same user that swaps files while they are read. On Windows O_NOFOLLOW
- * is not available and is skipped.
+ * is unavailable; the link and identity checks below still reject ordinary link substitutions.
  */
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
@@ -142,9 +142,13 @@ function readDescriptor(env: LeadEnv, fd: number, cap: number, deadline: number,
  * File-system errors (ENOENT, ELOOP, ...) pass through unchanged.
  */
 export function readBounded(env: LeadEnv, path: string, cap: number, deadline: number, what = path): FileRead {
+  const before = env.fs.lstatSync(path, BIG);
+  if (before.isSymbolicLink()) throw Object.assign(new Error("symbolic link refused"), { code: "ELOOP" });
   const fd = env.fs.openSync(path, READ_FLAGS);
   try {
-    return readDescriptor(env, fd, cap, deadline, what);
+    const read = readDescriptor(env, fd, cap, deadline, what);
+    if (before.dev !== read.dev || before.ino !== read.ino) throw new LeadError(`${what} changed while it was opened`, "io", "CHANGED");
+    return read;
   } finally {
     env.fs.closeSync(fd);
   }

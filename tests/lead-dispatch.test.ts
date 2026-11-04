@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import { LeadLoop } from "../src/lead/runtime.js";
 import { Messages } from "../src/messages.js";
 import { Workers } from "../src/workers.js";
 import { Tasks } from "../src/tasks.js";
-import { DIST_CLI, ROOT, useTmpHome } from "./_helpers.js";
+import { DIST_CLI, ROOT, WINDOWS, useTmpHome } from "./_helpers.js";
 
 describe("approved lead dispatch", () => {
   const ctx = useTmpHome();
@@ -32,10 +32,88 @@ describe("approved lead dispatch", () => {
       try { process.kill(pid, 0); } catch (e: any) { if (e.code === "ESRCH") { gone = true; break; } }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (!gone) appendFileSync(join(ROOT, "../OUT/slice2-unresolved-pids.log"), `${pid} ${ctx.home}\n`);
     expect(gone, `supervisor ${pid} was not observed to exit`).toBe(true);
     return exit;
   };
+  // These launch/evidence scenarios need POSIX process control. Windows must explicitly
+  // prove refusal and zero launch state instead of expecting a task that cannot run.
+  const dispatchIt = (name: string, body: () => unknown, timeout?: number) => it(
+    WINDOWS ? `${name} (UNAVAILABLE: Windows has no process-control adapter)` : name, async () => {
+      if (!WINDOWS) { await body(); return; }
+      const b = cli("boot", "--session", "session-a").value, p = task();
+      const result = cli(...approved(b.epoch, p));
+      expect(result.code).toBe(2);
+      expect(result.value).toMatchObject({ status: "UNAVAILABLE", reason: expect.stringContaining("Windows") });
+      for (const path of ["lease.json.lead-task.json", "lease.json.lead-task.json.gate", "tasks/task-a.json", "workers"])
+        expect(existsSync(join(ctx.home, path))).toBe(false);
+      console.info(`[unavailable] ${name}: ${result.value.reason}`);
+    }, timeout);
+  it.each(["darwin", "linux"] as const)("accepts compatible uutils timeout on %s", (platform) => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const probe = vi.fn((_command: string, args: string[]) => ({ status: 137,
+      stdout: args[0] === "--version" ? "timeout (uutils coreutils) 0.10.0" : "" }));
+    const start = vi.spyOn(Workers.prototype, "start").mockImplementation(() => { throw new Error("worker preflight reached"); });
+    try {
+      const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+        new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {},
+        { platform, find: () => process.execPath, probe });
+      expect(loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p }))
+        .toEqual([2, { status: "BLOCKED", reason: "worker preflight reached" }]);
+      expect(start).toHaveBeenCalledOnce();
+      expect(probe).toHaveBeenCalledWith(process.execPath, ["--kill-after=1s", "1s", process.execPath, "-e", expect.stringContaining("SIGTERM")]);
+    } finally { start.mockRestore(); }
+  });
+  it.each([0, 42, 124])("refuses a timeout probe without kill-after evidence (exit %i)", (status) => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+      new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {},
+      { platform: "linux", find: () => process.execPath, probe: () => ({ status, stdout: "GNU coreutils" }) });
+    const [code, value] = loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p });
+    expect([code, value.status]).toEqual([2, "UNAVAILABLE"]);
+    expect(existsSync(loop.taskPath)).toBe(false);
+  });
+  it("ignores a probe killed by its outer deadline and tries gtimeout", () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const start = vi.spyOn(Workers.prototype, "start").mockImplementation(() => { throw new Error("worker preflight reached"); });
+    const probe = vi.fn((command: string) => command === "timeout"
+      ? { status: null, signal: "SIGKILL", error: new Error("outer deadline") } : { status: 137 });
+    try {
+      const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+        new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {},
+        { platform: "darwin", find: (name) => name, probe });
+      expect(loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p }))
+        .toEqual([2, { status: "BLOCKED", reason: "worker preflight reached" }]);
+      expect(JSON.parse(readFileSync(loop.taskPath, "utf8")).timeout_bin).toBe("gtimeout");
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally { start.mockRestore(); }
+  });
+  it("leaves no reservation if the lease expires during timeout probing", () => {
+    const b = cli("boot", "--session", "session-a", "--seconds", "60").value, p = task();
+    const now = Date.now(), clock = vi.spyOn(Date, "now");
+    const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+      new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {},
+      { platform: "linux", find: () => process.execPath, probe: () => {
+        clock.mockReturnValue(now + 61_000); return { status: 137 };
+      } });
+    try {
+      expect(loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p }))
+        .toEqual([4, { status: "STALE_LEASE" }]);
+      expect(existsSync(loop.taskPath)).toBe(false);
+      expect(existsSync(join(ctx.home, "tasks", "task-a.json"))).toBe(false);
+    } finally { clock.mockRestore(); }
+  });
+  it("reports Windows process control unavailable before probing or claiming", () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    const find = vi.fn(), probe = vi.fn();
+    const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")),
+      new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")), {}, { platform: "win32", find, probe });
+    const [code, value] = loop.dispatch({ session: "session-a", expectedEpoch: b.epoch, approved: true, taskFile: p });
+    expect(code).toBe(2);
+    expect(value).toMatchObject({ status: "UNAVAILABLE", reason: expect.stringContaining("Windows") });
+    expect(find).not.toHaveBeenCalled(); expect(probe).not.toHaveBeenCalled();
+    expect(existsSync(loop.taskPath)).toBe(false);
+    expect(existsSync(join(ctx.home, "tasks", "task-a.json"))).toBe(false);
+  });
   it("rejects missing approval and invalid timeout before reserving or claiming", () => {
     const b = cli("boot", "--session", "session-a").value;
     const p = task(0);
@@ -45,7 +123,7 @@ describe("approved lead dispatch", () => {
     expect(existsSync(join(ctx.home, "lease.json.lead-task.json"))).toBe(false);
     expect(existsSync(join(ctx.home, "tasks", "task-a.json"))).toBe(false);
   });
-  it("reserves one task, publishes verified exit on tick, and blocks a second dispatch", async () => {
+  dispatchIt("reserves one task, publishes verified exit on tick, and blocks a second dispatch", async () => {
     const b = cli("boot", "--session", "session-a").value;
     const p = task();
     const first = cli("dispatch", "--session", "session-a", "--expected-epoch", String(b.epoch), "--task-file", p, "--approved");
@@ -61,7 +139,7 @@ describe("approved lead dispatch", () => {
     expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.events).toHaveLength(0);
     expect(readFileSync(join(ctx.home, "messages.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
   });
-  it("serializes concurrent real-process dispatches into one reservation and launch", async () => {
+  dispatchIt("serializes concurrent real-process dispatches into one reservation and launch", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     const run = () => new Promise<{ code: number | null; out: string }>((resolve) => {
       const child = spawn(process.execPath, [DIST_CLI, "lead", ...approved(b.epoch, p)], { env: env() });
@@ -82,7 +160,7 @@ describe("approved lead dispatch", () => {
     expect(JSON.parse(r.stdout).status).toBe("UNAVAILABLE");
     expect(existsSync(join(ctx.home, "lease.json.lead-task.json"))).toBe(false);
   });
-  it.each([7, 124])("publishes actual nonzero exit %i", async (code) => {
+  for (const code of [7, 124]) dispatchIt(`publishes actual nonzero exit ${code}`, async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     writeFileSync(p, JSON.stringify({ id: "task-a", brief: "generic task", command: [process.execPath, "-e", `process.exit(${code})`], workdir: ctx.home, timeout_seconds: 2 }));
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
@@ -90,7 +168,7 @@ describe("approved lead dispatch", () => {
     const result = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value;
     expect(result.completion).toMatchObject({ exit_code: code, status: "EXITED" });
   });
-  it("uses GNU timeout kill-after for a TERM-resistant child", async () => {
+  dispatchIt("uses timeout kill-after for a TERM-resistant child", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     writeFileSync(p, JSON.stringify({ id: "task-a", brief: "generic task", command: [process.execPath, "-e",
       "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], workdir: ctx.home, timeout_seconds: 1 }));
@@ -100,7 +178,7 @@ describe("approved lead dispatch", () => {
     expect(["EXITED", "SIGNALED"]).toContain(result.completion.status);
     expect([124, 137, null]).toContain(result.completion.exit_code);
   }, 10000);
-  it("blocks on corrupt exit identity without publishing completion", async () => {
+  dispatchIt("blocks on corrupt exit identity without publishing completion", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     const exitPath = await waitExit();
@@ -109,7 +187,7 @@ describe("approved lead dispatch", () => {
     expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").code).toBe(2);
     expect(existsSync(join(ctx.home, "messages.jsonl"))).toBe(false);
   });
-  it("replays publication with a stable id after a post-send interruption", async () => {
+  dispatchIt("replays publication with a stable id after a post-send interruption", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     await waitExit();
@@ -129,11 +207,13 @@ describe("approved lead dispatch", () => {
       task_dir: join(ctx.home, "tasks"), worker_root: join(ctx.home, "workers"), message_path: join(ctx.home, "messages.jsonl"),
       lease_path: join(ctx.home, "lease.json"), lead_session: "session-a", lead_epoch: b.epoch };
     writeFileSync(join(ctx.home, "lease.json.lead-task.json"), JSON.stringify(reservation));
-    expect(cli(...approved(b.epoch, p)).value.status).toBe("BLOCKED");
+    const retry = spawnSync(process.execPath, [DIST_CLI, "lead", ...approved(b.epoch, p)],
+      { env: { ...env(), PATH: ctx.home }, encoding: "utf8" });
+    expect(JSON.parse(retry.stdout).status).toBe("BLOCKED");
     expect(existsSync(join(ctx.home, "tasks", "task-a.json"))).toBe(false);
     expect(existsSync(join(ctx.home, "lease.json.lead-task.json.gate"))).toBe(false);
   });
-  it("reconciles exit evidence when worker metadata is missing", async () => {
+  dispatchIt("reconciles exit evidence when worker metadata is missing", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     const started = cli(...approved(b.epoch, p));
     expect(started.code).toBe(0);
@@ -143,7 +223,7 @@ describe("approved lead dispatch", () => {
     const result = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved");
     expect(result.value.completion.status).toBe("EXITED");
   });
-  it("keeps the slot blocked when launch exists but exit evidence is absent", async () => {
+  dispatchIt("keeps the slot blocked when launch exists but exit evidence is absent", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     const exit = await waitExit();
@@ -153,7 +233,7 @@ describe("approved lead dispatch", () => {
     expect(tick.value.decision.status).toBe("BLOCKED");
     expect(cli(...approved(b.epoch, p)).value.status).toBe("BLOCKED");
   });
-  it("honors profile max_workers", () => {
+  dispatchIt("honors profile max_workers", () => {
     const profile = `[profile]\npolicy = "human-merge"\nrequired_review = "single-agent"\nmax_workers = 1\ncompute = "one"\npeople = "solo"\n`;
     writeFileSync(join(ctx.home, "config.toml"), profile);
     const b = cli("boot", "--session", "session-a").value, p = task();
@@ -163,14 +243,14 @@ describe("approved lead dispatch", () => {
     expect(r.value.status).toBe("BLOCKED");
     expect(existsSync(join(ctx.home, "lease.json.lead-task.json.gate"))).toBe(false);
   });
-  it("honors the load governor", () => {
+  dispatchIt("honors the load governor", () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     writeFileSync(join(ctx.home, "load.json"), JSON.stringify({ tier: "HIGH" }));
     const r = cli(...approved(b.epoch, p));
     expect(r.value.status).toBe("BLOCKED");
     expect(existsSync(join(ctx.home, "lease.json.lead-task.json.gate"))).toBe(false);
   });
-  it("rejects a role lease that expires during worker preflight", () => {
+  dispatchIt("rejects a role lease that expires during worker preflight", () => {
     const b = cli("boot", "--session", "session-a", "--seconds", "60").value, p = task();
     const box = new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors"));
     const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json"), 60, 60), box);
@@ -187,7 +267,7 @@ describe("approved lead dispatch", () => {
       expect(existsSync(join(ctx.home, "lease.json.lead-task.json.gate"))).toBe(false);
     } finally { start.mockRestore(); clock.mockRestore(); }
   });
-  it("reconciles an exited task after its working directory is removed", async () => {
+  dispatchIt("reconciles an exited task after its working directory is removed", async () => {
     const dir = join(ctx.home, "workdir"); mkdirSync(dir);
     const b = cli("boot", "--session", "session-a").value, p = task();
     const t = JSON.parse(readFileSync(p, "utf8")); t.workdir = dir; writeFileSync(p, JSON.stringify(t));
@@ -196,7 +276,7 @@ describe("approved lead dispatch", () => {
     const tick = cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved");
     expect(tick.value.completion.status).toBe("EXITED");
   });
-  it("runs a relative workdir with a relative configured lease path", async () => {
+  dispatchIt("runs a relative workdir with a relative configured lease path", async () => {
     mkdirSync(join(ctx.home, "subdir"));
     writeFileSync(join(ctx.home, "config.toml"), '[lease]\npath = "lease.json"\n');
     const local = (...args: string[]) => {
@@ -211,7 +291,7 @@ describe("approved lead dispatch", () => {
     expect(readFileSync(join(ctx.home, "subdir", "ran.txt"), "utf8")).toBe("ok");
     expect(local("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.completion.exit_code).toBe(0);
   });
-  it("holds the cursor if matching-epoch claim release fails, then replays once", async () => {
+  dispatchIt("holds the cursor if matching-epoch claim release fails, then replays once", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     await waitExit();
@@ -230,7 +310,7 @@ describe("approved lead dispatch", () => {
     expect(() => box.send("lead-supervisor", "lead", "DONE", "changed", null, undefined, "fixed-id")).toThrow();
     expect(box.all()).toHaveLength(1);
   });
-  it("fences a delayed supervisor after role takeover before gate or task launch", () => {
+  dispatchIt("fences a delayed supervisor after role takeover before gate or task launch", () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     const reserved = cli(...approved(b.epoch, p));
     expect(reserved.code).toBe(0);
@@ -247,7 +327,7 @@ describe("approved lead dispatch", () => {
       expect(existsSync(join(ctx.home, "lease.json.lead-task.json.gate"))).toBe(false);
     });
   });
-  it("records completion after its matching claim expires", async () => {
+  dispatchIt("records completion after its matching claim expires", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     await waitExit();
@@ -260,7 +340,7 @@ describe("approved lead dispatch", () => {
     expect(tick.value.completion.exit_code).toBe(0);
     expect(JSON.parse(readFileSync(claimPath, "utf8")).state).toBe("RELEASED");
   });
-  it("records a fast task exit when a large brief meets closed stdin", async () => {
+  dispatchIt("records a fast task exit when a large brief meets closed stdin", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     const input = JSON.parse(readFileSync(p, "utf8")); input.brief = "x".repeat(1024 * 1024);
     writeFileSync(p, JSON.stringify(input));
