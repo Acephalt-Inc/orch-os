@@ -171,7 +171,10 @@ orch merge-gate 101 --fixture approved      # Try the gate with an offline fixtu
 orch load                                   # Sample machine load
 orch mem search review                      # Search durable notes
 orch lead install --workspace PATH --host claude  # Create the lead text pack in a new workspace
+orch host install --workspace PATH --host claude  # Add permissions and continuation hooks; see docs/host.md
 ```
+
+See [Claude host permission presets](docs/host.md#permission-presets) for every allowed rule and its safety limits.
 
 Full flags and exit codes: [Command reference](docs/commands.md).
 
