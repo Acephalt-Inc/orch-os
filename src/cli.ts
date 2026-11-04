@@ -16,6 +16,8 @@ import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import { type LeadDeps, leadSpec, runLead } from "./lead/cli.js";
+import { hostSpec, runHost } from "./host/install.js";
+import { runHook } from "./host/hooks.js";
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
@@ -1146,6 +1148,8 @@ export function buildTree(): CmdSpec<Run> {
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
       leadSpec(),
+      hostSpec(),
+      { name: "hook", help: "run a Claude host hook with JSON input", pos: [{ dest: "name", choices: ["session-start", "pre-tool-guard", "stop-continue"] }] },
       {
         name: "update", help: "ask the npm registry for the latest version",
         sub: [{ name: "check", help: "one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable", run: cmdUpdateCheck }],
@@ -1412,6 +1416,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "lead") {
     return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
   }
+  if (argv[0] === "host") return runHost(argv.slice(1), io);
+  if (argv[0] === "hook") return runHook(argv.slice(1), io);
   const tree = buildTree();
   let parsed;
   try {

@@ -325,6 +325,10 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 
 `update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
 
+## orch host and orch hook
+
+`orch host install|status|uninstall --workspace PATH --host claude` manages Claude settings, permission presets and a marked working agreement. Choose `--preset coding|research|ops`, `--scope workspace|user`, or preview changes with `--dry-run`. `orch hook session-start|pre-tool-guard|stop-continue` reads a Claude event from stdin. See [host.md](host.md) for the permission lists, ownership rules, context record and hook contracts.
+
 ## orch resume
 
 ```text
