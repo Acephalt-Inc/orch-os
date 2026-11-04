@@ -44,7 +44,7 @@ If you are already inside a clone of this repository (`package.json` has `"name"
 
 If `git` is missing, download the source archive instead (replace `main` with the branch name if one was given):
 - macOS: `mkdir -p ~/orch-os-src && curl -fsSL https://github.com/Acephalt-Inc/orch-os/archive/refs/heads/main.tar.gz | tar -xz --strip-components 1 -C ~/orch-os-src && cd ~/orch-os-src`
-- Windows: `Invoke-WebRequest https://github.com/Acephalt-Inc/orch-os/archive/refs/heads/main.zip -OutFile "$HOME\orch-os-src.zip"; Expand-Archive "$HOME\orch-os-src.zip" "$HOME" -Force; cd "$HOME\orch-os-main"`
+- Windows: `Invoke-WebRequest -UseBasicParsing https://github.com/Acephalt-Inc/orch-os/archive/refs/heads/main.zip -OutFile "$HOME\orch-os-src.zip"; Expand-Archive "$HOME\orch-os-src.zip" "$HOME\orch-os-src" -Force; cd (Get-ChildItem "$HOME\orch-os-src" -Directory | Select-Object -First 1).FullName`
 
 Check: `package.json` in the current folder contains `"name": "orch-os"`.
 
