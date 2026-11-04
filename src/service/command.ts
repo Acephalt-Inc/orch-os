@@ -8,13 +8,14 @@ import type { Args, CmdSpec } from "../args.js";
 import type { IO } from "../cli.js";
 import { ConfigError, configNumber, expand, load, orchHome } from "../config.js";
 import { Lease } from "../lease.js";
+import { Disk } from "./disk.js";
 import { Health } from "./health.js";
 import { Messages } from "../messages.js";
 import { sleep, validName } from "../util.js";
 import { Scheduler, type Runner } from "./scheduler.js";
 import { WakeWatch, workerSnapshot } from "./wake.js";
 
-export type ServiceDeps = { runner?: Runner; userHome?: string; uid?: number; user?: string };
+export type ServiceDeps = { runner?: Runner; userHome?: string; uid?: number; user?: string; diskFree?: () => number };
 const runner: Runner = (cmd, args) => {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 15000, windowsHide: true });
   return { code: r.status ?? 1, out: r.stdout ?? "", err: r.error?.message ?? r.stderr ?? "" };
@@ -23,8 +24,6 @@ async function run(a: Args, io: IO): Promise<number> {
   const home = resolve(a.home ?? orchHome()), cfg = existsSync(join(home, "config.toml")) ? load(join(home, "config.toml")) : {};
   const s = cfg.service ?? {}, deps: ServiceDeps = a._service ?? {}, platform = a._platform ?? process.platform;
   for (const k of ["wake_watch", "health", "disk"]) if (s[k] !== undefined && typeof s[k] !== "boolean") throw new ConfigError(`[service] ${k} must be true or false`);
-  const unavailable = (reason: string) => { io.out(JSON.stringify({ outcome: "UNAVAILABLE", reason, jobs: [] }) + "\n"); return 1; };
-  if (s.disk && a._path[2] === "install") return unavailable("disk job is not implemented yet");
   const execute = deps.runner ?? runner;
   const path = (p: string) => expand(p.replace(/\$\{ORCH_HOME\}|\$ORCH_HOME\b/g, () => home));
   if (a._path[2] === "run") {
@@ -34,6 +33,14 @@ async function run(a: Args, io: IO): Promise<number> {
     const m = cfg.messages ?? {};
     const messages = new Messages(path(m.path ?? join(home, "messages.jsonl")), path(m.cursors ?? join(home, "cursors")));
     const workers = () => workerSnapshot(path(cfg.workers?.root ?? join(home, "workers")), platform, execute);
+    if (a.job === "disk") {
+      const mode = s.disk_mode ?? "dry-run";
+      if (!["dry-run", "apply"].includes(mode)) throw new ConfigError('[service] disk_mode must be "dry-run" or "apply"');
+      const result = new Disk({ home, root: path(cfg.workers?.root ?? join(home, "workers")), messages, reader, platform, runner: execute,
+        floorBytes: configNumber(s.disk_floor_bytes, 5 * 1024 ** 3, "[service] disk_floor_bytes"),
+        staleDays: configNumber(s.disk_stale_days, 14, "[service] disk_stale_days", 1), mode, diskFree: deps.diskFree }).tick(a.dry_run);
+      io.out(JSON.stringify(result) + "\n"); return result.outcome === "UNAVAILABLE" ? 1 : 0;
+    }
     if (a.job === "health") {
       const health = new Health(home, new Lease(path(cfg.lease?.path ?? join(home, "lease.json"))), messages, reader, workers,
         configNumber(s.deadman_seconds, 3600, "[service] deadman_seconds", 1));
@@ -42,11 +49,11 @@ async function run(a: Args, io: IO): Promise<number> {
     const watch = new WakeWatch(home, messages, reader, workers);
     do { watch.tick(); if (a.once) return 0; await sleep(interval); } while (true);
   }
-  const results = (["wake-watch", "health"] as const).map(job => {
+  const results = (["wake-watch", "health", "disk"] as const).map(job => {
     const scheduler = new Scheduler({ job, platform, home, userHome: deps.userHome ?? homedir(), node: process.execPath,
       cli: fileURLToPath(new URL("../cli.js", import.meta.url)), uid: deps.uid ?? process.getuid?.() ?? 0,
       user: deps.user ?? userInfo().username, prefix: s.label_prefix, runner: execute });
-    const r = a._path[2] === "install" ? scheduler.install(a.dry_run, job === "health" ? s.health === true : s.wake_watch !== false)
+    const r = a._path[2] === "install" ? scheduler.install(a.dry_run, job === "wake-watch" ? s.wake_watch !== false : s[job] === true)
       : a._path[2] === "uninstall" ? scheduler.uninstall(a.dry_run, true) : scheduler.status();
     return r;
   });
@@ -60,7 +67,7 @@ export function serviceSpec(): CmdSpec<(a: Args, io: IO) => Promise<number>> {
   const dry = { dest: "dry_run", flags: ["--dry-run"], kind: "bool" as const, help: "print the plan without writing or changing jobs" };
   return { name: "service", help: "manage per-user scheduler jobs and watch wake events", sub: [
     ...["install", "status", "uninstall"].map((name) => ({ name, help: `${name} ORCH-owned jobs`, opts: [dry], run })),
-    { name: "run", help: "run a scheduler job in the foreground", pos: [{ dest: "job", choices: ["wake-watch", "health"] }], opts: [
+    { name: "run", help: "run a scheduler job in the foreground", pos: [{ dest: "job", choices: ["wake-watch", "health", "disk"] }], opts: [dry,
       { dest: "home", flags: ["--home"], kind: "str", help: "ORCH home passed by the scheduler" },
       { dest: "once", flags: ["--once"], kind: "bool", help: "process one poll and exit" },
     ], run },

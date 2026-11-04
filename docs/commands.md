@@ -433,6 +433,7 @@ orch service status [--dry-run]
 orch service uninstall [--dry-run]
 orch service run wake-watch [--home PATH] [--once]
 orch service run health [--home PATH] [--once]
+orch service run disk [--home PATH] [--dry-run]
 ```
 
 `install` registers and starts a per-user wake watcher: a LaunchAgent under
@@ -462,6 +463,10 @@ changing the scheduler. Status is always read-only. Configuration is optional:
 [service]
 wake_watch = true
 health = false
+disk = false
+disk_mode = "dry-run"
+disk_floor_bytes = 5368709120
+disk_stale_days = 14
 deadman_seconds = 3600
 label_prefix = "org.orch"
 reader = "lead"
@@ -470,9 +475,9 @@ poll_seconds = 5
 
 Set `wake_watch = false` to skip watcher installation. Set `health = true` to
 install the health job, which runs at load and every 30 minutes. Status includes
-both jobs; uninstall removes owned jobs even after they are disabled in config.
-Use `uninstall` to stop installed jobs. Daily disk maintenance remains a follow-up;
-`disk = true` makes installation return `UNAVAILABLE`.
+all three jobs; uninstall removes owned jobs even after they are disabled in config.
+Set `disk = true` to install a daily disk check, which also runs at installation.
+Use `uninstall` to stop installed jobs.
 
 `run wake-watch` follows the existing addressed message store, using `[messages]`
 paths and `[workers] root` when configured. It appends one JSON line per addressed
@@ -506,6 +511,38 @@ duplicates across restarts and interrupted cursor writes. A fresh heartbeat chec
 ends the stale period; a later stale period produces a new alert. Keep health.json
 with the wake ownership record, cursor, and log when moving or repairing state.
 Scheduling does not wake a sleeping machine; checks resume when the OS runs them.
+
+`run disk` checks free space in the ORCH home volume and reports stale worker
+state directories as JSON. The default `disk_mode = "dry-run"` reports eligible
+paths without deleting them. Only `disk_mode = "apply"` enables removal.
+`run disk --dry-run` overrides apply and writes nothing, including wake state.
+A regular scheduled check writes wake state even when cleanup mode is dry-run.
+
+A directory must be older than `disk_stale_days` (default 14), including its newest
+worker data file and recorded run start. ORCH must have created and recorded both
+its worker state directory and worktree. The ownership registry in
+`[workers] root/.ownership.json` records directory identities; legacy directories,
+attached worktrees, replaced paths and symbolic links are preserved. Workers
+without a recorded worktree are also preserved. A worktree must still be registered
+with the recorded repository, have no tracked, untracked or ignored changes or hidden index entries, and
+have no other worker referring to it. Cleanup shares a lock with worker starts and
+rechecks evidence before removal. Git removes the worktree without force; the
+branch remains. The worker state directory, including old logs, is then removed.
+
+Process checks use PID and process group on macOS. Probe failures or malformed
+evidence preserve directories. Windows automatic cleanup reports `UNAVAILABLE`
+and preserves directories: parent PID snapshots cannot prove that orphaned
+descendants have exited. Free-space checks, wake alerts and scheduling still run;
+apply requests exit 1 after reporting this limitation. Free space
+uses filesystem statistics on macOS and .NET DriveInfo on Windows; a failed space
+probe returns `UNAVAILABLE`. OS scheduler integration is covered with injected
+runners; native installation still depends on the local OS and account.
+
+Free space below `disk_floor_bytes` (default 5 GiB) appends one `LOW_DISK` JSON
+line per observed low-space period using the same wake lock, writer, cursor and
+event IDs as health. A check at or above the floor ends the period. Restarts and
+interruption between log and cursor writes do not duplicate alerts. Keep the wake
+owner, cursor and log together. Daily checks do not wake a sleeping computer.
 
 ## orch awake
 

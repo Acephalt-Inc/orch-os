@@ -39,7 +39,7 @@ export function workerSnapshot(root: string, platform: NodeJS.Platform, runner: 
 /** The cursor belongs to this log, so watching never acknowledges the lead's inbox. */
 export class WakeWatch {
   constructor(readonly home: string, readonly messages: Messages, readonly reader: string, readonly workers: () => Worker[], readonly write = snapshot) {}
-  tick(health?: Record<string, unknown>): number {
+  tick(health?: Record<string, unknown>, disk?: Record<string, unknown>): number {
     const dir = join(this.home, "wake");
     if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw new Error("symbolic wake directory refused");
     mkdirSync(dir, { recursive: true });
@@ -58,12 +58,18 @@ export class WakeWatch {
       if (!Number.isSafeInteger(c.seq) || c.seq < 0) throw new Error("invalid wake cursor");
       if ((c.deadman_period !== undefined && (!Number.isSafeInteger(c.deadman_period) || c.deadman_period < 0)) ||
         (c.deadman != null && (!Number.isSafeInteger(c.deadman) || c.deadman < 1 || c.deadman !== c.deadman_period))) throw new Error("invalid deadman cursor");
+      if ((c.disk_period !== undefined && (!Number.isSafeInteger(c.disk_period) || c.disk_period < 0)) ||
+        (c.disk != null && (!Number.isSafeInteger(c.disk) || c.disk < 1 || c.disk !== c.disk_period))) throw new Error("invalid disk cursor");
       const seen = new Set<string>();
       const prior = existsSync(log) ? readFileSync(log, "utf8") : "";
       for (const l of prior.split("\n").filter(Boolean)) {
         const event = JSON.parse(l);
         if (typeof event.id !== "string") throw new Error("invalid wake event log");
         seen.add(event.id);
+        // Recover a log commit whose cursor write was interrupted before processing recovery.
+        const prefix = `disk:${this.reader.toLowerCase()}:`;
+        const period = event.kind === "LOW_DISK" && event.id.startsWith(prefix) ? Number(event.id.slice(prefix.length)) : 0;
+        if (Number.isSafeInteger(period) && period > (c.disk_period ?? 0)) { c.disk = period; c.disk_period = period; }
       }
       const events: Record<string, unknown>[] = [];
       if (health) {
@@ -74,6 +80,13 @@ export class WakeWatch {
           c.deadman = period; c.deadman_period = period;
           events.push({ id: `deadman:${this.reader}:${period}`, kind: "DEADMAN", ...health });
         } else c.deadman = null;
+      }
+      if (disk) {
+        if (disk.low_disk) {
+          const period = c.disk ?? (c.disk_period ?? 0) + 1;
+          c.disk = period; c.disk_period = period;
+          events.push({ id: `disk:${this.reader.toLowerCase()}:${period}`, kind: "LOW_DISK", ...disk });
+        } else c.disk = null;
       }
       const inbox = this.messages.inbox(this.reader);
       for (const m of inbox) if (m.seq > c.seq && ["QUESTION", "BLOCKED", "DONE"].includes(m.kind))

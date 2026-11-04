@@ -5,7 +5,7 @@ import { posix, win32 } from 'node:path';
 import { withLock } from '../lock.js';
 
 export type Runner = (command: string, args: string[]) => { code: number; out: string; err: string };
-type Options = { platform: NodeJS.Platform; home: string; userHome: string; node: string; cli: string; uid: number; user: string; prefix?: string; job?: "wake-watch" | "health"; runner: Runner };
+type Options = { platform: NodeJS.Platform; home: string; userHome: string; node: string; cli: string; uid: number; user: string; prefix?: string; job?: "wake-watch" | "health" | "disk"; runner: Runner };
 type Outcome = 'UNAVAILABLE' | 'DRY_RUN' | 'INSTALLED' | 'UNINSTALLED' | 'STATUS' | 'ERROR' | 'CONFLICT';
 type Job = { job: string; loaded: boolean | null; lastRun: string | null; lastExit: number | null; nextRun: string | null; raw?: string };
 type Result = { outcome: Outcome; jobs: Job[]; reason?: string; plan?: { path: string; definition: string } };
@@ -38,10 +38,11 @@ export class Scheduler {
   private result(outcome: Outcome, reason?: string, jobs: Job[] = []): Result { return { outcome, jobs, ...(reason ? { reason } : {}) }; }
   private unsupported(): Result | null { return this.options.platform === 'darwin' || this.options.platform === 'win32' ? null : this.result('UNAVAILABLE', 'Scheduler is unavailable on this platform'); }
   private definition(): string {
-    const health = this.options.job === 'health';
-    const trigger = health ? '<TimeTrigger><Repetition><Interval>PT30M</Interval></Repetition><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger>' : `<LogonTrigger><UserId>${xml(this.options.user)}</UserId><Enabled>true</Enabled></LogonTrigger>`;
+    const periodic = this.options.job === 'health' || this.options.job === 'disk';
+    const interval = this.options.job === 'disk' ? 'PT24H' : 'PT30M';
+    const trigger = periodic ? `<TimeTrigger><Repetition><Interval>${interval}</Interval></Repetition><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger>` : `<LogonTrigger><UserId>${xml(this.options.user)}</UserId><Enabled>true</Enabled></LogonTrigger>`;
     const a = this.args.map(v => `<string>${xml(v)}</string>`).join('');
-    if (this.options.platform === 'darwin') return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${xml(this.name)}</string><key>ProgramArguments</key><array>${a}</array><key>RunAtLoad</key><true/>${health ? '<key>StartInterval</key><integer>1800</integer>' : '<key>KeepAlive</key><true/>'}<key>EnvironmentVariables</key><dict><key>ORCH_HOME</key><string>${xml(this.options.home)}</string></dict></dict></plist>\n`;
+    if (this.options.platform === 'darwin') return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${xml(this.name)}</string><key>ProgramArguments</key><array>${a}</array><key>RunAtLoad</key><true/>${periodic ? `<key>StartInterval</key><integer>${this.options.job === 'disk' ? 86400 : 1800}</integer>` : '<key>KeepAlive</key><true/>'}<key>EnvironmentVariables</key><dict><key>ORCH_HOME</key><string>${xml(this.options.home)}</string></dict></dict></plist>\n`;
     const argumentsValue = this.args.slice(1).map(quote).join(' ');
     return `<?xml version="1.0" encoding="UTF-8"?><Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>${xml(this.name)}</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals><Principal id="Author"><UserId>${xml(this.options.user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>${xml(this.args[0])}</Command><Arguments>${xml(argumentsValue)}</Arguments></Exec></Actions></Task>`;
   }
@@ -71,14 +72,14 @@ export class Scheduler {
       const value = (source: string, tag: string) => { const v = one(source, tag); return v === null ? null : decode(v.trim()); };
       const registration = one(actual, 'RegistrationInfo'), actions = one(actual, 'Actions'), principals = one(actual, 'Principals'), triggers = one(actual, 'Triggers'), settings = one(actual, 'Settings');
       if (!registration || !actions || !principals || !triggers || !settings) return false;
-      const exec = one(actions, 'Exec'), principal = one(principals, 'Principal'), trigger = one(triggers, this.options.job === 'health' ? 'TimeTrigger' : 'LogonTrigger');
+      const exec = one(actions, 'Exec'), principal = one(principals, 'Principal'), trigger = one(triggers, this.options.job === 'health' || this.options.job === 'disk' ? 'TimeTrigger' : 'LogonTrigger');
       if (!exec || !principal || !trigger || (actions.match(/<(?:Exec|ComHandler|SendEmail|ShowMessage)(?:\s|>)/gi) || []).length !== 1 || (triggers.match(/<[A-Za-z]+Trigger(?:\s|>)/gi) || []).length !== 1) return false;
       const expectedExec = one(one(expected, 'Actions')!, 'Exec')!;
       const expectedSettings = one(expected, 'Settings')!;
       const equal = (a: string, b: string, tags: string[]) => tags.every(tag => value(a, tag) === value(b, tag));
       if (value(registration, 'Description') !== this.name || !equal(exec, expectedExec, ['Command', 'Arguments']) || value(principal, 'LogonType') !== 'InteractiveToken' || value(principal, 'RunLevel') !== 'LeastPrivilege' || value(trigger, 'Enabled') !== 'true' || !equal(settings, expectedSettings, ['MultipleInstancesPolicy', 'DisallowStartIfOnBatteries', 'StopIfGoingOnBatteries', 'ExecutionTimeLimit', 'Interval', 'Count']) || (value(settings, 'Enabled') !== null && value(settings, 'Enabled') !== 'true')) return false;
-      if (this.options.job === 'health' && (value(trigger, 'Interval') !== 'PT30M' || value(trigger, 'StartBoundary') !== '2020-01-01T00:00:00' || value(trigger, 'Duration') !== null || value(trigger, 'EndBoundary') !== null || ![null, 'PT0S'].includes(value(trigger, 'RandomDelay')))) return false;
-      const users = [value(principal, 'UserId'), ...(this.options.job === 'health' ? [] : [value(trigger, 'UserId')])];
+      if ((this.options.job === 'health' || this.options.job === 'disk') && (value(trigger, 'Interval') !== (this.options.job === 'disk' ? 'PT24H' : 'PT30M') || value(trigger, 'StartBoundary') !== '2020-01-01T00:00:00' || value(trigger, 'Duration') !== null || value(trigger, 'EndBoundary') !== null || ![null, 'PT0S'].includes(value(trigger, 'RandomDelay')))) return false;
+      const users = [value(principal, 'UserId'), ...(this.options.job === 'health' || this.options.job === 'disk' ? [] : [value(trigger, 'UserId')])];
       if (users.every(user => user?.toLowerCase() === this.options.user.toLowerCase())) return true;
       const who = this.options.runner('whoami.exe', ['/user', '/fo', 'csv', '/nh']);
       const match = who.code === 0 ? who.out.trim().match(/^"([^"\r\n]+)","(S-1-(?:\d+-)*\d+)"$/i) : null;

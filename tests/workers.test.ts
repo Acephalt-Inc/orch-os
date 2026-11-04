@@ -15,6 +15,7 @@ describe.skipIf(process.platform === "win32")("WorkersTest", () => {
   it("test_start_list_stop", async () => {
     const w = workers();
     w.start("w1", { command: ["sh", "-c", "echo hello {name}; sleep 30"], workdir: ctx.home, minutes: 1 });
+    expect(JSON.parse(readFileSync(`${ctx.home}/workers/.ownership.json`, "utf8")).workers.w1.directory.path).toBe(`${ctx.home}/workers/w1`);
     expect(w.list()[0].state).toBe("RUNNING");
     const log = `${ctx.home}/workers/w1/stdout.log`;
     await waitFor(() => readFileSync(log, "utf8").includes("hello"));

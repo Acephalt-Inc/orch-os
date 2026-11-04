@@ -10,7 +10,7 @@ async function run(argv: string[], platform: NodeJS.Platform = "darwin") {
   let out = "", err = "";
   const calls: unknown[] = [];
   const code = await main(argv, { out: (s) => { out += s; }, err: (s) => { err += s; }, stdin: () => "" }, {
-    platform, service: { userHome: join(ctx.home, "user"), uid: 42, user: "operator", runner: (cmd: string, args: string[]) => { calls.push([cmd, args]); return { code: 1, out: "", err: "not found" }; } },
+    platform, service: { diskFree: () => 1000, userHome: join(ctx.home, "user"), uid: 42, user: "operator", runner: (cmd: string, args: string[]) => { calls.push([cmd, args]); return { code: 1, out: "", err: "not found" }; } },
   } as never);
   return { code, out, err, calls };
 }
@@ -31,12 +31,12 @@ describe("service CLI", () => {
     expect(r.code).toBe(1); expect(JSON.parse(r.out).outcome).toBe("UNAVAILABLE");
     expect(readdirSync(ctx.home)).toEqual([]); expect(r.calls).toEqual([]);
   });
-  it("honors job disabling and refuses the deferred disk job", async () => {
+  it("honors job disabling and includes the disk job", async () => {
     writeFileSync(join(ctx.home, "config.toml"), "[service]\nwake_watch = false\n");
     const r = await run(["service", "install"]);
     expect(r.code).toBe(0); expect(existsSync(join(ctx.home, "service"))).toBe(false);
     writeFileSync(join(ctx.home, "config.toml"), "[service]\ndisk = true\n");
-    expect((await run(["service", "install"])).out).toContain("UNAVAILABLE");
+    expect((await run(["service", "install", "--dry-run"])).out).toContain(".disk");
     expect((await run(["service", "status"])).out).toContain("STATUS");
     expect((await run(["service", "uninstall", "--dry-run"])).out).toContain("DRY_RUN");
     writeFileSync(join(ctx.home, "config.toml"), '[service]\nwake_watch = "false"\n');
@@ -84,4 +84,18 @@ it('reports DRY_RUN when only health is enabled', async () => {
   expect(JSON.parse(r.out).outcome).toBe('DRY_RUN');
   expect(JSON.parse(r.out).plans).toHaveLength(1);
   expect(readdirSync(ctx.home)).toEqual(['config.toml']);
+});
+
+it.each(["darwin", "win32"] as const)("runs disk in the scheduled home and supports a write-free preview on %s", async platform => {
+  const home = join(ctx.home, "scheduled"); mkdirSync(home);
+  writeFileSync(join(home, "config.toml"), '[service]\ndisk = true\ndisk_mode = "apply"\ndisk_floor_bytes = 1\ndisk_stale_days = 7\n');
+  const preview = await run(["service", "run", "disk", "--home", home, "--dry-run"], platform);
+  expect(preview.code).toBe(0); expect(JSON.parse(preview.out).outcome).toBe("DRY_RUN");
+  expect(readdirSync(home)).toEqual(["config.toml"]);
+  const result = await run(["service", "run", "disk", "--home", home], platform);
+  expect(result.code).toBe(platform === "win32" ? 1 : 0); expect(JSON.parse(result.out).low_disk).toBe(false);
+  if (platform === "win32") expect(JSON.parse(result.out).cleanup.outcome).toBe("UNAVAILABLE");
+  expect(existsSync(join(home, "wake", "events.log"))).toBe(true);
+  writeFileSync(join(home, "config.toml"), '[service]\ndisk_mode = "delete"\n');
+  expect((await run(["service", "run", "disk", "--home", home], platform)).code).toBe(2);
 });
