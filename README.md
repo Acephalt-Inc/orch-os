@@ -40,6 +40,8 @@ Install the 16 [daily and operator skills](skills/README.md) for Claude Code wit
 
 ## Why ORCH-os
 
+The lead pack describes how Claude Code boots, arms its watcher and timer, and checks approved work while you are away. `orch lead boot` saves its place; `orch lead tick --approved` inspects events; dispatch currently supports one approved task. Host wake must be verified in your session. See the [boot → wake → tick guide](docs/lead-runtime.md).
+
 One coding agent needs a prompt. A team of agents needs an operating layer: someone leads, work has one owner, messages are delivered and answered, a merge waits for a review by someone other than the author, and notes survive the session. ORCH-os provides that layer as local commands over plain files. You provide the agent accounts, and you make the final acceptance and merge decision.
 
 ## What ORCH-os provides

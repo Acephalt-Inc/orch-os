@@ -21,6 +21,8 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 ## 安装
 
+`orch lead boot` 获取或续租负责人租约并保存重启记录。`orch lead tick --approved` 使用持久游标检查一批事件。此首个切片尚不支持调度、唤醒助手、派发工作进程或记忆集成。详见[负责人运行命令](docs/lead-runtime.md)。
+
 需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 
 ```sh

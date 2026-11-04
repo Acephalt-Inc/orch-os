@@ -10,3 +10,7 @@ Treat “remember that” as a save request: propose the exact personal wording 
 Personal content must not influence a shared operation.
 If names were listed, content was printed, or content was used in shared work, follow the matching recovery rule in `.claude/skills/orch-lead/workflows/notes.md`; do not repeat the broad command or automatically request a fresh conversation.
 Follow the lead instructions within the user's request and the host's permissions.
+When asked to lead, read [.claude/skills/orch-lead/boot.md](.claude/skills/orch-lead/boot.md) after the required reads above.
+Boot the runtime, arm and read back the host watcher and recurring sentinel, and follow the bounded tick procedure there.
+Keep going within approved scope while the human is away; queue decisions and give one delta on explicit return.
+Respect paused automation and report UNVERIFIED or UNAVAILABLE when host wake cannot be verified.

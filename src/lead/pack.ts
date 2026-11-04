@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /**
- * The lead text pack: the reviewed hashes of its 21 packaged files, the loader that reads the 20
+ * The lead text pack: the reviewed hashes of its 22 packaged files, the loader that reads the 21
  * a host needs into memory, and the bounded file reads and writes every `orch lead` step uses.
  *
  * Limits: the hash check accepts only the reviewed bytes, but nothing here protects against a
@@ -28,11 +28,12 @@ export const COMMAND_BUDGET_MS = 30_000;
 
 /** SHA-256 of each packaged file as reviewed. A text change must change this table by hand. */
 export const REVIEWED_SHA256: Readonly<Record<string, string>> = {
-  "templates/lead/SKILL.md": "85e2a5f8d47ffe8d0174126e6b496a8e19adca776fac1aba063d307a9ed82b87",
+  "templates/handbook/lead-boot.md": "80e365a2d3417810a4c61fa0d27a41b298911243a286f2cd022a17bb7ef95480",
+  "templates/lead/SKILL.md": "ec64bb0b8c2f36e55a2ef1aea5acc3c50799338346e97f99ce13f265ff7882e1",
   "templates/lead/routing.md": "0431228857660f6e143bdcda6ad7a3280ecf21dfdc1fb0961704799921cd4489",
   "templates/lead/brief.md": "9aa59257d174f1a7c0bf8aa5e018c440f7a5868b9e93d2007308c8f513216e24",
   "templates/lead/handoff.md": "183ee785a86c99e13cf6349e961fe2d7636449bf5f371d24ec1cae36b2ffd62b",
-  "templates/lead/bootstrap-claude.md": "78620ed144bacdb52983d702c4551a256169cb3157aa8a2b317078a466264496",
+  "templates/lead/bootstrap-claude.md": "23c9ac46223fc5c4b6bd5c015cb6af632c365d52c9fa5819acb19c592e3052a1",
   "templates/lead/bootstrap-codex.md": "20d18389a5393db04673ee95096e43e7bff9ea58791d51e85e2899a9dd1eab70",
   "templates/lead/agents/reader.md": "80309b9ecde5d3f6d7790213f8596fec4d780381b31ad9e0c44d804b796e1b75",
   "templates/lead/agents/mechanical.md": "4651955f2e1f9131bfaf373ed9b4ae18271aad52a2a7c3df3139ba1197f68f62",
@@ -199,7 +200,7 @@ export function reviewedRows(host: Host): (PayloadRow & { sha256: string })[] {
 }
 
 /**
- * Read the 20 packaged files a host needs. Each must be a regular file of valid UTF-8 text, at
+ * Read the 21 packaged files a host needs. Each must be a regular file of valid UTF-8 text, at
  * most 128 KiB, whose SHA-256 equals the reviewed one; the pack is at most 1 MiB. Returns one
  * entry per destination, each with its own copy of the bytes. Writes nothing.
  */

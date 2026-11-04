@@ -2,7 +2,7 @@
 /**
  * What is on disk: the manifest (a record of intent, never of completion), the anchors, the
  * record of the directories install created, the record that install finished, and the state of
- * each of the 20 payload paths. Everything here reads; nothing here writes.
+ * each of the 21 payload paths. Everything here reads; nothing here writes.
  *
  * A payload file is owned only when it is the same file as its anchor (same device and inode)
  * and the manifest lists it; equal bytes at another inode are a foreign file. A path that passes
