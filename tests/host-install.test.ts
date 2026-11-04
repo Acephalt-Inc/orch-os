@@ -309,3 +309,23 @@ it('installs and removes user-scope agreement when workspace has no .claude dire
     expect(fs.existsSync(agreement)).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+it('refuses an explicitly different installed preset without changing files', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'host preset mismatch '));
+  try {
+    const fs = await import('node:fs'); const workspace = join(root, 'work'), home = join(root, 'home'); mkdirSync(workspace); mkdirSync(home);
+    let output = ''; const io = { out: (s: string) => { output += s; }, err: (s: string) => { output += s; } };
+    const args = ['--workspace', workspace, '--host', 'claude'];
+    expect(await runHost(['install', ...args, '--preset', 'coding'], io, { home })).toBe(0);
+    const settings = join(workspace, '.claude', 'settings.json'), before = readFileSync(settings);
+    for (const command of ['status', 'install']) {
+      output = '';
+      expect(await runHost([command, ...args, '--preset', 'ops'], io, { home })).not.toBe(0);
+      expect(output).toContain('uninstall');
+      expect(output).toContain('preset');
+      expect(readFileSync(settings)).toEqual(before);
+    }
+    expect(await runHost(['status', ...args], io, { home })).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

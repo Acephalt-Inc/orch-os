@@ -107,9 +107,11 @@ export async function runSetup(a: Args, io: IO, deps: SetupDeps): Promise<number
     if (has(deps.tree, [step.name, "status"])) {
       step.check = [...step.argv]; step.check[1] = "status";
       if (step.name === "skills") step.check.push("--json");
+      if (step.name === "host" && a.preset == null && !interactive) step.check.splice(step.check.indexOf("--preset"), 2);
     }
   }
   emit(`Setup plan for ${workspace} (${platform}; preset ${preset}; scope ${scope})`);
+  if (a.preset == null && !interactive) emit("The default preset applies to a new install; an existing host preset is kept. Pass --preset to request a specific preset.");
   emit("Commands run in this workspace. Config and the service use your ORCH home; the lead pack stays in the workspace.");
   for (const step of steps) {
     const available = has(deps.tree, step.name === "init" ? ["init"] : [step.name, "install"]);

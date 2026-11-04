@@ -200,12 +200,17 @@ describe("setup", () => {
       expect(status.stdout + status.stderr).toContain("result: INSTALLED");
       const config = join(home, "config.toml"), lead = join(workspace, "CLAUDE.md");
       const configBytes = readFileSync(config), leadBytes = readFileSync(lead);
+      const settings = join(workspace, ".claude", "settings.json"), settingsBytes = readFileSync(settings);
       const second = run();
       expect(second.status, second.stderr + second.stdout).toBe(0);
       expect(second.stdout).toMatch(/init: SKIPPED/);
       expect(second.stdout).toMatch(/lead: SKIPPED/);
       expect(readFileSync(config)).toEqual(configBytes);
       expect(readFileSync(lead)).toEqual(leadBytes);
+      const defaults = spawnSync(process.execPath, [DIST_CLI, "setup", "--yes"], {cwd: workspace, env, encoding: "utf8"});
+      expect(defaults.status, defaults.stdout + defaults.stderr).toBe(0);
+      expect(readFileSync(lead)).toEqual(leadBytes);
+      expect(readFileSync(settings)).toEqual(settingsBytes);
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
   it("compiled CLI preserves a modified lead file and fails closed on rerun", () => {
@@ -225,6 +230,21 @@ describe("setup", () => {
       expect(second.stdout + second.stderr).toMatch(/lead: FAILED/);
       expect(readFileSync(lead)).toEqual(modified);
     } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it("compiled setup reports an explicitly different installed preset", () => {
+    const base = mkdtempSync(join(tmpdir(), "orch-setup-preset-"));
+    try {
+      const workspace = join(base, "workspace"), home = join(base, "home"); mkdirSync(workspace); mkdirSync(home);
+      const env = { ...process.env, ORCH_HOME: home, HOME: home, USERPROFILE: home };
+      const run = (extra: string[]) => spawnSync(process.execPath, [DIST_CLI, "setup", "--workspace", workspace, "--yes", ...extra], {cwd: workspace, env, encoding: "utf8"});
+      expect(run(["--preset", "coding"]).status).toBe(0);
+      const settings = join(workspace, ".claude", "settings.json"), before = readFileSync(settings);
+      const changed = run(["--preset", "ops"]);
+      expect(changed.status, changed.stdout + changed.stderr).toBe(1);
+      expect(changed.stdout).toMatch(/host: FAILED.*preset/);
+      expect(readFileSync(settings)).toEqual(before);
+    } finally { rmSync(base, {recursive: true, force: true}); }
   });
 
 });

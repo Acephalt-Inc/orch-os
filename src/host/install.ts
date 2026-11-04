@@ -61,6 +61,7 @@ export async function runHost(argv: string[], io: IO, deps: Deps = {}): Promise<
     const settings: Obj = raw === null ? {} : JSON.parse(raw); shape(settings);
     const state = stateRaw === null ? null : JSON.parse(stateRaw);
     if (state !== null && (!object(state) || state.version !== 1 || state.workspace !== workspace || state.scope !== scope || !Array.isArray(state.allow) || !Array.isArray(state.required) || !state.required.every((v: unknown) => typeof v === 'string') || !Array.isArray(state.groups) || typeof state.installed !== 'string' || !(state.before === null || typeof state.before === 'string') || !(state.agreementBefore === null || typeof state.agreementBefore === 'string') || typeof state.agreementInstalled !== 'string')) throw Error('invalid ownership record');
+    if (state && cmd.name !== 'uninstall' && args.preset != null && !same(state.required, presets[preset])) throw Error(`preset ${preset} differs from the installed preset; run orch host uninstall with the same workspace and scope, then install again`);
     const status = () => {
       let ready = state?.agreementPending !== false;
       for (const item of state?.required ?? presets[preset]) { const present = !!settings.permissions?.allow?.includes(item); ready &&= present; io.out(`permission ${item}: ${present ? 'INSTALLED' : 'MISSING'}\n`); }
