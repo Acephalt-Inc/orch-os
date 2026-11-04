@@ -52,6 +52,7 @@ async function run(a: Args, io: IO): Promise<number> {
   });
   const failed = results.find(r => ["UNAVAILABLE", "CONFLICT", "ERROR"].includes(r.outcome));
   const r = { outcome: failed?.outcome ?? (results.some(r => r.outcome === "DRY_RUN") ? "DRY_RUN" : results[0].outcome), jobs: results.flatMap(r => r.jobs),
+    reason: failed?.reason ?? (results.every(r => r.reason === "Scheduler disabled") ? "Scheduler disabled" : undefined),
     plans: results.flatMap(r => r.plan ? [r.plan] : []), reasons: results.flatMap(r => r.reason ? [r.reason] : []) };
   io.out(JSON.stringify(r, null, 2) + "\n");
   return failed ? 1 : 0;

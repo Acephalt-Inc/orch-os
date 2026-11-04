@@ -29,12 +29,14 @@ describe("service CLI", () => {
   it("reports Linux as typed UNAVAILABLE", async () => {
     const r = await run(["service", "status"], "linux");
     expect(r.code).toBe(1); expect(JSON.parse(r.out).outcome).toBe("UNAVAILABLE");
+    expect(JSON.parse(r.out).reason).toBe("Scheduler is unavailable on this platform");
     expect(readdirSync(ctx.home)).toEqual([]); expect(r.calls).toEqual([]);
   });
   it("honors job disabling and refuses the deferred disk job", async () => {
     writeFileSync(join(ctx.home, "config.toml"), "[service]\nwake_watch = false\n");
     const r = await run(["service", "install"]);
     expect(r.code).toBe(0); expect(existsSync(join(ctx.home, "service"))).toBe(false);
+    expect(JSON.parse(r.out).reason).toBe("Scheduler disabled");
     writeFileSync(join(ctx.home, "config.toml"), "[service]\ndisk = true\n");
     expect((await run(["service", "install"])).out).toContain("UNAVAILABLE");
     expect((await run(["service", "status"])).out).toContain("STATUS");
