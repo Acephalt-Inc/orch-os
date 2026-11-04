@@ -104,6 +104,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file |
 |---|---|
 | Add, search, and retire file-backed notes | `orch mem` |
+| Capture session drafts and review compact boot recall | `orch mem capture`, `orch mem recall --boot` ([guide](docs/commands.md#orch-mem)) |
 
 ### Policy and approvals
 
