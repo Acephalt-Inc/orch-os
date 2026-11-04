@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { Messages } from '../src/messages.js';
@@ -140,11 +140,15 @@ it('preserves unrecorded worktrees, corrupt ownership, shared worktrees and unav
   expect(f.run().directories[0].reason).toContain('registration mismatch');
   expect(existsSync(f.wt.path)).toBe(true);
 });
-it('does not write optional Git state during an explicit preview', () => {
-  const f = fixture(); const calls: string[][] = [], saved = f.options.runner;
-  f.options.runner = (cmd, args) => { if (cmd === 'git') calls.push(args); return saved(cmd, args); };
+it('does not refresh the Git index during an explicit preview', () => {
+  const f = fixture();
+  const index = spawnSync('git', ['-C', f.wt.path, 'rev-parse', '--git-path', 'index'], { encoding: 'utf8' }).stdout.trim();
+  // Force a stat mismatch without changing file content, which ordinary git status can refresh.
+  utimesSync(join(f.wt.path, 'tracked'), old, old);
+  const before = readFileSync(index), modified = lstatSync(index).mtimeMs;
   expect(f.run('apply', true).directories[0].action).toBe('WOULD_DELETE');
-  expect(calls.length).toBeGreaterThan(0); expect(calls.every(args => args[0] === '--no-optional-locks')).toBe(true);
+  expect(readFileSync(index)).toEqual(before); expect(lstatSync(index).mtimeMs).toBe(modified);
+  expect(existsSync(join(f.home, 'wake'))).toBe(false);
 });
 it('returns typed UNAVAILABLE when space cannot be measured or platform is unsupported', () => {
   const f = fixture();
