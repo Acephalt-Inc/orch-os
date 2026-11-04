@@ -18,6 +18,7 @@
   },
   "files": [
     "dist/",
+    "skills/",
     "fixtures/",
     "templates/",
     "docs/INSTALL-WITH-AGENT.md",

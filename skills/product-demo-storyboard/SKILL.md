@@ -1,6 +1,6 @@
 ---
 name: product-demo-storyboard
-description: Plan a 30–60 second software-product demo storyboard with evidence-led shots, narration, captions, and continuity. Use for concise product videos; exclude full slide decks, UI implementation, and video generation.
+description: Use to plan a short software-product demo storyboard with evidence-led shots, narration, captions, and continuity. Exclude slide decks, UI implementation, and video generation.
 ---
 
 # Product Demo Storyboard

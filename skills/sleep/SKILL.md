@@ -1,6 +1,6 @@
 ---
 name: sleep
-description: Use when the human says the whole team should stop for the night ("going to sleep, stop everything", "we're done for today") or invokes /sleep. Persists work state to disk, tells every worker to stop at a safe point, stops workers and scheduled polling, and writes a snapshot that the next morning's lead session restores from. Not for leaving while work continues (/away, /caffeine).
+description: Use when asked to stop a team safely and preserve a restart snapshot. Exclude an absence during which work should continue.
 ---
 
 # /sleep — persist, announce, stop, verify
@@ -24,7 +24,7 @@ stopped before it hears "stop at a safe point" can die mid-commit.
 
 2. **Persist work state.**
    - Open items, one line each, into your team's to-do file.
-   - A session note: `orch mem add session-<date> -d "state at sleep" -m "<open threads, in-flight PRs, next steps>"`.
+   - A session note: `orch mem add session-<date> --description "state at sleep" -m "<open threads, in-flight PRs, next steps>"`.
    - Any half-written diagnosis or report goes into its own file, not the chat.
 
 3. **Tell the workers first** (a broadcast nobody has to answer, so the mailbox):
@@ -55,5 +55,6 @@ stopped before it hears "stop at a safe point" can die mid-commit.
 ## Morning
 
 Start the lead session from the handbook file `orch init` wrote (`lead-boot.md`, by
-default `~/.orch/handbook/lead-boot.md`), read `$ORCH_HOME/sleep.json`, and restart exactly the
-jobs it lists. Compare the list with what is now running and report any difference.
+default `~/.orch/handbook/lead-boot.md`), read `$ORCH_HOME/sleep.json`, and compare its jobs with what is now running.
+Resume only work currently authorized. Never restart recurring polling or monitoring
+without current explicit approval; report any jobs left stopped.

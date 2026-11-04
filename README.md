@@ -36,6 +36,8 @@ Install ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from htt
 
 On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 
+Install the 16 [daily and operator skills](skills/README.md) for Claude Code with `orch skills install --host claude --scope workspace` (or `--scope user`); inspect or remove them with `orch skills status` and `orch skills uninstall` using the same scope. See the [skills command reference](docs/commands.md#orch-skills).
+
 ## Why ORCH-os
 
 One coding agent needs a prompt. A team of agents needs an operating layer: someone leads, work has one owner, messages are delivered and answered, a merge waits for a review by someone other than the author, and notes survive the session. ORCH-os provides that layer as local commands over plain files. You provide the agent accounts, and you make the final acceptance and merge decision.

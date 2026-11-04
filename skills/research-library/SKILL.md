@@ -1,6 +1,6 @@
 ---
 name: research-library
-description: Use when the human hands over a topic, link, article, video, repo or tool for a thorough investigation whose results must stay findable later ("research this and keep it", "save the prompts, images and methods", "what could we use from this?"), and before handing any research task to another agent. Produces one folder with a fixed file contract plus an index line. Not for a quick read-and-answer; that is /insight alone.
+description: Use when research needs a durable, reusable source and artifact archive. Exclude a quick answer or teaching digest with no requested archive.
 ---
 
 # /research-library — research that stays findable
@@ -18,13 +18,13 @@ can find it.
    login need a browser plan up front.
 2. **Write the task** with the contract below. Output root:
    `$ORCH_HOME/research/<YYYY-MM-DD>-<slug>/`.
-3. **Run it** yourself or hand it to a worker (`orch task claim`, or
+3. **Run it** yourself or hand it to a worker (`orch task claim <id>`, or
    `orch worker start <id> --task brief.md`). Paste the contract verbatim into the brief.
 4. **When the task reports DONE:** check `RESULT.json`'s counts and recompute 2 or 3
    sha256 values by hand. Then:
    - append one line to `$ORCH_HOME/research/INDEX.md`:
      `| date | slug | topic | keywords | path | what it is good for |`;
-   - leave a pointer: `orch mem add research-<slug> -d "<one line>"`;
+   - leave a pointer: `orch mem add research-<slug> --description "<one line>"`;
    - write the human-facing report with `/insight` steps 1 to 3, including the
      applicability table verbatim.
 5. **Make it a skill** only when something in it will be reused as a recipe (for

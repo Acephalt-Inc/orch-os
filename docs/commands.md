@@ -34,6 +34,37 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 
 **Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`). These two answers are declared context: they select no rule. It then asks three questions that have no default: whether to select the `human-merge` policy (`yes`/`no`), the weakest agent review that passes (`1`/`2`/`3` for `single-agent`/`cross-account`/`cross-vendor`), and the most workers running at once (a whole number, 1 or more). Three unusable answers to any question, `no` to the policy, or end of input write no profile, and `init` prints `no profile written: …` with the command that creates one. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless a complete set of the five profile flags replaces it). If the kept profile cannot be used, for example because it was written for the removed built-in table, `init --force` still keeps it byte for byte, prints the refusal with what to set on stderr, does not print `next: orch doctor`, and exits 2. When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
 
+## orch skills
+
+```text
+orch skills install --host claude [--scope workspace|user] [--only NAME,...] [--dry-run] [--force]
+orch skills status --host claude [--scope workspace|user] [--json]
+orch skills uninstall --host claude [--scope workspace|user] [--only NAME,...] [--dry-run]
+```
+
+Installs the [bundled skills](../skills/README.md) where Claude Code discovers them:
+`<workspace>/.claude/skills/<name>/SKILL.md`, or `~/.claude/skills/<name>/SKILL.md`
+for user scope. The default host is `claude` and the default scope is `workspace`.
+`--user` remains an alias for `--scope user`; use the same scope for all three commands.
+
+Install keeps existing skills by default. `--force` moves a modified skill to
+`<name>.bak-<unique>/original` before installing a fresh copy; the backup stays on disk. Each new
+installation records ownership and its content fingerprint. Status compares each
+copy with the bundled version and reports `installed`, `modified`, or `missing`.
+Existing copies without an ownership record count as `modified` and are preserved;
+use `--force` to back them up and install an owned copy.
+Uninstall removes only owned copies whose contents still match their installation
+record. It keeps user edits, added files, unowned copies, and backups. Symbolic
+links are refused. `--dry-run` reports planned actions without writing anything.
+`--only` selects a comma-separated subset; other skills stay untouched.
+If installation fails partway through, any partial destination and backup are
+preserved for inspection; the command reports an error instead of removing them.
+Uninstall rechecks a copy after moving it into a reserved temporary directory.
+If it changed during removal, the command keeps that directory and reports its path.
+
+`orch init --everyday` prints the install hint; adding `--with-skills` installs the
+pack in the current workspace. Skill instructions grant no additional authority.
+
 ## orch agents
 
 ```text
