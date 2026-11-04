@@ -99,3 +99,7 @@ it.each(["darwin", "win32"] as const)("runs disk in the scheduled home and suppo
   writeFileSync(join(home, "config.toml"), '[service]\ndisk_mode = "delete"\n');
   expect((await run(["service", "run", "disk", "--home", home], platform)).code).toBe(2);
 });
+it.each(['health', 'wake-watch'])('rejects a preview for %s before any write', async job => {
+  const result = await run(['service', 'run', job, '--once', '--dry-run']);
+  expect(result.code).toBe(2); expect(readdirSync(ctx.home)).toEqual([]);
+});
