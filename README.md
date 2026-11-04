@@ -19,6 +19,10 @@ ORCH-os helps several CLI coding agents work in one repository. A lease-held lea
 
 Author: [Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
+## Install with Claude Code or Codex
+
+Give this repository's URL to your coding agent: open Claude Code or Codex in any folder and say "Install ORCH OS from https://github.com/Acephalt-Inc/orch-os". The agent reads [AGENTS.md](AGENTS.md) (the same text as [CLAUDE.md](CLAUDE.md)) and does the rest on macOS or Windows: it installs Node.js if it is missing, builds ORCH-os from this source, sets up a workspace, checks it with `orch doctor`, and tells you the one or two commands you will use.
+
 ## Install
 
 Requires Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or Linux. Install the `orch` command globally, or run it once with `npx`:

@@ -35,4 +35,4 @@ The same plan runs on macOS and Windows, using native paths and Node child proce
 
 The lead bootstrap uses the workspace `CLAUDE.md`. The host working agreement uses `.claude/CLAUDE.md`, so each installer can track its own changes.
 
-After setup, open Claude Code in the workspace and say **"boot the lead"**. Setup installs local integration; it does not sign you into Claude Code or verify that a live assistant has loaded the files.
+After setup, open Claude Code in the workspace and say **"boot the lead"**. Setup installs local integration; it does not sign you into Claude Code or verify that a live assistant has loaded the files. The summary ends with a `Claude Code:` line: `found` with the path of the `claude` command (looked up as `orch agents` does), or `NOT FOUND` with the install link. It does not change the exit code.

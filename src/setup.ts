@@ -6,6 +6,7 @@ import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, type OptSpec } from "./args.js";
 import type { IO } from "./cli.js";
+import { find } from "./detect.js";
 
 type Result = { code: number; out: string; err: string };
 export interface SetupDeps {
@@ -14,9 +15,12 @@ export interface SetupDeps {
   cwd?: string;
   run?: (argv: string[], cwd: string) => Result;
   checkWorkspace?: (path: string) => void;
+  /** Where the `claude` command is, or null. Default: the same lookup as `orch agents`. */
+  findClaude?: () => string | null;
 }
 
 const PRESETS = ["coding", "research", "ops"];
+const CLAUDE_CODE_URL = "https://claude.com/claude-code";
 const SCOPES = ["workspace", "user"];
 export function setupSpec(run: (a: Args, io: IO) => Promise<number>): CmdSpec<typeof run> {
   const opt = (dest: string, kind: "str" | "bool", help: string, choices?: string[]): OptSpec =>
@@ -172,7 +176,11 @@ export async function runSetup(a: Args, io: IO, deps: SetupDeps): Promise<number
   const labels: Record<string, string> = { init: "local settings and role handbook", lead: "lead instructions", host: "Claude permissions and hooks", service: "background service", skills: "assistant skills" };
   emit("\nSetup summary:");
   for (const row of rows) emit(`  ${labels[row.name]}: ${row.state}${row.reason ? ` — ${row.reason}` : ""}`);
+  let claude: string | null = null;
+  try { claude = (deps.findClaude ?? (() => find("claude", platform)[0]))(); } catch { claude = null; }
+  emit(`  Claude Code: ${claude ? `found (${claude})` : `NOT FOUND — install it from ${CLAUDE_CODE_URL}`}`);
   if (failed) emit(`Setup stopped at ${failed}. Fix the reason above and rerun orch setup with the same options.`);
-  emit(`${failed ? "After that, open" : "Next: open"} Claude Code in ${workspace} and say "boot the lead".`);
+  const open = `open Claude Code in ${workspace} and say "boot the lead".`;
+  emit(failed ? `After that, ${open}` : claude ? `Next: ${open}` : `Next: install Claude Code (${CLAUDE_CODE_URL}), then ${open}`);
   return failed ? 1 : 0;
 }

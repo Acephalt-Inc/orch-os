@@ -102,7 +102,7 @@ describe("skills install", () => {
     expect(code).toBe(0);
     const value = JSON.parse(out);
     const shipped = readdirSync(join(original, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-    expect(value.version).toBe("2.2.0");
+    expect(value.version).toBe("2.3.0");
     expect(value.skills.map((row: { name: string }) => row.name)).toEqual(shipped);
     expect(value.skills.find((row: { name: string }) => row.name === "away").state).toBe("installed");
     expect(value.skills.find((row: { name: string }) => row.name === "back").state).toBe("missing");

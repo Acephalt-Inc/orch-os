@@ -13,13 +13,13 @@ const group = (name: string): CmdSpec<any> => ({ name, help: "", sub: [leaf("ins
 const tree = (): CmdSpec<any> => ({ name: "orch", help: "", sub: [leaf("init"), ...["lead", "host", "service", "skills"].map(group)] });
 const args = (extra: Record<string, unknown> = {}) => ({ _path: ["orch", "setup"], ...extra });
 type Result = { code: number; out: string; err: string };
-function harness(options: { answers?: string[]; tty?: boolean; respond?: (argv: string[]) => Result; spec?: CmdSpec<any>; platform?: NodeJS.Platform; cwd?: string } = {}) {
+function harness(options: { answers?: string[]; tty?: boolean; respond?: (argv: string[]) => Result; spec?: CmdSpec<any>; platform?: NodeJS.Platform; cwd?: string; findClaude?: () => string | null } = {}) {
   let out = "", err = "";
   const answers = [...(options.answers ?? [])];
   const calls: { argv: string[]; cwd: string }[] = [];
   let questions = 0;
   const io = { out: (s: string) => { out += s; }, err: (s: string) => { err += s; }, stdin: () => "", isTTY: () => options.tty ?? true, ask: () => { questions++; return answers.shift() ?? null; } };
-  const deps = { tree: options.spec ?? tree(), platform: options.platform ?? "darwin" as NodeJS.Platform, cwd: options.cwd ?? "/work", checkWorkspace: (_path: string) => {}, run: (argv: string[], cwd: string) => {
+  const deps = { tree: options.spec ?? tree(), platform: options.platform ?? "darwin" as NodeJS.Platform, cwd: options.cwd ?? "/work", checkWorkspace: (_path: string) => {}, findClaude: options.findClaude ?? (() => "/bin/claude"), run: (argv: string[], cwd: string) => {
     calls.push({ argv, cwd });
     return options.respond?.(argv) ?? { code: 0, out: "", err: "" };
   } };
@@ -94,6 +94,29 @@ describe("setup", () => {
     expect(h.output()).toMatch(/host: UNAVAILABLE/);
     expect(h.output()).toMatch(/lead: UNAVAILABLE/);
     expect(h.calls.some(c => c.argv[0] === "skills" && c.argv[1] === "install")).toBe(true);
+  });
+
+  it("reports whether Claude Code is installed without changing the exit code", async () => {
+    const found = harness();
+    expect(await runSetup(args({ yes: true }), found.io, found.deps)).toBe(0);
+    expect(found.output()).toContain("Claude Code: found (/bin/claude)");
+    expect(found.output()).toMatch(/Next: open Claude Code in \/work and say "boot the lead"\./);
+    for (const platform of ["darwin", "win32"] as const) {
+      const missing = harness({ platform, cwd: platform === "win32" ? "C:\\work" : "/work", findClaude: () => null });
+      expect(await runSetup(args({ yes: true }), missing.io, missing.deps)).toBe(0);
+      expect(missing.output()).toContain("Claude Code: NOT FOUND — install it from https://claude.com/claude-code");
+      expect(missing.output()).toMatch(/Next: install Claude Code \(https:\/\/claude\.com\/claude-code\), then open Claude Code in/);
+    }
+    const thrown = harness({ findClaude: () => { throw new Error("lookup failed"); } });
+    expect(await runSetup(args({ yes: true }), thrown.io, thrown.deps)).toBe(0);
+    expect(thrown.output()).toContain("Claude Code: NOT FOUND");
+  });
+
+  it("exits 1 when the skills step fails", async () => {
+    const h = harness({ respond: a => a[0] === "skills" && a[1] === "install" ? { code: 1, out: "away: FAILED\n", err: "skills failed" } : { code: 0, out: "", err: "" } });
+    expect(await runSetup(args({ yes: true }), h.io, h.deps)).toBe(1);
+    expect(h.output()).toMatch(/skills: FAILED/);
+    expect(h.output()).toMatch(/Setup stopped at skills/);
   });
 
   it("stops dependent steps when an install fails or throws", async () => {
