@@ -244,6 +244,7 @@ describe("InstallEntry", () => {
       "docs/learning.md",
       "docs/preferences.md",
       "docs/resume.md",
+      "docs/host.md",
     ]);
   });
 
@@ -253,6 +254,7 @@ describe("InstallEntry", () => {
       const copy = candidate(dirs);
       const files = copy.run("tar", ["-tzf", pack(copy)]).trim().split("\n");
       expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([
+        "package/docs/host.md",
         `package/${GUIDE}`,
         "package/docs/knowledge.md",
         "package/docs/learning.md",
