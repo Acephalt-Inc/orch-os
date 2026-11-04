@@ -31,11 +31,11 @@ describe("service CLI", () => {
     expect(r.code).toBe(1); expect(JSON.parse(r.out).outcome).toBe("UNAVAILABLE");
     expect(readdirSync(ctx.home)).toEqual([]); expect(r.calls).toEqual([]);
   });
-  it("honors job disabling and refuses unimplemented jobs", async () => {
+  it("honors job disabling and refuses the deferred disk job", async () => {
     writeFileSync(join(ctx.home, "config.toml"), "[service]\nwake_watch = false\n");
     const r = await run(["service", "install"]);
     expect(r.code).toBe(0); expect(existsSync(join(ctx.home, "service"))).toBe(false);
-    writeFileSync(join(ctx.home, "config.toml"), "[service]\nhealth = true\n");
+    writeFileSync(join(ctx.home, "config.toml"), "[service]\ndisk = true\n");
     expect((await run(["service", "install"])).out).toContain("UNAVAILABLE");
     expect((await run(["service", "status"])).out).toContain("STATUS");
     expect((await run(["service", "uninstall", "--dry-run"])).out).toContain("DRY_RUN");
@@ -60,4 +60,28 @@ describe("service CLI", () => {
     expect((await run(["service", "run", "wake-watch", "--once"])).code).toBe(0);
     expect(readFileSync(join(ctx.home, "wake", "events.log"), "utf8").trim().split("\n")).toHaveLength(1);
   });
+});
+
+it.each(["darwin", "win32"] as const)("includes enabled health in the job roster on %s", async platform => {
+  writeFileSync(join(ctx.home, "config.toml"), "[service]\nhealth = true\n");
+  const r = await run(["service", "install", "--dry-run"], platform);
+  expect(r.code).toBe(0); expect(r.out).toContain('health');
+  expect(JSON.parse(r.out).plans).toHaveLength(2);
+  expect((await run(["service", "status"], platform)).out).toContain('.health');
+});
+it("runs one health pass in the scheduled home and validates deadman configuration", async () => {
+  const home = join(ctx.home, "scheduled"); mkdirSync(home);
+  writeFileSync(join(home, "config.toml"), '[service]\ndeadman_seconds = 90\n');
+  const r = await run(["service", "run", "health", "--home", home]);
+  expect(r.code).toBe(0); expect(JSON.parse(r.out).stale).toBe(true);
+  expect(existsSync(join(home, "wake", "health.json"))).toBe(true);
+  writeFileSync(join(home, "config.toml"), '[service]\ndeadman_seconds = -1\n');
+  expect((await run(["service", "run", "health", "--home", home])).code).toBe(2);
+});
+it('reports DRY_RUN when only health is enabled', async () => {
+  writeFileSync(join(ctx.home, 'config.toml'), '[service]\nwake_watch = false\nhealth = true\n');
+  const r = await run(['service', 'install', '--dry-run']);
+  expect(JSON.parse(r.out).outcome).toBe('DRY_RUN');
+  expect(JSON.parse(r.out).plans).toHaveLength(1);
+  expect(readdirSync(ctx.home)).toEqual(['config.toml']);
 });

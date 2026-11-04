@@ -263,3 +263,40 @@ it('deletes an owned Windows task when its instance is already stopped', () => {
   expect(scheduler.uninstall().outcome).toBe('UNINSTALLED');
   expect(deleted).toBe(true);
 });
+it.each(['darwin', 'win32'] as const)('generates and manages an owned periodic health job on %s', (platform) => {
+  const root = mkdtempSync(join(tmpdir(), 'health-scheduler-')); dirs.push(root);
+  let loaded = ''; const calls: string[][] = [];
+  const runner: Runner = (_cmd, args) => {
+    calls.push(args);
+    if (args[0] === 'print') return { code: loaded ? 0 : 1, out: loaded, err: loaded ? '' : 'not found' };
+    if (args[0] === '/Query') return { code: loaded ? 0 : 1, out: loaded, err: loaded ? '' : 'not found' };
+    if (args[0] === '/Create') loaded = readFileSync(args[args.indexOf('/XML') + 1], 'utf8');
+    if (args[0] === 'bootstrap') {
+      const name = args[2].split('/').pop()!.replace('.plist', '');
+      loaded = `gui/1/${name} = {\n arguments = {\n${[join(root,'node'), join(root,'cli'), 'service','run','health','--home',root].join('\n')}\n }\n}`;
+    }
+    return { code: 0, out: loaded || '{}', err: '' };
+  };
+  const scheduler = new Scheduler({ platform, home: root, userHome: root, node: join(root,'node'), cli: join(root,'cli'), uid: 1, user: 'user', runner, job: 'health' });
+  const plan = scheduler.install(true).plan!;
+  expect(plan.definition).toContain('health');
+  if (platform === 'darwin') {
+    expect(plan.definition).toContain('<key>StartInterval</key><integer>1800</integer>');
+    expect(plan.definition).not.toContain('<key>KeepAlive</key>');
+  } else expect(plan.definition).toContain('<Interval>PT30M</Interval>');
+  expect(scheduler.install().outcome).toBe('INSTALLED');
+  expect(scheduler.status().jobs[0].loaded).toBe(true);
+  if (platform === 'win32') {
+    const original = loaded;
+    loaded = loaded.replace('</TimeTrigger>', '<RandomDelay>PT24H</RandomDelay></TimeTrigger>');
+    expect(scheduler.uninstall().outcome).toBe('CONFLICT');
+    loaded = original;
+  }
+  expect(scheduler.uninstall().outcome).toBe('UNINSTALLED');
+});
+it('preserves and reports a loaded foreign job when roster uninstall has no ownership record', () => {
+  const calls: string[] = [];
+  const { scheduler } = fixture('darwin', (_cmd, args) => { calls.push(args[0]); return { code: 0, out: 'foreign', err: '' }; });
+  expect(scheduler.uninstall(false, true).outcome).toBe('CONFLICT');
+  expect(calls).toEqual(['print']);
+});

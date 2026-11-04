@@ -432,6 +432,7 @@ orch service install [--dry-run]
 orch service status [--dry-run]
 orch service uninstall [--dry-run]
 orch service run wake-watch [--home PATH] [--once]
+orch service run health [--home PATH] [--once]
 ```
 
 `install` registers and starts a per-user wake watcher: a LaunchAgent under
@@ -460,15 +461,18 @@ changing the scheduler. Status is always read-only. Configuration is optional:
 ```toml
 [service]
 wake_watch = true
+health = false
+deadman_seconds = 3600
 label_prefix = "org.orch"
 reader = "lead"
 poll_seconds = 5
 ```
 
-Set `wake_watch = false` to skip installation. To stop an existing watcher, use
-`uninstall`. Health, daily disk maintenance, and `awake` are follow-ups; setting
-`health = true` or `disk = true` makes installation return `UNAVAILABLE`.
-Status and uninstall still operate on the supported wake watcher.
+Set `wake_watch = false` to skip watcher installation. Set `health = true` to
+install the health job, which runs at load and every 30 minutes. Status includes
+both jobs; uninstall removes owned jobs even after they are disabled in config.
+Use `uninstall` to stop installed jobs. Daily disk maintenance remains a follow-up;
+`disk = true` makes installation return `UNAVAILABLE`.
 
 `run wake-watch` follows the existing addressed message store, using `[messages]`
 paths and `[workers] root` when configured. It appends one JSON line per addressed
@@ -487,3 +491,40 @@ atomically before advancing the cursor. Rotation and repair of corrupt state
 are follow-ups; preserve the ownership file, cursor, and log together. Windows
 retries a failed watcher three times at one-minute intervals, then waits for the
 next login. This does not wake a sleeping machine or inhibit idle sleep.
+
+
+`run health` runs one check and writes `$ORCH_HOME/wake/health.json`. It reads the
+existing `[lease] path` heartbeat (default `$ORCH_HOME/lease.json`), lists unanswered
+QUESTION IDs addressed directly to the configured reader, records free disk bytes,
+and counts running workers with the watcher's existing worker reader. Inbox
+acknowledgements do not resolve questions; an ANSWER linked by `reply_to` does.
+It does not renew the lease or acknowledge messages. Missing heartbeat data is stale.
+
+When heartbeat age exceeds `deadman_seconds`, health appends one `DEADMAN` JSON
+line to the same wake event log. The shared lock, cursor, and event IDs prevent
+duplicates across restarts and interrupted cursor writes. A fresh heartbeat check
+ends the stale period; a later stale period produces a new alert. Keep health.json
+with the wake ownership record, cursor, and log when moving or repairing state.
+Scheduling does not wake a sleeping machine; checks resume when the OS runs them.
+
+## orch awake
+
+```text
+orch awake on [--until HH:MM | --hours N] [--dry-run]
+orch awake off [--dry-run]
+orch awake status
+```
+
+`on` prevents idle system sleep for eight hours by default. `--hours` accepts a
+positive number up to 8760. `--until` uses the next occurrence of local clock time,
+including tomorrow when today's time has passed. macOS runs `caffeinate -i -t`;
+Windows runs a PowerShell child using `SetThreadExecutionState` until the deadline.
+Linux returns typed `UNAVAILABLE` and exits 1.
+
+The PID, process creation time, command identity, and deadline are recorded in
+`$ORCH_HOME/service/awake.json`. `off` verifies the recorded process before sending
+a stop request, then verifies exit before removing the record. Changed identity
+or unavailable evidence preserves the record and process for inspection. If exit
+is still pending, retry `off`. After a deadline, use `off` to clear the expired
+record before starting again. Existing records require `off` before another `on`.
+These commands return JSON. Dry runs write nothing and start or stop no processes.

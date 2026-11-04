@@ -36,7 +36,8 @@ Install ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from htt
 
 On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 
-Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher on macOS or Windows and inspect its scheduler state.
+Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher and optional health checks on macOS or Windows and inspect their scheduler state.
+Use [`orch awake`](docs/commands.md#orch-awake) to prevent idle system sleep until a deadline.
 
 ## Why ORCH-os
 
