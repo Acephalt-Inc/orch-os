@@ -340,6 +340,10 @@ describe("approved lead dispatch", () => {
     writeFileSync(exitPath, JSON.stringify({ ...exit, nonce: "wrong" }));
     expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").code).toBe(2);
     expect(existsSync(join(ctx.home, "messages.jsonl"))).toBe(false);
+    const retry = cli(...approved(b.epoch, p));
+    expect(retry.code, "[corrupt-reservation-blocked]").toBe(3);
+    expect(retry.value).toMatchObject({ status: "BLOCKED", reason: expect.stringContaining("reconcile manually") });
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead-task.json"), "utf8")).phase).toBe("CLAIMED");
   });
   dispatchIt("replays publication with a stable id after a post-send interruption", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();

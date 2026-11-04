@@ -15,6 +15,8 @@ import { Tasks } from "../tasks.js";
 import { groupAlive, Workers } from "../workers.js";
 import { atomicWrite, isPlainObject, validName, which } from "../util.js";
 
+class ReservationError extends Error {}
+
 interface TaskInput { id: string; brief: string; command: string[]; workdir: string; timeout_seconds: number }
 interface Reservation {
   version: 1; id: string; nonce: string; phase: "RESERVED" | "CLAIMED" | "RELEASED";
@@ -127,7 +129,7 @@ export class LeadLoop {
   private reservation(): Reservation | null {
     if (!existsSync(this.taskPath)) return null;
     let v: any;
-    try { v = JSON.parse(readFileSync(this.taskPath, "utf8")); } catch { throw new Error("lead task reservation is corrupt; reconcile manually"); }
+    try { v = JSON.parse(readFileSync(this.taskPath, "utf8")); } catch { throw new ReservationError("lead task reservation is corrupt; reconcile manually"); }
     if (!isPlainObject(v) || !keys(v, ["version", "id", "nonce", "phase", "task", "timeout_bin", "holder", "claim_epoch", "task_dir", "worker_root", "message_path", "lease_path", "lead_session", "lead_epoch", ...(v.proof === undefined ? [] : ["proof"])])
       || v.version !== 1 || !validName(v.id) || !validName(v.nonce) || !validName(v.holder) || !validName(v.lead_session) || !positive(v.lead_epoch)
       || !["RESERVED", "CLAIMED", "RELEASED"].includes(v.phase) || !(v.claim_epoch === null || positive(v.claim_epoch))
@@ -144,7 +146,7 @@ export class LeadLoop {
         || (v.proof.completion.status === "EXITED") !== (v.proof.completion.exit_code !== null) : v.proof !== undefined)
       || typeof v.timeout_bin !== "string"
       || Object.entries(this.bindings()).some(([k, path]) => v[k] !== path)
-      || !this.validTask(v.task, false)) throw new Error("lead task reservation is corrupt or configuration changed; reconcile manually");
+      || !this.validTask(v.task, false)) throw new ReservationError("lead task reservation is corrupt or configuration changed; reconcile manually");
     return v as Reservation;
   }
 
@@ -170,9 +172,15 @@ export class LeadLoop {
         const held = this.lease.load();
         if (held.session_id !== opts.session || held.epoch !== opts.expectedEpoch || held.state !== "ACTIVE"
           || held.lease_expires_at <= Date.now() / 1000) return [4, { status: "STALE_LEASE" }];
-        const prior = this.reservation();
+        let prior: Reservation | null;
+        try {
+          prior = this.reservation();
+          if (prior && !this.releaseConsumed(prior, state)) return [3, { status: "BLOCKED", reason: SLOT_REASON }];
+        } catch (e) {
+          if (!(e instanceof ReservationError)) throw e;
+          return [3, { status: "BLOCKED", reason: `${e.message}; see docs/lead-runtime.md` }];
+        }
         if (prior) {
-          if (!this.releaseConsumed(prior, state)) return [3, { status: "BLOCKED", reason: SLOT_REASON }];
           // The released tombstone remains until the next reservation is ready to replace it.
           if (this.timeout.platform === "win32") return [2, { status: "UNAVAILABLE",
             reason: "task dispatch requires POSIX process control; no Windows adapter is available" }];
@@ -231,7 +239,7 @@ export class LeadLoop {
     try {
       gate = JSON.parse(readFileSync(this.taskPath + ".gate", "utf8"));
       exit = JSON.parse(readFileSync(this.taskPath + ".exit", "utf8"));
-    } catch { throw new Error("lead task launch or exit evidence is corrupt; reconcile manually"); }
+    } catch { throw new ReservationError("lead task launch or exit evidence is corrupt; reconcile manually"); }
     const identity = (e: any) => isPlainObject(e) && keys(e, ["id", "nonce", "task", "pid",
       ...(e.process_group === undefined ? [] : ["process_group"]), ...(e.error === undefined ? [] : ["exit_code", "signal", "error"])])
       && e.id === reservation.id && e.nonce === reservation.nonce && e.task === reservation.task.id
@@ -242,7 +250,7 @@ export class LeadLoop {
       || !(exit.exit_code === null || (counter(exit.exit_code) && exit.exit_code <= 255))
       || !(exit.signal === null || Object.hasOwn(osConstants.signals, exit.signal))
       || (exit.exit_code === null) === (exit.signal === null)
-      || exit.error !== null) throw new Error("lead task exit evidence mismatches reservation; reconcile manually");
+      || exit.error !== null) throw new ReservationError("lead task exit evidence mismatches reservation; reconcile manually");
     const status: Completion["status"] = exit.signal ? "SIGNALED" : "EXITED";
     const completion: Completion = { id: reservation.id, task: reservation.task.id, status,
       exit_code: exit.exit_code, signal: exit.signal, event_id: `lead-completion-${reservation.nonce}` };
@@ -272,35 +280,35 @@ export class LeadLoop {
         if (!existsSync(this.taskPath + suffix)) continue;
         let sidecar: any;
         try { sidecar = JSON.parse(readFileSync(this.taskPath + suffix, "utf8")); }
-        catch { throw new Error("released task sidecar is corrupt; reconcile manually"); }
+        catch { throw new ReservationError("released task sidecar is corrupt; reconcile manually"); }
         if (!isPlainObject(sidecar) || !keys(sidecar, ["id", "nonce", "task", "pid", "process_group",
           ...(suffix === ".exit" ? ["exit_code", "signal", "error"] : [])])
           || sidecar.id !== reservation.id || sidecar.nonce !== reservation.nonce
           || sidecar.task !== reservation.task.id || sidecar.pid !== pid || sidecar.process_group !== "inherited")
-          throw new Error("released task sidecar mismatches proof; reconcile manually");
+          throw new ReservationError("released task sidecar mismatches proof; reconcile manually");
         if (suffix === ".exit" && (sidecar.exit_code !== completion.exit_code || sidecar.signal !== completion.signal
-          || sidecar.error !== null)) throw new Error("released task exit mismatches proof; reconcile manually");
+          || sidecar.error !== null)) throw new ReservationError("released task exit mismatches proof; reconcile manually");
       }
     }
     const matches = this.messages.all().filter((m) => m.id === completion.event_id);
     if (matches.length !== 1 || !positive(matches[0].seq) || matches[0].seq > state.event_cursor || matches[0].from !== "lead-supervisor"
       || matches[0].to !== "lead" || matches[0].kind !== "DONE" || matches[0].reply_to !== null
       || matches[0].body !== JSON.stringify(completion)) {
-      if (reservation.phase === "RELEASED") throw new Error("released task completion is not durably consumed; reconcile manually");
+      if (reservation.phase === "RELEASED") throw new ReservationError("released task completion is not durably consumed; reconcile manually");
       return false;
     }
     if (reservation.phase === "RELEASED" && reservation.proof!.seq !== matches[0].seq)
-      throw new Error("released task completion sequence changed; reconcile manually");
+      throw new ReservationError("released task completion sequence changed; reconcile manually");
     if (this.groupProbe(pid)) return false;
     if (reservation.phase === "CLAIMED") {
       const tasks = new Tasks(reservation.task_dir);
       const [code, claim] = tasks.status(reservation.task.id);
       if (code !== 0 || claim.state.session_id !== reservation.holder || claim.state.epoch !== reservation.claim_epoch)
-        throw new Error("matching task claim changed; reconcile manually");
+        throw new ReservationError("matching task claim changed; reconcile manually");
       if (claim.state.state === "ACTIVE") {
         if (tasks.release(reservation.task.id, reservation.holder, { expectedEpoch: reservation.claim_epoch! })[0] !== 0)
-          throw new Error("matching task claim could not be released; reconcile manually");
-      } else if (claim.state.state !== "RELEASED") throw new Error("matching task claim is not released; reconcile manually");
+          throw new ReservationError("matching task claim could not be released; reconcile manually");
+      } else if (claim.state.state !== "RELEASED") throw new ReservationError("matching task claim is not released; reconcile manually");
       reservation.phase = "RELEASED";
       reservation.proof = { pid, process_group: "inherited", completion, seq: matches[0].seq };
       atomicWrite(this.taskPath, JSON.stringify(reservation) + "\n", { fsync: true, mode: 0o600 });
