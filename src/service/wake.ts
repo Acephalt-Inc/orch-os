@@ -45,7 +45,9 @@ export class WakeWatch {
     mkdirSync(dir, { recursive: true });
     return withLock(join(dir, "watch.lock"), () => {
       const owner = join(dir, "owner.json"), log = join(dir, "events.log"), cursor = join(dir, "cursor.json");
-      for (const p of [owner, log, cursor]) if (existsSync(p) && lstatSync(p).isSymbolicLink()) throw new Error("symbolic wake file refused");
+      for (const p of [owner, log, cursor]) try {
+        if (lstatSync(p).isSymbolicLink()) throw new Error("symbolic wake file refused");
+      } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
       const identity = JSON.stringify({ owner: "orch-wake-v1", home: this.home, reader: this.reader.toLowerCase() });
       if (!existsSync(owner)) {
         if (existsSync(log) || existsSync(cursor)) throw new Error("unowned wake files; preserve them before enabling wake-watch");

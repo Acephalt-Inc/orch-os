@@ -59,6 +59,8 @@ describe("wake-watch", () => {
     symlinkSync(target, log);
     expect(() => new WakeWatch(home, messages, "lead", () => []).tick()).toThrow("symbolic");
     expect(readFileSync(target, "utf8")).toBe("keep me");
+    rmSync(log); symlinkSync(join(home, "missing"), log);
+    expect(() => new WakeWatch(home, messages, "lead", () => []).tick()).toThrow("symbolic");
   });
   it("does not advance on worker snapshot failure", () => {
     const { home, messages } = setup();
