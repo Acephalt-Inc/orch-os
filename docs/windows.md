@@ -45,11 +45,11 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 59 `skipIf` markers covering 493 tests (nested skips counted once). `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
+The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 60 `skipIf` markers covering 494 tests (nested skips counted once). `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
 
 | Test file | Skipped | Why |
 |---|---|---|
-| `tests/skills-install.test.ts` | `test_skills_install_refuses_symlinked_target`, `refuses a symlinked skill folder` | Creating symbolic links in the test workspace is not reliable on every Windows runner. |
+| `tests/skills-install.test.ts` | `test_skills_install_refuses_symlinked_target`, `refuses a symlinked skill folder`, `uninstall rejects links without touching their targets` | Creating symbolic links in the test workspace is not reliable on every Windows runner. |
 | `tests/memory-cli.test.ts` | all of `installed memory command` (23) | the private store refuses Windows private access; native Windows behavior has not been measured |
 | `tests/memory-recall.test.ts` | all of `installed memory recall` (21) | the fixtures require a successful private-store write, which is unavailable on Windows |
 | `tests/memory-schema.test.ts` | `uses the ruled 22-key fact with bounded nested objects`, `refuses extra fact and time keys`, `refuses a stored title carrying a bidi control even with a matching digest`, `matches private store canonical bytes and hashes the complete nested record` (4) | these tests require a successful private-store binding; the documentation test still runs |
