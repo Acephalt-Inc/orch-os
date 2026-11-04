@@ -129,7 +129,11 @@ export function installSkill(name: string, target: string, force: boolean, dryRu
   try {
     hooks.beforePublish?.();
     mkdirSync(destination); // exclusive: a competing user directory must remain untouched
-    cpSync(join(sourceDir, name), destination, { recursive: true, force: false, errorOnExist: true });
+    // Copy each entry into the directory created above. Node 24.22+ refuses to copy a directory onto an
+    // existing directory when errorOnExist is set, so the skill folder itself is never the cp target.
+    for (const entry of entries(join(sourceDir, name))) {
+      cpSync(join(sourceDir, name, entry), join(destination, entry), { recursive: true, force: false, errorOnExist: true });
+    }
     if (digestTree(destination) !== sourceDigest) throw new Error("source changed during installation");
     writeFileSync(join(destination, marker), JSON.stringify({ schema: 1, name, digest: sourceDigest }) + "\n", { flag: "wx" });
   } catch (e: any) {
