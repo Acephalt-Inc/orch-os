@@ -19,7 +19,13 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 作者：[Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
+## 用 Claude Code 或 Codex 安装
+
+把本仓库的网址交给你的编程助手：在任意文件夹里打开 Claude Code 或 Codex，说“Install ORCH OS from https://github.com/Acephalt-Inc/orch-os”。助手会读 [AGENTS.md](AGENTS.md)（与 [CLAUDE.md](CLAUDE.md) 内容相同），在 macOS 或 Windows 上完成其余步骤：缺 Node.js 时先装上，从本仓库源码编译安装 ORCH-os，设置一个工作文件夹，用 `orch doctor` 检查，最后告诉你平时要用的一两条命令。
+
 ## 安装
+
+`orch lead boot` 获取或续租负责人租约并保存重启记录。`orch lead tick --approved` 使用持久游标检查一批事件。此首个切片尚不支持调度、唤醒助手、派发工作进程或记忆集成。详见[负责人运行命令](docs/lead-runtime.md)。
 
 需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 

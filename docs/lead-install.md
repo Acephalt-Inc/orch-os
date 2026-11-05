@@ -15,7 +15,7 @@ orch lead install --workspace PATH --host claude
 orch lead install --workspace PATH --host codex
 ```
 
-Install creates 20 files: 19 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`. Install also creates the state directory `.orch-lead-install` with a manifest, one anchor file per installed file, a record of the directories it created and, as its last step, a record that it finished. Each installed file and its anchor are one file with two names. On macOS the installed files and the files of the state directory can be read and written by your user only.
+Install creates 21 files: 20 under `.claude/skills/orch-lead` for host `claude` or `.agents/skills/orch-lead` for host `codex`, and one bootstrap file at the workspace root, `CLAUDE.md` or `AGENTS.md`. Install also creates the state directory `.orch-lead-install` with a manifest, one anchor file per installed file, a record of the directories it created and, as its last step, a record that it finished. Each installed file and its anchor are one file with two names. On macOS the installed files and the files of the state directory can be read and written by your user only.
 
 Install first checks every path it would create. If any of them exists, install stops and creates nothing. This includes an existing `CLAUDE.md` or `AGENTS.md`, an existing pack directory and an existing `.orch-lead-install`. Install then prints every path it will create, and creates nothing until that list has been written. With `--dry-run`, install prints the list and creates nothing.
 
@@ -23,7 +23,9 @@ Install never changes or removes a file that already exists. If another install 
 
 ## What the pack contains
 
-The pack holds the lead skill, five role files, a task brief, a handoff form, a routing table, nine workflow guides and one sample file. Four of the guides are about notes: `workflows/notes.md`, `workflows/memory.md`, `workflows/knowledge.md` and `workflows/learning.md`. The bootstrap file and the first lines of the skill name the skill, `workflows/notes.md` and `workflows/memory.md`, in that order, as the files to read before an answer.
+The pack holds the lead skill, a boot guide, five role files, a task brief, a handoff form, a routing table, nine workflow guides and one sample file. Four of the guides are about notes: `workflows/notes.md`, `workflows/memory.md`, `workflows/knowledge.md` and `workflows/learning.md`. The bootstrap file and the first lines of the skill name the skill, `workflows/notes.md` and `workflows/memory.md`, in that order, as the files to read before an answer.
+
+When asked to lead approved work, read the installed `boot.md` after those required reads. It describes boot, host wake setup, one sentinel pass, and away/return behavior. Do not treat installation as evidence that a host watcher or timer is armed; verify host activation in the actual session.
 
 The guides describe notes kept in `workspace-notes/personal/` and `workspace-notes/shared/` inside the workspace, and a rule in the workspace-root `.ignore` file. Install does not create `workspace-notes/` or `.ignore`. The guides tell the assistant to ask before the first personal save and before the `.ignore` rule is added. These commands do not check that the assistant does so. Status and uninstall do not read or remove `workspace-notes/` or `.ignore`.
 
@@ -33,7 +35,7 @@ The guides describe notes kept in `workspace-notes/personal/` and `workspace-not
 orch lead status --workspace PATH --host claude
 ```
 
-Status reads only. It prints one state for each of the 20 paths:
+Status reads only. It prints one state for each of the 21 paths:
 
 | State | Meaning |
 |---|---|
@@ -49,7 +51,7 @@ It then prints one result:
 
 | Result | Meaning |
 |---|---|
-| `INSTALLED` | all 20 files are `OWNED_MATCH`, install recorded that it finished, and the state directory holds nothing unexpected |
+| `INSTALLED` | all 21 files are `OWNED_MATCH`, install recorded that it finished, and the state directory holds nothing unexpected |
 | `NOT_INSTALLED` | the workspace has no state directory |
 | `PARTIAL` | the manifest is valid and something is missing, changed or foreign |
 | `BUSY` | as `PARTIAL`, the install is not recorded as finished, and the process id recorded by install is in use or cannot be checked |

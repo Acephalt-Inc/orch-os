@@ -47,7 +47,7 @@ function unitsOf(file: string, text: string): string[] {
 describe("orch lead: reviewed text", () => {
   it("lead_reviewed_sentences_and_behavior_claims", () => {
     const reviewed: Record<string, string> = { ...FROZEN.sources, ...FROZEN.documents };
-    expect(Object.keys(FROZEN.sources).length, "21 packaged files").toBe(21);
+    expect(Object.keys(FROZEN.sources).length, "22 packaged files").toBe(22);
     expect(Object.keys(FROZEN.units).sort(), "every reviewed file has a sentence list").toEqual(Object.keys(reviewed).sort());
     const everything: [string, Unit][] = [];
     /** The sentences as they are in the files now, outside the pack: documentation, README lines, command text. */
@@ -68,7 +68,7 @@ describe("orch lead: reviewed text", () => {
         expect.soft(text.includes(unit.text), `[sentence-inventory] ${file} has the reviewed line: ${unit.text}`).toBe(true);
         everything.push([file, unit]);
       }
-      const about = text.split("\n").filter((line) => /orch lead|lead-install/.test(line));
+      const about = text.split("\n").filter((line) => /orch lead (?:install|status|uninstall)|lead-install/.test(line));
       expect.soft(about.filter((line) => !units.some((u) => line.includes(u.text))), `[sentence-inventory] ${file}: no other line mentions the lead pack`).toEqual([]);
       for (const line of about) published.push([file, line]);
     }

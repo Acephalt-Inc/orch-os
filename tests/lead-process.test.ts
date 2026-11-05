@@ -20,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { COMMAND_BUDGET_MS } from "../src/lead/pack.js";
+import { cmdInvocation } from "../src/util.js";
 import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
 import { candidate, npmCommand, pack } from "./_pack.js";
 
@@ -282,9 +283,12 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 function start(command: string, args: string[], rules: Rule[] = [], extraEnv: Record<string, string> = {}, cwd = isolated): Session {
   const traceFile = join(tmp("orch-lead-trace-"), "trace.jsonl");
   const viaNode = command === process.execPath;
-  const child = spawn(command, viaNode ? ["--import", preload(), ...args] : args, {
+  const viaCmd = WINDOWS && /\.(cmd|bat)$/i.test(command);
+  const [executable, commandArgs] = viaCmd ? cmdInvocation(command, args) : [command, viaNode ? ["--import", preload(), ...args] : args];
+  const child = spawn(executable, commandArgs, {
     cwd, stdio: ["pipe", "pipe", "pipe"], timeout: CHILD_DEADLINE_MS, killSignal: "SIGKILL",
-    env: childEnv({ LEAD_TEST_TRACE: traceFile, LEAD_TEST_RULES: JSON.stringify(rules), ...(viaNode ? {} : { NODE_OPTIONS: `--import=${preload()}` }), ...extraEnv }),
+    windowsVerbatimArguments: viaCmd,
+    env: childEnv({ LEAD_TEST_TRACE: traceFile, LEAD_TEST_RULES: JSON.stringify(rules), ...(viaNode ? {} : { NODE_OPTIONS: `--import="${preload()}"` }), ...extraEnv }),
   });
   let stdout = "";
   let stderr = "";
@@ -506,8 +510,8 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
 
   it("lead_packed_tarball_runs_without_checkout", async () => {
     const p = packed();
-    // The tarball carries exactly the 21 reviewed text files of the pack, byte for byte.
-    const packedTemplates = p.files.filter((f) => /^package\/templates\/(lead|workflows)\//.test(f)).map((f) => f.slice("package/".length));
+    // The tarball carries exactly the 22 reviewed text files of the pack, byte for byte.
+    const packedTemplates = p.files.filter((f) => /^package\/templates\/(?:lead|workflows)\//.test(f) || f === "package/templates/handbook/lead-boot.md").map((f) => f.slice("package/".length));
     expect.soft(packedTemplates, "[packed-inventory] template files in the tarball").toEqual(Object.keys(FROZEN.sources).sort());
     const installedRoot = WINDOWS ? join(p.prefix, "node_modules", "orch-os") : join(p.prefix, "lib", "node_modules", "orch-os");
     for (const [source, hash] of Object.entries(FROZEN.sources as Record<string, string>)) {
@@ -524,7 +528,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
       expect.soft([install.code, resultOf(install.stdout)], `[packed-install] ${host}: install from the packed CLI\n${install.stdout}\n${install.stderr}`).toEqual([0, "INSTALLED"]);
       const expected = dests(host).map((dest) => `file ${dest} ${FROZEN.sources[sourceOf(host, dest)]}`).sort();
       expect.soft(tree(w).filter((line) => line.startsWith("file ") && !line.includes(".orch-lead-install/")).sort(), `[packed-install] ${host}: installed files and their hashes`).toEqual(expected);
-      expect.soft(install.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").length, `[packed-install] ${host}: the packed command was observed making its 21 links`).toBe(21);
+      expect.soft(install.trace.filter((ev) => ev.op === "linkSync" && ev.code === "OK").length, `[packed-install] ${host}: the packed command was observed making its 22 links`).toBe(22);
       const status = await orch(p, ["lead", "status", ...args]);
       expect.soft([status.code, resultOf(status.stdout)], `[packed-install] ${host}: status`).toEqual([0, "INSTALLED"]);
       const conflict = await orch(p, ["lead", "install", ...args]);
@@ -577,7 +581,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
     const install = await run(["install", ...args]);
     expect.soft(install.code, install.stdout + install.stderr).toBe(0);
     expect.soft(inside(install, w), "[no-unrequested-writes] install writes only inside the workspace").toEqual([]);
-    // The loader opens exactly the 20 packaged files of this host, read-only.
+    // The loader opens exactly the 21 packaged files of this host, read-only.
     const templates = join(ROOT, "templates").split(sep).join("/") + "/";
     expect.soft(install.trace.filter((ev) => ev.op === "openSync" && ev.path.startsWith(templates)).map((ev) => `${ev.path.slice(templates.length - "templates/".length)} ${ev.mutating}`).sort(),
       "[loader-reads-only-inventory]").toEqual(FROZEN.inventory.claude.map((row: string[]) => `${row[0]} false`).sort());
@@ -626,7 +630,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
       symlinkSync(join(w, "real-skills"), at(w, ".claude/skills"), "dir");
       return at(w, ".claude/skills");
     });
-    expect(cases.length).toBe(20 * 3 + 9 + 7);
+    expect(cases.length).toBe(21 * 3 + 9 + 7);
     for (const c of cases) {
       const { w } = workspace();
       const obstacle = c.place(w);
@@ -767,7 +771,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
       const install = await s.done;
       const before = tree(w);
       const status = await run(["status", ...args]);
-      expect.soft([install.code, resultOf(install.stdout), install.stdout.includes("files created: 20 of 20"),
+      expect.soft([install.code, resultOf(install.stdout), install.stdout.includes("files created: 21 of 21"),
         /^stopped at:/m.test(install.stdout), existsSync(at(w, ".orch-lead-install/complete"))],
         `[unknown-name-continues] ${host}: install finishes publication\n${install.stdout}`).toEqual([2, "PARTIAL", true, false, true]);
       expect.soft([status.code, resultOf(status.stdout), status.stdout.includes(`unknown entry, not opened: ${at(w, rel)}`),
@@ -816,7 +820,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
       expect.soft([r.code, resultOf(r.stdout)], `[late-parent-used] ${host}: install uses the late ordinary parent`).toEqual([0, "INSTALLED"]);
       expect.soft(idOf(at(w, parent)), `[late-parent-used] ${host}: parent identity is unchanged`).toBe(identity);
       expect.soft(dests(host).filter((dest) => existsSync(at(w, dest))),
-        `[late-parent-used] ${host}: all 20 destinations exist`).toEqual(dests(host));
+        `[late-parent-used] ${host}: all 21 destinations exist`).toEqual(dests(host));
       const status = await run(["status", ...args]);
       expect.soft([status.code, resultOf(status.stdout)], `[late-parent-used] ${host}: status confirms the install`).toEqual([0, "INSTALLED"]);
       const uninstall = await run(["uninstall", ...args]);
@@ -879,10 +883,10 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
     s.kill();
     const killed = await s.done;
     console.log(`[observation] ${process.platform}: abrupt termination by child.kill("SIGKILL"): exit code ${killed.code}, signal ${killed.signal}`);
-    expect([killed.code, killed.signal], "the process was killed, it did not exit by itself").toEqual(WINDOWS ? [1, null] : [null, "SIGKILL"]);
+    expect(WINDOWS ? [[1, null], [null, "SIGKILL"]] : [[null, "SIGKILL"]], "the process was killed, it did not exit by itself").toContainEqual([killed.code, killed.signal]);
     expect.soft(killed.stdout, "the killed process never reported a result").not.toMatch(/^result:/m);
 
-    // No cleanup ran: the manifest, all 20 anchors, the record of the directories and exactly the first payload are on disk.
+    // No cleanup ran: the manifest, all 21 anchors, the record of the directories and exactly the first payload are on disk.
     expect.soft(readFileSync(at(w, ".orch-lead-install/manifest.json"), "utf8"), "[kill-visible] the manifest is complete and names the killed installer").toBe(manifestText("claude", w, s.child.pid!));
     expect.soft(order.map((dest) => existsSync(at(w, dest))), "[kill-visible] exactly the first payload exists").toEqual(order.map((dest) => dest === first));
     expect.soft(order.map((dest) => hashOf(at(w, anchorOf("claude", dest)))), "[kill-visible] every anchor is complete").toEqual(order.map((dest) => FROZEN.sources[sourceOf("claude", dest)]));
@@ -969,7 +973,7 @@ process.execve(process.execPath, [process.execPath, process.argv[2], "lead", "--
       expect.soft([retry.code, resultOf(retry.stdout)], `[retry-completes] ${point.name}: the retry finishes\n${retry.stdout}\n${retry.stderr}`).toEqual([0, "NOT_INSTALLED"]);
       expect.soft(tree(w), `[retry-completes] ${point.name}: nothing is left`).toEqual([]);
       expect.soft(lines(retry.stdout, w, "already absent ").sort(), `[all-paths-accounted] ${point.name}: paths removed by the killed run are reported as already absent`).toEqual([...goneBefore].sort());
-      expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        ")].sort(), `[all-paths-accounted] ${point.name}: all 20 paths are accounted for`).toEqual([...dests("claude")].sort());
+      expect.soft([...lines(retry.stdout, w, "already absent "), ...lines(retry.stdout, w, "removed        ")].sort(), `[all-paths-accounted] ${point.name}: all 21 paths are accounted for`).toEqual([...dests("claude")].sort());
     }
     // With an edited file: the retry keeps it, with its anchor and the manifest, and says so.
     const { w } = workspace();

@@ -118,7 +118,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
       const r = status(w);
       expect.soft([r.code, resultOf(r.out), rowStates(r.out, w)], `[intent-not-completion] a manifest without anchors or files is PARTIAL, all rows MISSING\n${r.out}${r.err}`)
         .toEqual([2, "PARTIAL", all("claude", "MISSING")]);
-      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 20");
+      expect.soft(r.out, "[intent-not-completion] 0 complete anchors are reported").toContain("anchors complete: 0 of 21");
     }
     // Manifest and every anchor complete, but no file was published.
     {
@@ -224,8 +224,11 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
     unlinkSync(at(w, anchorOf("claude", p("agents/reader.md"))));
     // A special file and a link where installed files were.
     unlinkSync(at(w, p("agents/builder.md")));
-    const fifo = spawnSync("mkfifo", [at(w, p("agents/builder.md"))], { timeout: 10_000 });
-    expect(fifo.status, "mkfifo").toBe(0);
+    if (WINDOWS) mkdirSync(at(w, p("agents/builder.md")));
+    else {
+      const fifo = spawnSync("mkfifo", [at(w, p("agents/builder.md"))], { timeout: 10_000 });
+      expect(fifo.status, "mkfifo").toBe(0);
+    }
     unlinkSync(at(w, p("agents/advisor.md")));
     symlinkSync(join(w, "my-notes.md"), at(w, p("agents/advisor.md")));
     // And one file simply deleted.
@@ -238,7 +241,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
     };
     const status = lead("status", ...args);
     expect.soft([status.code, resultOf(status.out)], `status\n${status.out}${status.err}`).toEqual([2, "PARTIAL"]);
-    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 20 paths").toEqual(expected);
+    expect.soft(rowStates(status.out, w), "[state-table] status names the state of each of the 21 paths").toEqual(expected);
 
     const identity = () => Object.fromEntries(kept.map((rel) => [rel, idOf(at(w, rel))]));
     const content = () => [readFileSync(at(w, p("brief.md")), "utf8").endsWith("my own line\n"), sha(readFileSync(at(w, p("handoff.md")))), readFileSync(at(w, p("routing.md")), "utf8"),
@@ -260,7 +263,7 @@ describe.skipIf(!RUN)("orch lead: state on disk decides", () => {
 
     // The user moves the kept files away (the edited one by renaming it) and runs uninstall again.
     attempt(() => renameSync(at(w, p("brief.md")), join(w, "my-brief.md")));
-    for (const rel of kept.slice(1)) attempt(() => unlinkSync(at(w, rel)));
+    for (const rel of kept.slice(1)) attempt(() => WINDOWS && rel === p("agents/builder.md") ? rmSync(at(w, rel), { recursive: true }) : unlinkSync(at(w, rel)));
     const second = lead("uninstall", ...args);
     const editedAnchor = at(w, anchorOf("claude", p("brief.md")));
     expect.soft([existsSync(editedAnchor) && readFileSync(editedAnchor, "utf8").endsWith("my own line\n"), existsSync(editedAnchor) && idOf(editedAnchor) === idOf(join(w, "my-brief.md"))],

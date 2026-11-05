@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 /**
- * `orch lead install|status|uninstall --workspace PATH --host claude|codex`.
+ * Instruction pack: `orch lead install|status|uninstall --workspace PATH --host claude|codex`.
+ * Boot/tick are separate local runtime commands; see runtime-cli.ts.
  *
- * These commands run before any ORCH configuration is read. They use the workspace and the
+ * Pack commands run before any ORCH configuration is read. They use the workspace and the
  * packaged text only: no ORCH home, no notes, no schedule, no host settings, no other program,
  * no network. Arguments are parsed and the workspace text is checked before any file access.
  * Exit code 0: complete (or dry run, or a status of INSTALLED or NOT_INSTALLED). 2: conflict,
@@ -16,6 +17,7 @@ import { COMMAND_BUDGET_MS, errorCode, type LeadEnv, LeadError, type LeadFs, loa
 import { COMPLETE, DIRECTORIES, type Host, hostRoot, HOSTS, PAYLOAD_COUNT, refuseWorkspaceText, STATE_DIR } from "./paths.js";
 import { type AnchorState, type Liveness, readState, type RowWhy, type StateReport } from "./status.js";
 import { type DirWhy, type Preserved, uninstall } from "./uninstall.js";
+import { runLeadRuntime, runtimeSpecs } from "./runtime-cli.js";
 
 /** Every fixed piece of text these commands print. `{name}` is filled in at run time. */
 export const LEAD_TEXT = {
@@ -164,6 +166,7 @@ export function leadSpec(): CmdSpec<any> {
       { name: "install", help: LEAD_TEXT.helpInstall, usage: LEAD_TEXT.usageInstall, opts: [...common, option("dry_run", "--dry-run", "bool", LEAD_TEXT.optDryRun)] },
       { name: "status", help: LEAD_TEXT.helpStatus, usage: LEAD_TEXT.usageStatus, opts: common },
       { name: "uninstall", help: LEAD_TEXT.helpUninstall, usage: LEAD_TEXT.usageUninstall, opts: common },
+      ...runtimeSpecs(),
     ],
   };
 }
@@ -249,6 +252,9 @@ function preservedLine(env: LeadEnv, workspace: string, p: Preserved): string {
 
 /** Run one `orch lead` command line (without the leading `lead`). Returns the exit code. */
 export async function runLead(argv: string[], deps: LeadDeps = {}): Promise<number> {
+  if (argv[0] === "boot" || argv[0] === "tick" || argv[0] === "dispatch") {
+    return runLeadRuntime(argv, { out: deps.out ?? ((s) => { process.stdout.write(s); }), err: deps.err ?? ((s) => { process.stderr.write(s); }) });
+  }
   const now = deps.now ?? (() => performance.now());
   const deadline = now() + COMMAND_BUDGET_MS;
   const err = deps.err ?? ((text: string) => {

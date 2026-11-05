@@ -12,10 +12,13 @@ import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
+import { captureHook } from "./mem-capture.js";
 import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
 import { type LeadDeps, leadSpec, runLead } from "./lead/cli.js";
+import { hostSpec, runHost } from "./host/install.js";
+import { runHook } from "./host/hooks.js";
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
@@ -25,6 +28,11 @@ import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
 import { ignoreClosedPipes } from "./closed-pipe.js";
+import { installSkill, shippedSkills, skillRows, skillsTarget, uninstallSkill } from "./skills.js";
+import { awakeCommandSpec } from "./service/awake-command.js";
+import type { AwakeRunner } from "./service/awake.js";
+import { serviceSpec, type ServiceDeps } from "./service/command.js";
+import { runSetup, setupSpec } from "./setup.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -110,7 +118,7 @@ function tasks(cfg: Record<string, any>): Tasks {
 
 function mem(cfg: Record<string, any>): Mem {
   const m = cfg.mem ?? {};
-  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1));
+  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1), num(m.unverified_max_days, 90, "[mem] unverified_max_days", 1));
 }
 
 function handbookDir(cfg: Record<string, any>): string {
@@ -300,6 +308,11 @@ const cmdInit: Run = (a, io) => {
     if (wrote.length < rows.length) println(io, `kept ${rows.length - wrote.length} existing handbook file(s) in ${dir} (--force-handbook rewrites them)`);
     println(io, `boot: point each agent session at its role file, e.g. ${targetFile(dir, "lead-boot", layout)} (see docs/faq.md)`);
   }
+  if (a.everyday) println(io, "everyday skills: run `orch skills install` to add the skill pack to this workspace");
+  if (a.with_skills) {
+    const code = cmdSkillsInstall({ _path: ["orch", "skills", "install"], user: false, only: null, dry_run: false, force: false }, io);
+    if (code !== 0) return code;
+  }
   if (keptProblem) {
     // the kept block is unchanged byte for byte, and it is not usable: say so instead of "next: orch doctor"
     eprintln(io, `init: the kept [profile] cannot be used as it is: ${keptProblem}`);
@@ -330,6 +343,60 @@ const cmdAgents: Run = (a, io) => {
   return 0;
 };
 
+function selectedSkills(a: Args, io: IO): string[] | null {
+  const shipped = shippedSkills();
+  const selected = a.only === null ? shipped : [...new Set(String(a.only).split(",").map((name) => name.trim()))];
+  if (selected.some((name) => !shipped.includes(name))) {
+    eprintln(io, `skills: unknown skill in --only; choose from ${shipped.join(", ")}`);
+    return null;
+  }
+  return selected;
+}
+
+function skillsDestination(a: Args, io: IO): string | null {
+  if (a.user && a.scope === "workspace") {
+    eprintln(io, "skills: --user conflicts with --scope workspace");
+    return null;
+  }
+  return skillsTarget({ scope: a.user ? "user" : a.scope ?? "workspace", platform: a._platform });
+}
+
+const cmdSkillsInstall = (a: Args, io: IO): number => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${installSkill(name, target, Boolean(a.force), Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
+};
+
+const cmdSkillsStatus: Run = (a, io) => {
+  const target = skillsDestination(a, io);
+  if (!target) return 2;
+  const rows = skillRows(target);
+  if (a.json) println(io, JSON.stringify({ version: VERSION, skills: rows }));
+  else {
+    println(io, `skill pack ${VERSION}`);
+    for (const row of rows) println(io, `${row.name}: ${row.state}`);
+  }
+  return 0;
+};
+
+const cmdSkillsUninstall: Run = (a, io) => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${uninstallSkill(name, target, Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
+};
+
 /** Is `p` a writable directory, or creatable under the nearest existing ancestor? */
 function dirUsable(p: string): boolean {
   let cur = p;
@@ -358,6 +425,14 @@ const cmdDoctor: Run = (a, io) => {
   const major = Number(process.versions.node.split(".")[0]);
   // the same floor as `engines.node` in package.json
   add(major >= 22, "node>=22", process.versions.node);
+  try {
+    const skills = skillRows();
+    const installed = skills.filter((row) => row.state === "installed").length;
+    const modified = skills.filter((row) => row.state === "modified").length;
+    add(true, "skills", `${installed} installed/${skills.length} shipped, ${modified} modified${installed || modified ? "" : " (not installed)"}`);
+  } catch (e: any) {
+    add(true, "skills", `unavailable: ${e.message ?? e}`);
+  }
   if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
   else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
@@ -885,6 +960,42 @@ const cmdMem: Run = (a, io) => {
   const m = mem(C.loadOrDefault());
   const action = a._path[2];
   try {
+    if (action === "capture") {
+      if (!a.from_hook) throw new MemError("capture requires --from-hook");
+      let input: unknown;
+      try {
+        const raw = io.stdin();
+        if (Buffer.byteLength(raw) > 16_384) throw new Error();
+        input = JSON.parse(raw);
+      } catch { throw new MemError("hook input must be valid JSON of at most 16 KB"); }
+      const e = captureHook(input, m, tasks(C.loadOrDefault()), { platform: a._platform });
+      println(io, `session draft ${e.name}: ${e.status}`);
+      return 0;
+    }
+    if (action === "accept" || action === "reject") {
+      const e = action === "accept" ? m.accept(a.name, a.title) : m.reject(a.name);
+      println(io, `${e.status} ${e.name}`);
+      return 0;
+    }
+    if (action === "lint") {
+      const rows = m.lint();
+      for (const r of rows) println(io, `${r.entry.name}: ${r.flags.join(", ")}`);
+      return rows.length ? 2 : 0;
+    }
+    if (action === "drafts") {
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      const rows = m.all().filter((e) => e.status === "draft").sort((a, b) => b.created_at.localeCompare(a.created_at) || a.name.localeCompare(b.name));
+      for (const e of rows) println(io, `${e.name} draft, unverified: ${clean(e.title ?? e.description, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
+    if (action === "recall") {
+      if (!a.boot) throw new MemError("recall requires --boot");
+      const { accepted, draft } = m.boot(a.limit ?? 8);
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      for (const e of accepted) println(io, `${clean(e.title ?? e.name, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      if (draft) println(io, `draft, unverified: ${clean(draft.title ?? draft.name, 120)} — ${clean(draft.description, 180)} (${clean(draft.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
     if (action === "add") {
       const text = a.message ?? (process.stdin.isTTY ? "" : safeStdin(io));
       const r = m.add(a.name, a.description, text, a.type ?? "note");
@@ -1125,6 +1236,9 @@ export function buildTree(): CmdSpec<Run> {
     name: "orch",
     help: "ORCH-os: run several CLI coding agents as one team (lease, mailbox, messages, task claims, merge gate, workers, load governor, mem).",
     sub: [
+      serviceSpec(),
+      awakeCommandSpec(),
+      setupSpec((a, io) => runSetup(a, io, { tree: buildTree(), platform: a._platform })),
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [
@@ -1140,12 +1254,42 @@ export function buildTree(): CmdSpec<Run> {
           opt("required_review", ["--required-review"], "str", "profile: weakest agent review that passes (no default)", { choices: P.STRENGTHS }),
           opt("max_workers", ["--max-workers"], "int", "profile: most workers running at once, an integer >= 1 (no default)", { metavar: "N" }),
           opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
+          opt("everyday", ["--everyday"], "bool", "show how to add the everyday skill pack"),
+          opt("with_skills", ["--with-skills"], "bool", "install the skill pack in this workspace"),
+        ],
+      },
+      {
+        name: "skills", help: "install or inspect the bundled skill pack",
+        sub: [
+          { name: "install", help: "copy bundled skills into .claude/skills", run: cmdSkillsInstall, opts: [
+            opt("user", ["--user"], "bool", "install in the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+            opt("force", ["--force"], "bool", "back up and replace modified skills"),
+          ] },
+          { name: "status", help: "show each bundled skill and its installed state", run: cmdSkillsStatus, opts: [
+            JSON_OPT,
+            opt("user", ["--user"], "bool", "inspect the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+          ] },
+          { name: "uninstall", help: "remove owned, unchanged bundled skills", run: cmdSkillsUninstall, opts: [
+            opt("user", ["--user"], "bool", "remove from the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+          ] },
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
       leadSpec(),
+      hostSpec(),
+      { name: "hook", help: "run a Claude host hook with JSON input", pos: [{ dest: "name", choices: ["session-start", "pre-tool-guard", "stop-continue"] }] },
       {
         name: "update", help: "ask the npm registry for the latest version",
         sub: [{ name: "check", help: "one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable", run: cmdUpdateCheck }],
@@ -1338,6 +1482,15 @@ export function buildTree(): CmdSpec<Run> {
           { name: "retire", help: "mark an entry retired (the file is kept) and record what supersedes it", run: cmdMem, pos: [{ dest: "name" }],
             opts: [opt("superseded_by", ["--superseded-by"], "str", "the entry that replaces it", { metavar: "NAME" }),
               opt("reason", ["--reason"], "str", "one line: why it no longer holds")] },
+          { name: "capture", help: "create an unverified session draft from Claude hook JSON on stdin", run: cmdMem,
+            opts: [opt("from_hook", ["--from-hook"], "bool", "read SessionEnd or PreCompact hook JSON")] },
+          { name: "accept", help: "accept a captured draft", run: cmdMem, pos: [{ dest: "name" }],
+            opts: [opt("title", ["--title"], "str", "short title for boot recall")] },
+          { name: "reject", help: "reject a captured draft permanently", run: cmdMem, pos: [{ dest: "name" }] },
+          { name: "drafts", help: "list unverified captured drafts without bodies", run: cmdMem },
+          { name: "recall", help: "compact boot recall of accepted notes and the newest draft", run: cmdMem,
+            opts: [opt("boot", ["--boot"], "bool", "print boot summary"), opt("limit", ["--limit"], "int", "accepted note limit (1-20)")] },
+          { name: "lint", help: "flag expired, superseded, invalid-date and stale unverified entries", run: cmdMem },
         ],
       },
       {
@@ -1373,7 +1526,7 @@ export function buildTree(): CmdSpec<Run> {
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
 export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
-  runtime: { platform?: NodeJS.Platform; updateUrl?: string } = {}): Promise<number> {
+  runtime: { platform?: NodeJS.Platform; updateUrl?: string; service?: ServiceDeps; awake?: AwakeRunner } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1412,6 +1565,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   if (argv[0] === "lead") {
     return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
   }
+  if (argv[0] === "host") return runHost(argv.slice(1), io);
+  if (argv[0] === "hook") return runHook(argv.slice(1), io);
   const tree = buildTree();
   let parsed;
   try {
@@ -1429,6 +1584,8 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
   }
   const { args, cmd } = parsed;
   args._platform = runtime.platform ?? process.platform;
+  args._service = runtime.service;
+  args._awake = runtime.awake;
   // only a caller of main() can name another address (the tests' local registry); no option or variable does
   args._updateUrl = runtime.updateUrl;
   args.cmd = rest;

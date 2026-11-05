@@ -1,6 +1,6 @@
 ---
 name: record
-description: Use whenever work needs a durable trace — after a decision, a finished research or diagnosis, an incident, a ticket update, or the end of a phase — or on /record. Enforces one standard. A record is done only when someone with zero context can find it, understand it and revive the work, and the completion check below passes.
+description: Use when asked to create a durable, discoverable record of a decision, finding, incident, or handoff. Exclude transient status and ordinary conversation.
 ---
 
 # /record — the durable-trace standard
@@ -31,7 +31,7 @@ the project's docs. A starting point:
 |---|---|
 | Engineering research, methods, design decisions | the repo, `docs/` (dated file names) |
 | Team rules and protocol changes | the handbook (`protocols.md`), in a dated section, announced on the mailbox |
-| Short facts the team should know next week | `orch mem add` |
+| Short facts the team should know next week | `orch mem add <name> --description "<summary>"` |
 | Secrets, credentials, confidential third-party material, personal data | never in a repo |
 
 ## Tickets are records too

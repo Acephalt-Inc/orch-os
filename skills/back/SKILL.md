@@ -1,6 +1,6 @@
 ---
 name: back
-description: Use when the human returns after /away — they invoke /back or say "I'm back". Builds one delta report against the away snapshot (bad news first), lists the decisions that were queued for them in a four-part form, re-checks every inherited "needs the human" item before presenting it, and archives the snapshot. Not for a status request when no /away is active.
+description: Use when a person explicitly returns after an active /away period and needs a delta report and queued decisions. Exclude ordinary status requests and overnight restarts.
 ---
 
 # /back — the human returns, hand over the delta
@@ -17,12 +17,15 @@ unless that instruction is itself urgent.
 
    | Source | Command | Derive |
    |---|---|---|
-   | PRs | `gh pr list --state all --limit 500 --json number,title,state,mergedAt,headRefOid` | merged / newly opened / now passing the gate / still failing, vs `open_prs` |
-   | Tasks | `orch task list --json`; `orch msg read --all --json` | `DONE` and `BLOCKED` messages since `away_at`, claims that changed hands |
+   | PRs | `gh pr list --state all --limit 500 --json number,title,state,mergedAt,headRefOid` | merged and newly opened vs `open_prs`; identify open candidates and their current heads |
+   | Tasks | `orch task list --json`; `orch msg read --all --json` | `DONE` and `BLOCKED` messages since `away_at`, claims that changed hands vs `task_claims` |
    | Decisions | `$ORCH_HOME/decisions.md` | items added during the absence |
    | Money | whatever billing or usage source the team has | actual spend vs `spend_cap` |
 
-   Timestamps from `gh` are UTC. Convert them before comparing with `away_at`.
+   For each open candidate, run `orch merge-gate <PR> --head <sha>` using its current
+   head before labeling it ready or failing. Report an unavailable gate separately
+   from a failing gate; never infer either from the PR list. Timestamps from `gh`
+   are UTC. Convert them before comparing with `away_at`.
 
 3. **Re-check every inherited item before presenting it.** A "needs the human" line
    written by an earlier session is a claim, not a fact. Re-read its source today (the

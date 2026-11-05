@@ -244,6 +244,9 @@ describe("InstallEntry", () => {
       "docs/learning.md",
       "docs/preferences.md",
       "docs/resume.md",
+      "docs/lead-runtime.md",
+      "docs/host.md",
+      "docs/setup.md",
     ]);
   });
 
@@ -253,11 +256,14 @@ describe("InstallEntry", () => {
       const copy = candidate(dirs);
       const files = copy.run("tar", ["-tzf", pack(copy)]).trim().split("\n");
       expect(files.filter((f) => f.startsWith("package/docs/")), "docs files in the tarball").toEqual([
+        "package/docs/host.md",
         `package/${GUIDE}`,
         "package/docs/knowledge.md",
+        "package/docs/lead-runtime.md",
         "package/docs/learning.md",
         "package/docs/preferences.md",
         "package/docs/resume.md",
+        "package/docs/setup.md",
       ]);
       expect(files, "the READMEs are in the tarball").toEqual(expect.arrayContaining(["package/README.md", "package/README.zh.md"]));
     } finally {

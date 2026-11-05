@@ -1,11 +1,12 @@
 ---
 name: progress
-description: Project-level progress, not per-task status. Use when the human asks "where are we", "big picture" or "how far along is X", on /progress, and at the end of every report that closes a task. Renders percent complete per project from a milestone registry where each milestone carries evidence, and prints only what moved since the last render.
+description: Use for project-level progress against evidence-backed milestones when asked for a big-picture progress report. Exclude individual task status without project milestones.
 ---
 
 # /progress — projects, milestones, percent done
 
-Per-task status already lives in `orch task list` and `DONE` messages. This adds the
+Task claims live in `orch task list`, while task status comes from the team’s task
+source and `DONE` messages. This adds the
 missing layer: **project → milestones → percent complete**, and at every task close
 the line "this task moved project X from a% to b%".
 

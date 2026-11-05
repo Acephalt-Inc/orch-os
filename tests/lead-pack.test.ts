@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
-// The lead pack: one inventory of 20 files per host, shared by the plan install prints, the files
+// The lead pack: one inventory of 21 files per host, shared by the plan install prints, the files
 // it creates, the manifest it writes and the references inside the text; and file reads and
 // writes that never let half a file reach a destination.
 // The expected lists come from tests/fixtures/lead-reviewed-text.json, never from src/lead.
@@ -14,6 +14,7 @@ import { join, posix, sep } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { DIST_CLI, ROOT, WINDOWS } from "./_helpers.js";
+import { commandErrors } from "./_lead-command-help.js";
 
 const RUN = !WINDOWS || process.env.ORCH_LEAD_UNMEASURED === "1";
 const FROZEN = JSON.parse(fs.readFileSync(join(ROOT, "tests", "fixtures", "lead-reviewed-text.json"), "utf8"));
@@ -89,7 +90,7 @@ async function inProcess(args: string[], deps: Record<string, unknown>): Promise
 
 describe.skipIf(!RUN)("orch lead: one inventory", () => {
   it("lead_shared_inventory_and_references", () => {
-    expect([dests("claude").length, dests("codex").length, Object.keys(FROZEN.sources).length]).toEqual([20, 20, 21]);
+    expect([dests("claude").length, dests("codex").length, Object.keys(FROZEN.sources).length]).toEqual([21, 21, 22]);
     for (const host of ["claude", "codex"] as Host[]) {
       const { w } = workspace();
       const layout = LAYOUT[host];
@@ -99,8 +100,8 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
 
       // What install says it will create.
       const dry = lead("install", ...args, "--dry-run");
-      expect.soft([dry.code, planned(dry.out, "file")], `[inventory] ${host}: the 20 planned files\n${dry.err}`).toEqual([0, dests(host).map((dest) => at(w, dest)).sort()]);
-      expect.soft(planned(dry.out, "state"), `[inventory] ${host}: the planned manifest, two records and 20 anchors`).toEqual(stateFiles.map((rel) => at(w, rel)).sort());
+      expect.soft([dry.code, planned(dry.out, "file")], `[inventory] ${host}: the 21 planned files\n${dry.err}`).toEqual([0, dests(host).map((dest) => at(w, dest)).sort()]);
+      expect.soft(planned(dry.out, "state"), `[inventory] ${host}: the planned manifest, two records and 21 anchors`).toEqual(stateFiles.map((rel) => at(w, rel)).sort());
       expect.soft(planned(dry.out, "directory"), `[inventory] ${host}: the planned directories`).toEqual(directories.map((rel) => at(w, rel)).sort());
       expect.soft(planned(dry.out, "temporary"), `[inventory] ${host}: the planned temporary name`).toEqual([at(w, ".orch-lead-install/manifest.tmp")]);
 
@@ -108,9 +109,9 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
       const install = lead("install", ...args);
       expect.soft([install.code, resultOf(install.out)], `[inventory] ${host}: install completes\n${install.out}${install.err}`).toEqual([0, "INSTALLED"]);
       const onDisk = tree(w);
-      expect.soft(onDisk.filter((line) => line.startsWith("file ") && !line.includes(".orch-lead-install/")), `[inventory] ${host}: exactly the 20 files, each with its reviewed text`)
+      expect.soft(onDisk.filter((line) => line.startsWith("file ") && !line.includes(".orch-lead-install/")), `[inventory] ${host}: exactly the 21 files, each with its reviewed text`)
         .toEqual(dests(host).map((dest) => `file ${dest} ${hashOfDest(host, dest)}`).sort());
-      expect.soft(onDisk.filter((line) => line.includes(" .orch-lead-install/")).map((line) => line.split(" ")[1]).sort(), `[inventory] ${host}: the state directory holds the manifest, the two records, objects and 20 anchors`)
+      expect.soft(onDisk.filter((line) => line.includes(" .orch-lead-install/")).map((line) => line.split(" ")[1]).sort(), `[inventory] ${host}: the state directory holds the manifest, the two records, objects and 21 anchors`)
         .toEqual([".orch-lead-install/objects", ...stateFiles].sort());
       expect.soft(onDisk.filter((line) => line.startsWith("dir ")).map((line) => line.slice(4)).sort(), `[inventory] ${host}: the directories`).toEqual([...directories].sort());
       expect.soft(onDisk.filter((line) => line.startsWith("other ")), `${host}: nothing else`).toEqual([]);
@@ -118,7 +119,7 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
       try {
         manifest = fs.readFileSync(at(w, ".orch-lead-install/manifest.json"), "utf8");
       } catch { /* compared below */ }
-      expect.soft(manifest, `[manifest-text] ${host}: the manifest names host, workspace, pack, installer and 20 rows, and nothing else`).toBe(manifestText(host, w, install.pid));
+      expect.soft(manifest, `[manifest-text] ${host}: the manifest names host, workspace, pack, installer and 21 rows, and nothing else`).toBe(manifestText(host, w, install.pid));
       // The two records name that manifest by hash. The first lists the host directories install created, each with its identity.
       const record = (rel: string) => (fs.existsSync(at(w, rel)) ? fs.readFileSync(at(w, rel), "utf8") : "absent");
       const hostDirectories = directories.filter((rel) => !rel.startsWith(".orch-lead-install"));
@@ -179,14 +180,14 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
           if (!fs.lstatSync(at(w, posix.join(here, name)), { throwIfNoEntry: false })?.isDirectory()) foldersNotInstalled.add(name);
         }
         // A command of this program that the text tells the assistant to run would have to exist in this version.
-        absentCommands.push(...[...text.matchAll(/\borch\s+[a-z][\w-]*/g)].map((m) => `${dest}: ${m[0]}`),
-          ...names.spans.filter((span) => /^(orch|npm|npx|node)(\s|$)/.test(span)).map((span) => `${dest}: ${span}`));
+        absentCommands.push(...commandErrors(text).map((error) => `${dest}: ${error}`),
+          ...names.spans.filter((span) => /^(npm|npx|node)(\s|$)/.test(span)).map((span) => `${dest}: ${span}`));
       }
-      expect.soft(texts.length, `${host}: 19 text files and one sample file`).toBe(19);
+      expect.soft(texts.length, `${host}: 20 text files and one sample file`).toBe(20);
       expect.soft(brokenLinks, `[links-resolve] ${host}: every link in every installed file resolves to an installed pack file`).toEqual([]);
       expect.soft([...notInstalled].sort(), `[named-files-exist] ${host}: a file name in the installed text is an installed file, or one of the four names of the user's notes`).toEqual(NOTES_FILES);
       expect.soft([...foldersNotInstalled].sort(), `[named-folders] ${host}: a folder name in the installed text is an installed folder, or one of the five folders of the user's notes`).toEqual(NOTES_FOLDERS);
-      expect.soft(absentCommands, `[no-absent-command] ${host}: the installed text names no command of this program and no package command`).toEqual([]);
+      expect.soft(absentCommands, `[no-absent-command] ${host}: the installed text names only supported orch commands and no package command`).toEqual([]);
       const mustBeReferenced = dests(host).filter((dest) => /\/(agents|workflows)\/[\w-]+\.md$|\/(routing|brief|handoff)\.md$/.test(dest));
       expect.soft(mustBeReferenced.filter((dest) => !linked.has(dest)), `[links-resolve] ${host}: every role file, guide and sibling is named from the pack`).toEqual([]);
       expect.soft(mustBeReferenced.length, `${host}: 5 roles, 9 guides, 3 siblings`).toBe(17);
@@ -238,6 +239,20 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
     }
   });
 
+  it("refuses a linked template even when open follows links", async () => {
+    const { w } = workspace();
+    const wrapped = {
+      ...fs,
+      lstatSync: ((path: fs.PathLike, options: { bigint: true }) => {
+        const stat = fs.lstatSync(path, options);
+        return String(path).endsWith(join("templates", "lead", "SKILL.md"))
+          ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { isSymbolicLink: () => true }) : stat;
+      }) as typeof fs.lstatSync,
+    };
+    const result = await inProcess(["install", "--workspace", w, "--host", "claude"], { fs: wrapped });
+    expect([result.code, tree(w)]).toEqual([1, []]);
+  });
+
   it("lead_short_io_never_publishes_partial_bytes", async () => {
     // File calls that pass through to the real ones, with reads and writes cut short or failing.
     type Rule = { short?: number; zeroAt?: string; errorAt?: string; lieAt?: string };
@@ -283,7 +298,7 @@ describe.skipIf(!RUN)("orch lead: one inventory", () => {
       const r = await inProcess(["install", ...args(w)], wrap({ short: 3 }));
       expect.soft([r.code, resultOf(r.out)], `[short-io-completes] install with 3-byte reads and writes\n${r.out}${r.err}`).toEqual([0, "INSTALLED"]);
       expect.soft(publishedWrong(w), "[no-partial-published] short writes: no destination holds anything but the reviewed text").toEqual([]);
-      expect.soft(published(w).length, "[short-io-completes] all 20 files are there").toBe(20);
+      expect.soft(published(w).length, "[short-io-completes] all 21 files are there").toBe(21);
       const status = lead("status", ...args(w));
       expect.soft([status.code, resultOf(status.out)], "[short-io-completes] a fresh status agrees").toEqual([0, "INSTALLED"]);
     }

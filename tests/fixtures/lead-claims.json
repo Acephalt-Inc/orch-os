@@ -1731,14 +1731,14 @@
     },
     {
      "file": "src/lead/pack.ts",
-     "find": "\"templates/lead/bootstrap-claude.md\": \"78620ed144bacdb52983d702c4551a256169cb3157aa8a2b317078a466264496\"",
-     "replace": "\"templates/lead/bootstrap-claude.md\": \"32b36c39c7392f33f0d7f8f5606b4209b32ba5649008964b8e8473bc853c38c5\""
+     "find": "\"templates/lead/bootstrap-claude.md\": \"23c9ac46223fc5c4b6bd5c015cb6af632c365d52c9fa5819acb19c592e3052a1\"",
+     "replace": "\"templates/lead/bootstrap-claude.md\": \"0a2dc9cfe7887873829b9ac3f2094bcaf9303867174220bf399a1d2ccc0f0335\""
     }
    ]
   },
   {
    "id": "drop-revised-guide",
-   "why": "the notes guide is left out of the payload; the install itself completes with 19 files",
+   "why": "the notes guide is left out of the payload; the install itself completes with 20 files",
    "test_file": "tests/lead-pack.test.ts",
    "test": "lead_shared_inventory_and_references",
    "markers": [
@@ -1752,8 +1752,8 @@
     },
     {
      "file": "src/lead/paths.ts",
-     "find": "export const PAYLOAD_COUNT = 20;",
-     "replace": "export const PAYLOAD_COUNT = 19;"
+     "find": "export const PAYLOAD_COUNT = 21;",
+     "replace": "export const PAYLOAD_COUNT = 20;"
     }
    ]
   },
@@ -1794,8 +1794,8 @@
     },
     {
      "file": "src/lead/pack.ts",
-     "find": "\"templates/lead/SKILL.md\": \"85e2a5f8d47ffe8d0174126e6b496a8e19adca776fac1aba063d307a9ed82b87\"",
-     "replace": "\"templates/lead/SKILL.md\": \"ea95d2b8cfebb99b80292c71989f75e8c0dbaff73dd3ae8a165b2a267352da9e\""
+     "find": "\"templates/lead/SKILL.md\": \"ec64bb0b8c2f36e55a2ef1aea5acc3c50799338346e97f99ce13f265ff7882e1\"",
+     "replace": "\"templates/lead/SKILL.md\": \"012b6958f65b6a00af43348cf9c314c654fe60784490118c2b2459d4d1a3713d\""
     }
    ]
   },
