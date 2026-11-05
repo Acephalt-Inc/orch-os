@@ -59,10 +59,15 @@ export class Disk {
         if (typeof peer.workdir === 'string' && resolve(peer.workdir) === resolve(wt.path)) throw new Error('shared worktree');
       }
     }
+    // identity() above already holds wt.path to a canonical, unlinked directory. Git spells the same
+    // directory differently on Windows (C:/Users/runneradmin/... against C:\Users\RUNNER~1\...), so
+    // compare Git's paths by the file system's own name for the directory, not by spelling.
+    const target = realpathSync.native(wt.path);
+    const sameDirectory = (p: string) => { try { return realpathSync.native(p) === target; } catch { return false; } };
     const list = this.git(wt.repo, ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain']);
-    if (list.code !== 0 || !list.out.split('\n').includes(`worktree ${wt.path}`)) throw new Error('worktree registration mismatch');
+    if (list.code !== 0 || !list.out.split('\n').some(l => l.startsWith('worktree ') && sameDirectory(l.slice('worktree '.length)))) throw new Error('worktree registration mismatch');
     const top = this.git(wt.path, ['rev-parse', '--show-toplevel']);
-    if (top.code !== 0 || realpathSync(top.out.trim()) !== wt.path) throw new Error('worktree root mismatch');
+    if (top.code !== 0 || !sameDirectory(top.out.trim())) throw new Error('worktree root mismatch');
     const flags = this.git(wt.path, ['ls-files', '-v', '-z']);
     if (flags.code !== 0 || flags.out.split('\0').some(line => /^[a-zS] /.test(line))) throw new Error('hidden index entries or index probe unavailable');
     const status = this.git(wt.path, ['status', '--porcelain', '--untracked-files=all', '--ignored']);
