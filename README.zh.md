@@ -19,25 +19,21 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 作者：[Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
-## 用 Claude Code 或 Codex 安装
-
-把本仓库的网址交给你的编程助手：在任意文件夹里打开 Claude Code 或 Codex，说“Install ORCH OS from https://github.com/Acephalt-Inc/orch-os”。助手会读 [AGENTS.md](AGENTS.md)（与 [CLAUDE.md](CLAUDE.md) 内容相同），在 macOS 或 Windows 上完成其余步骤：缺 Node.js 时先装上，从本仓库源码编译安装 ORCH-os，设置一个工作文件夹，用 `orch doctor` 检查，最后告诉你平时要用的一两条命令。
-
 ## 安装
 
 `orch lead boot` 获取或续租负责人租约并保存重启记录。`orch lead tick --approved` 使用持久游标检查一批事件。此首个切片尚不支持调度、唤醒助手、派发工作进程或记忆集成。详见[负责人运行命令](docs/lead-runtime.md)。
 
-需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
-
-```sh
-npm i -g orch-os
-# 或：npx orch-os init
-```
-
-也可以把下面这一句话粘贴给能在你机器上运行命令的编程助手：
+把下面这一句话粘贴给 Claude Code 或 Codex。在 macOS 或 Windows 11 上，它会安装 ORCH-os，或把旧版本更新到最新发布的版本，保留已有的 ORCH-os 设置，最后用 `orch --version` 和 `orch doctor` 检查结果：
 
 ```text
-请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装 ORCH-os，文件要求停下时就停下并告诉我。
+请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装或更新 ORCH-os，文件要求停下时就停下并告诉我。
+```
+
+手动安装或更新：需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
+
+```sh
+npm install --global orch-os@latest
+# 或：npx orch-os init
 ```
 
 在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。详见 [docs/windows.md](docs/windows.md)。

@@ -172,20 +172,22 @@ function steps(group: string): { command: string; text: string }[] {
 const STEP_KINDS: Record<"macOS" | "Windows 11", [string, RegExp][]> = {
   macOS: [
     ["node", /^node --version$/],
+    ["latest", /^npm view orch-os version$/],
     ["installed", /^ls -d "\$\(npm root --global\)\/orch-os"$/],
     ["on-path", /^command -v orch$/],
     ["home", /^ls -d "\$\{ORCH_HOME:-\$HOME\/\.orch\}"$/],
-    ["install", /^npm install --global orch-os@\S+$/],
+    ["install", /^npm install --global orch-os@latest$/],
     ["init", /^orch init --no-profile --no-handbook$/],
     ["version", /^orch --version$/],
     ["doctor", /^orch doctor$/],
   ],
   "Windows 11": [
     ["node", /^node --version$/],
+    ["latest", /^npm\.cmd view orch-os version$/],
     ["installed", /^Test-Path -LiteralPath \(Join-Path \(npm\.cmd root --global\) 'orch-os'\)$/],
     ["on-path", /^Get-Command orch -ErrorAction SilentlyContinue$/],
     ["home", /^Test-Path -LiteralPath \$\(if \(\$env:ORCH_HOME\) \{ \$env:ORCH_HOME \} elseif \(\$env:HOME\) \{ Join-Path \$env:HOME '\.orch' \} else \{ Join-Path \$env:USERPROFILE '\.orch' \}\)$/],
-    ["install", /^npm\.cmd install --global orch-os@\S+$/],
+    ["install", /^npm\.cmd install --global orch-os@latest$/],
     ["init", /^orch\.cmd init --no-profile --no-handbook$/],
     ["version", /^orch\.cmd --version$/],
     ["doctor", /^orch\.cmd doctor$/],
@@ -274,8 +276,8 @@ describe("InstallEntry", () => {
   // The macOS group's already-installed check, run as the guide writes it against real npm prefixes. Each prefix
   // is a new directory under the system temporary directory; npm reads no user config and uses no network.
   it.skipIf(process.platform === "win32")("guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one", () => {
-    const check = steps(section(guideText(), "macOS"))[1]?.command ?? "";
-    expect(check.length > 0, "the macOS group has a second step").toBe(true);
+    const check = steps(section(guideText(), "macOS"))[2]?.command ?? "";
+    expect(check.length > 0, "the macOS group has a third step").toBe(true);
     const dirs: string[] = [];
     try {
       const copy = candidate(dirs);
@@ -312,36 +314,43 @@ describe("InstallEntry", () => {
     }
   });
 
-  it("guide_install_commands_pin_the_package_version", () => {
+  // The guide installs whatever the npm `latest` tag names and checks the result against `npm view`, so it names
+  // no release number that a later release would make stale.
+  it("guide_install_commands_name_the_latest_published_version", () => {
     const guide = guideText();
     expect(guide.length > 0, `${GUIDE} exists`).toBe(true);
     // every command in the guide that names a package manager, per group: the lookup of the Node.js installer and
-    // its install command, the already-installed check, and the pinned install; nothing else
+    // its install command, the latest-version lookup, the already-installed check, and the install; nothing else
     const commands = spans(guide).filter((c) => /\b(?:npm|npx|pnpm|yarn|bun|brew|winget|choco|scoop|nvm|fnm|volta)(?:\.cmd)?\b/.test(c));
     expect(commands, "package-manager commands in the guide").toEqual([
-      NODE_COMMANDS.macOS.find, NODE_COMMANDS.macOS.install, 'ls -d "$(npm root --global)/orch-os"', `npm install --global orch-os@${pkg.version}`,
-      NODE_COMMANDS["Windows 11"].find, NODE_COMMANDS["Windows 11"].install, "Test-Path -LiteralPath (Join-Path (npm.cmd root --global) 'orch-os')", `npm.cmd install --global orch-os@${pkg.version}`,
+      NODE_COMMANDS.macOS.find, NODE_COMMANDS.macOS.install, "npm view orch-os version", 'ls -d "$(npm root --global)/orch-os"', "npm install --global orch-os@latest",
+      NODE_COMMANDS["Windows 11"].find, NODE_COMMANDS["Windows 11"].install, "npm.cmd view orch-os version", "Test-Path -LiteralPath (Join-Path (npm.cmd root --global) 'orch-os')", "npm.cmd install --global orch-os@latest",
     ]);
     const versions = [...guide.matchAll(/\borch-os@([^\s`'"]*)/g)].map((m) => m[1]);
-    expect([...new Set(versions)], "every orch-os@VERSION spec in the guide").toEqual([pkg.version]);
-    expect(guide.match(/`orch \d[^`]*`/g), "version outputs the guide expects").toEqual([`\`orch ${pkg.version}\``, `\`orch ${pkg.version}\``]);
+    expect([...new Set(versions)], "every orch-os@VERSION spec in the guide").toEqual(["latest"]);
+    expect(guide.match(/`orch \d[^`]*`/g), "version outputs the guide expects").toBeNull();
+    expect(guide.match(/\b\d+\.\d+\.\d+\b/g), "release numbers written in the guide").toBeNull();
   });
 
-  it("guide_has_two_command_groups_that_refuse_first_and_end_with_version_and_doctor", () => {
+  it("guide_has_two_command_groups_that_install_or_update_and_end_with_version_and_doctor", () => {
     const guide = guideText();
     expect(guide.length > 0, `${GUIDE} exists`).toBe(true);
     expect([...guide.matchAll(/^## (.+)$/gm)].map((m) => m[1]), "guide sections").toEqual(["Rules", "macOS", "Windows 11", "Limits"]);
     expect(section(guide, "Rules"), "the guide tells the assistant to name the operating system").toMatch(/Tell the user which operating system you detected/);
     expect(section(guide, "Rules"), "the guide allows exactly one group").toMatch(/follow exactly one group/);
-    const order = ["node", "installed", "on-path", "home", "install", "init", "version", "doctor"];
+    expect(section(guide, "Rules"), "the guide tells the assistant to name the case").toMatch(/whether this run is a \*\*new install\*\* or an \*\*update\*\*; tell the user which one/);
+    const order = ["node", "latest", "installed", "on-path", "version", "home", "install", "init", "version", "doctor"];
     for (const group of ["macOS", "Windows 11"] as const) {
       const list = steps(section(guide, group));
       expect(list.map((s) => kindOf(group, s.command)), `${group}: steps in order`).toEqual(order);
-      for (const kind of ["installed", "on-path", "home"]) {
-        const step = list[order.indexOf(kind)];
-        expect(/\bstop\b/.test(step?.text ?? ""), `${group}: the ${kind} check tells the assistant to stop`).toBe(true);
+      for (const [i, kind] of [[1, "latest"], [2, "installed"], [3, "on-path"], [4, "version"], [5, "home"]] as const) {
+        expect(/\bstop\b/.test(list[i]?.text ?? ""), `${group}: the ${kind} check tells the assistant to stop`).toBe(true);
       }
-      expect(list.at(-2)?.text, `${group}: expected version output`).toContain(`\`orch ${pkg.version}\``);
+      expect(list[2]?.text, `${group}: the installed check names both cases`).toMatch(/this is a \*\*new install\*\*\..*this is an \*\*update\*\*\./);
+      expect(list[4]?.text, `${group}: the current-version check runs only for an update and never downgrades`).toMatch(/^ runs only for an update;.*this guide does not downgrade\.$/);
+      expect(list[5]?.text, `${group}: the home check keeps an existing home`).toContain("a home exists: keep it as it is and skip step 8.");
+      expect(list[7]?.text, `${group}: init runs only without a home`).toMatch(/^ runs only when step 6 found no home\./);
+      expect(list.at(-2)?.text, `${group}: expected version output`).toContain("must print `orch ` followed by exactly the latest version from step 2.");
       expect(list.at(-1)?.text, `${group}: expected doctor summary`).toContain("`doctor: PASS (0 required check(s) failed)`");
     }
     // one program name per group: npm and orch on macOS, npm.cmd and orch.cmd on Windows 11
@@ -389,7 +398,7 @@ describe("InstallEntry", () => {
     // outside that group the guide only names the system; it makes no statement about how Windows behaves
     const elsewhere = guide.replace(windows, "\n").split("\n").filter((l) => /windows|powershell|\.cmd\b/i.test(l));
     expect(elsewhere, "lines about Windows outside the labelled group").toEqual([
-      "For a coding assistant that can run commands on the user's machine. It covers one case: a first install of `orch-os@" + pkg.version + "` on macOS or Windows 11. It does not upgrade, repair or remove anything.",
+      "For a coding assistant that can run commands on the user's machine. It covers two cases on macOS or Windows 11: a new install of the latest published `orch-os`, and an update of an older install to that version. It keeps an existing ORCH-os home as it is, and it does not repair, downgrade or remove anything.",
       "- Tell the user which operating system you detected, then follow exactly one group below: **macOS** or **Windows 11**. On any other system, stop: this guide has no group for it.",
       "## Windows 11",
     ]);

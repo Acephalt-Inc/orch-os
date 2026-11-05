@@ -17,20 +17,20 @@
   {
    "id": "README.md: install entry",
    "file": "README.md",
-   "text": "Or paste this one sentence to a coding assistant that can run commands on your machine:\n\n```text\nInstall ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.\n```\n",
-   "sha256": "0874d7de0519704d7b063faeea41ec60f19c083b7769123cba1d1dd348f2b791"
+   "text": "Paste this one sentence into Claude Code or Codex. On macOS or Windows 11 it installs ORCH-os, or updates an older install to the latest published version, keeps any existing ORCH-os settings, and ends by checking the result with `orch --version` and `orch doctor`:\n\n```text\nInstall or update ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.\n```\n",
+   "sha256": "01292d71ce81598371c4b209f06b8c2dbe6cf82e846ab00026e3331eb86634c7"
   },
   {
    "id": "README.zh.md: install entry",
    "file": "README.zh.md",
-   "text": "也可以把下面这一句话粘贴给能在你机器上运行命令的编程助手：\n\n```text\n请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装 ORCH-os，文件要求停下时就停下并告诉我。\n```\n",
-   "sha256": "c0f9bbae1e2816897667a62ed61f96999dfdab08fe1bf118694b762ba66c9be2"
+   "text": "把下面这一句话粘贴给 Claude Code 或 Codex。在 macOS 或 Windows 11 上，它会安装 ORCH-os，或把旧版本更新到最新发布的版本，保留已有的 ORCH-os 设置，最后用 `orch --version` 和 `orch doctor` 检查结果：\n\n```text\n请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装或更新 ORCH-os，文件要求停下时就停下并告诉我。\n```\n",
+   "sha256": "47352031bc239ed8926b9e01daef35f5b7590ee31e88fe4efa610341ce9f1172"
   },
   {
    "id": "install guide",
    "file": "docs/INSTALL-WITH-AGENT.md",
    "whole_file": true,
-   "sha256": "3e642ec55ebf79b170ba7e0677a01608cfc52b0d69acba0238662d3d4406329a"
+   "sha256": "695fd779b2429548e4b541f84642c88f1dfe4ef5c2e51cab934f8bcebd9901f5"
   },
   {
    "id": "docs/DEMO.md: node row",
