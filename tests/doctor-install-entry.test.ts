@@ -389,12 +389,12 @@ describe("InstallEntry", () => {
     expect(guide.split(NOT_RUN_LABEL).length - 1, "not-run-by-the-authors labels in the guide").toBe(2);
   });
 
-  it("guide_labels_every_windows_step_unverified", () => {
+  it("guide_labels_the_windows_group_with_what_was_run", () => {
     const guide = guideText();
     expect(guide.length > 0, `${GUIDE} exists`).toBe(true);
     const windows = section(guide, "Windows 11");
-    const label = "**Unverified on Windows.** The steps in this group have not been run on a Windows machine. Every expected result below is unverified until the user's machine shows it.";
-    expect(windows.trimStart().startsWith(label), "the Windows 11 group opens with the unverified label").toBe(true);
+    const label = "**Run on Windows Server 2022, not on Windows 11.** The authors ran steps 1 to 10 of this group on Windows Server 2022 with Node.js 22 already installed, as a new install and as an update from an older ORCH-os, in Windows PowerShell under the SYSTEM account with a temporary npm prefix and home. The case in step 1 where `node` is not found was not run. On Windows 11, every expected result below is unverified until the user's machine shows it.";
+    expect(windows.trimStart().startsWith(label), "the Windows 11 group opens with the label that says what was run").toBe(true);
     // outside that group the guide only names the system; it makes no statement about how Windows behaves
     const elsewhere = guide.replace(windows, "\n").split("\n").filter((l) => /windows|powershell|\.cmd\b/i.test(l));
     expect(elsewhere, "lines about Windows outside the labelled group").toEqual([

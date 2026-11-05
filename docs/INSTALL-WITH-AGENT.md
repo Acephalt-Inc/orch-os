@@ -32,7 +32,7 @@ When the `node` command is missing, step 1 tells the assistant how to install No
 
 ## Windows 11
 
-**Unverified on Windows.** The steps in this group have not been run on a Windows machine. Every expected result below is unverified until the user's machine shows it.
+**Run on Windows Server 2022, not on Windows 11.** The authors ran steps 1 to 10 of this group on Windows Server 2022 with Node.js 22 already installed, as a new install and as an update from an older ORCH-os, in Windows PowerShell under the SYSTEM account with a temporary npm prefix and home. The case in step 1 where `node` is not found was not run. On Windows 11, every expected result below is unverified until the user's machine shows it.
 
 Use PowerShell, not as administrator.
 

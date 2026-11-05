@@ -263,9 +263,9 @@ describe("DoctorInstallEntryMutations", () => {
   });
 
   it("mutation_windows_label_removed", () => {
-    row("guide_labels_every_windows_step_unverified",
-      [{ file: GUIDE, from: "**Unverified on Windows.** The steps in this group have not been run on a Windows machine. ", to: "" }],
-      /the Windows 11 group opens with the unverified label: expected false to be true/);
+    row("guide_labels_the_windows_group_with_what_was_run",
+      [{ file: GUIDE, from: "**Run on Windows Server 2022, not on Windows 11.** ", to: "" }],
+      /the Windows 11 group opens with the label that says what was run: expected false to be true/);
   });
 
   it("mutation_readme_sentence_points_at_another_file", () => {
