@@ -139,6 +139,8 @@ describe("skills install", () => {
     expect(out).toContain("away: removed");
     expect(existsSync(join(workspace, ".claude", "skills", "away"))).toBe(false);
     expect(existsSync(join(workspace, ".claude", "skills", "back", "SKILL.md"))).toBe(true);
+    // The uninstall quarantine folder must be gone too, not only the original destination.
+    expect(readdirSync(join(workspace, ".claude", "skills")).sort()).toEqual(["back"]);
   });
 
   it("uninstall preserves edited, extra, and unowned matching files", async () => {
