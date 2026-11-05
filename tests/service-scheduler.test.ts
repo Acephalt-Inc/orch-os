@@ -317,7 +317,7 @@ it.each(['darwin', 'win32'] as const)('generates and manages an owned daily disk
     if (args[0] === '/Create') { definition = readFileSync(args[args.indexOf('/XML') + 1], 'utf8'); loaded = definition; }
     if (args[0] === 'bootstrap') {
       definition = readFileSync(args[2], 'utf8');
-      const name = args[2].split('/').pop()!.replace('.plist', '');
+      const name = basename(args[2], '.plist');
       loaded = `gui/1/${name} = {\n arguments = {\n${[join(root, 'node'), join(root, 'cli'), 'service', 'run', 'disk', '--home', root].join('\n')}\n }\n}`;
     }
     if (args[0] === 'bootout' || args[0] === '/Delete') loaded = '';
