@@ -172,6 +172,27 @@ describe("approved lead dispatch", () => {
     expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase, "[cursor-boundary]").toBe("RELEASED");
     expect(new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")).all()).toHaveLength(1);
   });
+  dispatchIt("commits the cursor before releasing the claim and recovers a crash between them", async () => {
+    const b = cli("boot", "--session", "session-a").value, p = task();
+    expect(cli(...approved(b.epoch, p)).code).toBe(0);
+    await waitExit();
+    const reservationPath = join(ctx.home, "lease.json.lead-task.json");
+    const { task_dir } = JSON.parse(readFileSync(reservationPath, "utf8"));
+    const release = vi.spyOn(Tasks.prototype, "release").mockImplementation(() => { throw new Error("crash before release"); });
+    try {
+      const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")), new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")));
+      expect(() => loop.run("tick", { session: "session-a", expectedEpoch: b.epoch, tick: 1, approved: true })).toThrow("crash before release");
+    } finally { release.mockRestore(); }
+    const state = JSON.parse(readFileSync(join(ctx.home, "lease.json.lead.json"), "utf8"));
+    expect(state.event_cursor, "[cursor-first]").toBe(1);
+    expect(state.receipt.completion?.task).toBe("task-a");
+    expect(new Tasks(task_dir).status("task-a")[1].state.state, "[claim-after]").toBe("ACTIVE");
+    expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase).toBe("CLAIMED");
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.status).toBe("DUPLICATE");
+    expect(new Tasks(task_dir).status("task-a")[1].state.state).toBe("RELEASED");
+    expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase).toBe("RELEASED");
+    expect(new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")).all()).toHaveLength(1);
+  });
   dispatchIt("recovers a released tombstone after one old sidecar was removed", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
@@ -449,17 +470,22 @@ describe("approved lead dispatch", () => {
     expect(readFileSync(join(ctx.home, "subdir", "ran.txt"), "utf8")).toBe("ok");
     expect(local("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.completion.exit_code).toBe(0);
   });
-  dispatchIt("holds the cursor if matching-epoch claim release fails, then replays once", async () => {
+  dispatchIt("keeps the claim if matching-epoch claim release fails after the cursor commit, then retries the release once", async () => {
     const b = cli("boot", "--session", "session-a").value, p = task();
     expect(cli(...approved(b.epoch, p)).code).toBe(0);
     await waitExit();
+    const reservationPath = join(ctx.home, "lease.json.lead-task.json");
+    const { task_dir } = JSON.parse(readFileSync(reservationPath, "utf8"));
     const release = vi.spyOn(Tasks.prototype, "release").mockReturnValue([4, { status: "STALE_EPOCH" }]);
     const loop = new LeadLoop(new Lease(join(ctx.home, "lease.json")), new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")));
-    const before = readFileSync(join(ctx.home, "lease.json.lead.json"), "utf8");
     try { expect(() => loop.run("tick", { session: "session-a", expectedEpoch: b.epoch, tick: 1, approved: true })).toThrow(); }
     finally { release.mockRestore(); }
-    expect(readFileSync(join(ctx.home, "lease.json.lead.json"), "utf8")).toBe(before);
-    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.events).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(ctx.home, "lease.json.lead.json"), "utf8")).event_cursor).toBe(1);
+    expect(new Tasks(task_dir).status("task-a")[1].state.state).toBe("ACTIVE");
+    expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase).toBe("CLAIMED");
+    expect(cli("tick", "--session", "session-a", "--expected-epoch", String(b.epoch), "--tick", "1", "--approved").value.events).toHaveLength(0);
+    expect(new Tasks(task_dir).status("task-a")[1].state.state).toBe("RELEASED");
+    expect(JSON.parse(readFileSync(reservationPath, "utf8")).phase).toBe("RELEASED");
     expect(new Messages(join(ctx.home, "messages.jsonl"), join(ctx.home, "cursors")).all()).toHaveLength(1);
   });
   it("rejects conflicting content for one stable message id", () => {

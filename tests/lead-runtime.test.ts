@@ -32,6 +32,8 @@ describe("lead runtime", () => {
     expect(first).toMatchObject({ status: "READY", session: "session-a", previous_session: null, boot_count: 1, event_cursor: 0, last_tick: 0,
       capabilities: { scheduler: "UNAVAILABLE", wake: "UNAVAILABLE", memory: "UNAVAILABLE" }, decision: { status: "BLOCKED", reason: expect.any(String) } });
     expect(first.decision.reason.length).toBeGreaterThan(0); expect(first.epoch).toBeGreaterThan(0);
+    // With no reservation, boot keeps the existing receipt reason.
+    expect(first.decision.reason).toBe("task dispatch is unavailable in this slice");
     expect(JSON.parse(readFileSync(state(), "utf8"))).toMatchObject({ version: 1, message_path: join(ctx.home, "messages.jsonl"), event_cursor: 0, last_tick: 0, boot_count: 1 });
     expect(boot("session-a")).toMatchObject({ epoch: first.epoch, previous_session: "session-a", boot_count: 2 });
     expect(cli("boot", "--session", "session-b").code).toBe(3);

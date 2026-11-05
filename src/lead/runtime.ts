@@ -386,7 +386,7 @@ export class LeadLoop {
           boot_count: state.boot_count, event_cursor: state.event_cursor, last_tick: state.last_tick, events,
           capabilities: { scheduler: "UNAVAILABLE", wake: "UNAVAILABLE", memory: "UNAVAILABLE" },
           decision: { status: "BLOCKED", reason: reservation?.phase === "RELEASED" ? AVAILABLE_REASON
-            : reservation ? SLOT_REASON : AVAILABLE_REASON },
+            : reservation ? SLOT_REASON : DISPATCH_REASON },
           ...(completion ? { completion } : {}),
         };
         if (!duplicate) {
@@ -397,13 +397,11 @@ export class LeadLoop {
             if (!evidence || evidence.completion.event_id !== completion.event_id)
               throw new Error("task completion evidence changed; cursor was not committed");
             if (evidence.verifiable && !this.groupProbe(evidence.pid)) {
-              const tasks = new Tasks(reservation.task_dir);
-              const [code, claim] = tasks.status(reservation.task.id);
+              // Only check the claim here; it is released after the cursor commit below.
+              const [code, claim] = new Tasks(reservation.task_dir).status(reservation.task.id);
               if (code !== 0 || claim.state.session_id !== reservation.holder || claim.state.epoch !== reservation.claim_epoch
-                || (claim.state.state === "ACTIVE"
-                  ? tasks.release(reservation.task.id, reservation.holder, { expectedEpoch: reservation.claim_epoch! })[0] !== 0
-                  : claim.state.state !== "RELEASED"))
-                throw new Error("matching task claim could not be released; cursor was not committed");
+                || (claim.state.state !== "ACTIVE" && claim.state.state !== "RELEASED"))
+                throw new Error("matching task claim changed; cursor was not committed");
               receipt.decision.reason = AVAILABLE_REASON;
             }
           }
@@ -411,6 +409,8 @@ export class LeadLoop {
           state.receipt = receipt;
           atomicWrite(this.path, JSON.stringify(state) + "\n", { fsync: true, mode: 0o600 });
         }
+        // The cursor and receipt are durable before the matching claim is released. After a crash
+        // between the two, any later approved tick (a duplicate too) or dispatch repeats this release.
         if (action === "tick" && reservation && reservation.phase !== "RESERVED") this.releaseConsumed(reservation, state);
         return [0, receipt];
       }, LOCK_OPTIONS);
