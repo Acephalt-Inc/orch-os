@@ -143,9 +143,13 @@ export class Workers {
       throw new WorkerError(`--base ${base}: not a commit in ${repo}`);
     }
     const list = git(["worktree", "list", "--porcelain"], repo);
-    const registered = list.out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => realOrResolve(l.slice(9)));
     if (existsSync(path)) {
-      if (!registered.includes(path)) throw new WorkerError(`${path} exists but is not a worktree of ${repo}`);
+      // Git and the configured root may spell one directory differently (Windows short names, letter
+      // case): compare by the file system's own name for the directory, not by spelling.
+      const target = realpathSync.native(path);
+      const sameDirectory = (p: string) => { try { return realpathSync.native(p) === target; } catch { return false; } };
+      const registered = list.out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
+      if (!registered.some(sameDirectory)) throw new WorkerError(`${path} exists but is not a worktree of ${repo}`);
       const cur = git(["rev-parse", "--abbrev-ref", "HEAD"], path).out.trim();
       return { path, repo, branch: cur || null, created: false };
     }

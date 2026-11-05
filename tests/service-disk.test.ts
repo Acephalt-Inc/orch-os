@@ -65,6 +65,18 @@ it.each([
   expect(result.directories[0]).toMatchObject({ action: 'KEEP', reason: expect.any(String) });
   expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
 });
+it.each([
+  ['untracked', (f: ReturnType<typeof fixture>) => writeFileSync(join(f.wt.path, 'notes'), 'keep')],
+  ['modified', (f: ReturnType<typeof fixture>) => writeFileSync(join(f.wt.path, 'tracked'), 'changed')],
+] as const)('refuses a %s worktree at the status check, before any git removal', (_kind, mutate) => {
+  const f = fixture(); mutate(f);
+  const calls: string[][] = [], runner = f.options.runner;
+  f.options.runner = (cmd, args) => { if (cmd === 'git') calls.push(args); return runner(cmd, args); };
+  expect(f.run().directories[0]).toMatchObject({ action: 'KEEP', reason: 'Error: dirty, ignored files, or status unavailable' });
+  expect(calls.some(a => a.includes('status'))).toBe(true);
+  expect(calls.some(a => a.includes('worktree') && a.includes('remove'))).toBe(false);
+  expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
+});
 it('preserves an active Windows descendant', () => {
   const f = fixture('win32'); f.processes('[{"ProcessId":999999,"ParentProcessId":424242}]');
   expect(f.run().directories[0].action).toBe('KEEP');
