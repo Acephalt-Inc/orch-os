@@ -332,6 +332,20 @@ describe("InstallEntry", () => {
     expect(guide.match(/\b\d+\.\d+\.\d+\b/g), "release numbers written in the guide").toBeNull();
   });
 
+  it("guide_version_lookup_accepts_one_bare_version_and_named_npm_notices", () => {
+    const mac = steps(section(guideText(), "macOS"))[1]?.text ?? "";
+    const windows = steps(section(guideText(), "Windows 11"))[1]?.text ?? "";
+    for (const [group, text] of [["macOS", mac], ["Windows 11", windows]] as const) {
+      expect(text, `${group}: exactly one bare semantic version`).toContain("exactly one line that matches `^\\d+\\.\\d+\\.\\d+$` with no other text");
+      expect(text, `${group}: plain npm notices`).toContain('"npm notice"');
+      expect(text, `${group}: unexpected output stops`).toContain("On any other result, stop.");
+    }
+    expect(windows, "Windows 11: PowerShell-prefixed npm notice").toContain('"npm.cmd : npm notice"');
+    for (const line of ["At line:", "+ npm.cmd view orch-os version", "+ ~", "+ CategoryInfo", "+ FullyQualifiedErrorId"]) {
+      expect(windows, `Windows 11: PowerShell wrapper ${line}`).toContain(`"${line}`);
+    }
+  });
+
   it("guide_has_two_command_groups_that_install_or_update_and_end_with_version_and_doctor", () => {
     const guide = guideText();
     expect(guide.length > 0, `${GUIDE} exists`).toBe(true);

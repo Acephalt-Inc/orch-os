@@ -71,7 +71,10 @@ function mutate(name: string, edits: Edit[], expected: RegExp): Result {
     if (!/AssertionError/.test(t.failure) || !expected.test(t.failure)) return { verdict: "INVALID", detail: `the named test failed, but not on the row's assertion\n${t.failure}` };
     return { verdict: "KILLED", detail: t.failure.split("\n")[0] };
   } finally {
-    for (const [file, bytes] of saved) writeFileSync(join(copy, file), bytes);
+    for (const [file, bytes] of saved) {
+      writeFileSync(join(copy, file), bytes);
+      expect(readFileSync(join(copy, file)), `${file}: restored byte-for-byte after mutation`).toEqual(bytes);
+    }
   }
 }
 
@@ -166,6 +169,12 @@ describe("DoctorInstallEntryMutations", () => {
     row("guide_install_commands_name_the_latest_published_version",
       [{ file: GUIDE, from: "9. `orch --version` must print `orch ` followed by exactly the latest version from step 2.", to: `9. \`orch --version\` must print \`orch ${VERSION}\`.` }],
       /version outputs the guide expects: expected \[ .+ \] to be null/);
+  });
+
+  it("mutation_windows_version_step_drops_powershell_notice_allowance", () => {
+    row("guide_version_lookup_accepts_one_bare_version_and_named_npm_notices",
+      [{ file: GUIDE, from: ' or "npm.cmd : npm notice"', to: "" }],
+      /Windows 11: PowerShell-prefixed npm notice: expected/);
   });
 
   it("mutation_guide_introduction_names_another_version", () => {
