@@ -45,10 +45,11 @@ These rules apply on Windows only; macOS and Linux behave as before.
 
 ## Not covered on Windows
 
-The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 60 `skipIf` markers covering 494 tests (nested skips counted once). `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
+The `windows` CI job runs every test file. The tests below are skipped there, each with a Windows `skipIf` condition in the test file: 67 `skipIf` markers covering 501 tests (nested skips counted once). `tests/windows-portability.test.ts` checks that every marker is named on this page. The private-store admission file also runs `Windows binding refuses before any filesystem call` on Windows, without first creating a successful binding.
 
 | Test file | Skipped | Why |
 |---|---|---|
+| `tests/simple.test.ts` | `simple and plain init keep the same detected agents`, `simple doctor reports all mode-specific rows`, `doctor checks only the exact handbook file stored in config`, `doctor rejects a managed pointer that differs from config and ignores outside text`, `no-agent-file doctor checks the configured file without a pointer diagnostic`, `doctor passes the handbook named in CLAUDE.md for --dir`, `README install text names commands and built init and doctor produce the printed line` | these run the built CLI against POSIX temp paths; native Windows behavior has not been measured |
 | `tests/skills-install.test.ts` | `test_skills_install_refuses_symlinked_target`, `refuses a symlinked skill folder`, `uninstall rejects links without touching their targets` | Creating symbolic links in the test workspace is not reliable on every Windows runner. |
 | `tests/memory-cli.test.ts` | all of `installed memory command` (23) | the private store refuses Windows private access; native Windows behavior has not been measured |
 | `tests/memory-recall.test.ts` | all of `installed memory recall` (21) | the fixtures require a successful private-store write, which is unavailable on Windows |

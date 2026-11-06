@@ -21,6 +21,13 @@ describe("InitHandbookV2", () => {
     expect(existsSync(join(process.cwd(), ".claude", "skills"))).toBe(false);
   });
 
+  it("--everyday keeps the skill-pack hint without writing a handbook", async () => {
+    const [code, out] = await run("init", "--everyday", "--no-handbook", "--no-profile");
+    expect(code).toBe(0);
+    expect(out).toContain("everyday skills: run `orch skills install`");
+    expect(existsSync(join(ctx.home, "handbook"))).toBe(false);
+  });
+
   it("init_writes_the_four_handbook_files_flat", async () => {
     const [code, out] = await run("init");
     expect(code).toBe(0);
