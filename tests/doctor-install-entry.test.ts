@@ -341,7 +341,11 @@ describe("InstallEntry", () => {
       expect(text, `${group}: unexpected output stops`).toContain("On any other result, stop.");
     }
     expect(windows, "Windows 11: PowerShell-prefixed npm notice").toContain('"npm.cmd : npm notice"');
-    for (const line of ["At line:", "+ npm.cmd view orch-os version", "+ ~", "+ CategoryInfo", "+ FullyQualifiedErrorId"]) {
+    expect(windows, "Windows 11: PowerShell source-location rule").toContain('starts with "At " and ends with " char:" plus a number');
+    for (const form of ["At line:1 char:1", "At C:\\path\\to\\script.ps1:29 char:47"]) {
+      expect(windows, `Windows 11: PowerShell source-location form ${form}`).toContain(`"${form}"`);
+    }
+    for (const line of ["+ npm.cmd view orch-os version", "+ ~", "+ CategoryInfo", "+ FullyQualifiedErrorId"]) {
       expect(windows, `Windows 11: PowerShell wrapper ${line}`).toContain(`"${line}`);
     }
   });
