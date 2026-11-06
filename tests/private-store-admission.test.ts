@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, constants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
   rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { bindWorkspace } from "../src/private-store/binding.js";
+import { bindWorkspace, partitionPaths } from "../src/private-store/binding.js";
 
 describe.skipIf(process.platform === "win32")("POSIX private-store admission", () => {
 interface Call {
@@ -112,7 +114,16 @@ it("inspect_missing_is_noncreating", () => {
   expect(contentReads(calls)).toEqual([]);
   expect(result.after).toEqual(result.before);
 });
-it("binding_uses_canonical_workspace_and_fixed_namespace", () => {
+it("binding_uses_canonical_workspace_and_fixed_namespace", async () => {
+  const { home: seamHome, workspace: canonical } = setup();
+  const spelling = join(seamHome, "alternate-workspace");
+  mkdirSync(spelling);
+  const seam = { realpath: async (path: string) => path === spelling ? canonical : realpath(path) };
+  const mappedBinding = await bindWorkspace(spelling, "memory-v1", performance.now() + 5_000, seam);
+  const direct = await bindWorkspace(canonical, "memory-v1", performance.now() + 5_000);
+  const aliasDirectory = partitionPaths(mappedBinding).directory;
+  expect(aliasDirectory).toBe(partitionPaths(direct).directory);
+  expect(aliasDirectory).toBe(join(dirname(aliasDirectory), createHash("sha256").update(canonical).digest("hex")));
   const { result, calls } = run("binding");
   // K1.02
   expect(result).toMatchObject({ kind: "bound", frozen: true, pathsFrozen: true });
