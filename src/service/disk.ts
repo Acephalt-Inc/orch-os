@@ -21,6 +21,11 @@ export class Disk {
     if (root !== resolve(this.options.root) || !inside(realpathSync(this.options.home), root)) throw new Error('worker root outside ORCH home or linked');
     return root;
   }
+  private ownedWorktree(path: string): string {
+    const worktree = realpathSync(path), area = join(realpathSync(this.options.home), 'worktrees');
+    if (!inside(area, worktree)) throw new Error(`worktree outside ORCH-home worktree area: ${worktree}`);
+    return worktree;
+  }
   private free(): number {
     const o = this.options;
     if (o.diskFree) return o.diskFree();
@@ -57,6 +62,7 @@ export class Disk {
     const m = JSON.parse(readFileSync(p, 'utf8')), wt = m.worktree;
     if (m.name !== name || !Number.isSafeInteger(m.pid) || m.pid < 2 || !Number.isFinite(m.started_at)) throw new Error('invalid worker metadata');
     if (!wt?.created || !record.worktree || wt.path !== record.worktree.path || wt.repo !== record.worktree.repo || !sameIdentity(record.worktree)) throw new Error('worktree not owned or replaced');
+    this.ownedWorktree(wt.path);
     identity(wt.repo);
     if (realpathSync(wt.repo) === realpathSync(wt.path) || m.workdir !== wt.path) throw new Error('worktree identity mismatch');
     if (now - Math.max(m.started_at, this.newest(dir)) <= o.staleDays * 86400) throw new Error('not stale');

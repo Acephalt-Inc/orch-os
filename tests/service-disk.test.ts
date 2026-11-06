@@ -10,7 +10,7 @@ import { WakeWatch, snapshot } from '../src/service/wake.js';
 import { tmp, useTmpHome } from './_helpers.js';
 const ctx = useTmpHome();
 const now = 2_000_000_000, old = now - 20 * 86400;
-function fixture(platform: NodeJS.Platform = 'darwin', workerRoot?: string) {
+function fixture(platform: NodeJS.Platform = 'darwin', workerRoot?: string, worktreeRoot = join(ctx.home, 'worktrees')) {
   const home = ctx.home, root = workerRoot ?? join(home, 'workers'), dir = join(root, 'w'), repo = join(home, 'repo');
   mkdirSync(dir, { recursive: true }); mkdirSync(repo);
   const git = (args: string[]) => {
@@ -21,7 +21,7 @@ function fixture(platform: NodeJS.Platform = 'darwin', workerRoot?: string) {
   writeFileSync(join(repo, 'tracked'), 'original');
   expect(git(['-C', repo, 'add', 'tracked']).code).toBe(0);
   expect(git(['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'initial']).code).toBe(0);
-  const wt = new Workers({ workers: { worktree_root: join(home, 'worktrees') } }, root, join(home, 'load.json')).prepareWorktree('w', repo);
+  const wt = new Workers({ workers: { worktree_root: worktreeRoot } }, root, join(home, 'load.json')).prepareWorktree('w', repo);
   const meta = { name: 'w', pid: 424242, started_at: old, workdir: wt.path, worktree: wt };
   writeFileSync(join(dir, 'worker.json'), JSON.stringify(meta)); writeFileSync(join(dir, 'stdout.log'), 'old output');
   recordWorkerOwnership(root, 'w', true, wt);
@@ -49,6 +49,25 @@ it('refuses an owned stale worker under a configured root outside ORCH home', ()
     expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
     expect(existsSync(outside + '.maintenance.lock')).toBe(false);
   } finally { rmSync(outside, { recursive: true, force: true }); }
+});
+it('skips an owned stale worker whose worktree is outside the ORCH-home worktree area', () => {
+  const outside = tmp('orch-outside-worktrees-');
+  try {
+    const f = fixture('darwin', undefined, outside);
+    const result = f.run();
+    expect(result.directories).toEqual([{ path: f.dir, action: 'KEEP', reason: expect.stringContaining(outside) }]);
+    expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
+it('does not record or remove an attached worktree in an existing unowned worker directory', () => {
+  const f = fixture();
+  rmSync(join(f.root, '.ownership.json'));
+  f.meta.worktree.created = false;
+  writeFileSync(join(f.dir, 'worker.json'), JSON.stringify(f.meta));
+  recordWorkerOwnership(f.root, 'w', false, f.meta.worktree);
+  expect(existsSync(join(f.root, '.ownership.json'))).toBe(false);
+  expect(f.run().directories[0].action).toBe('KEEP');
+  expect(existsSync(f.wt.path)).toBe(true);
 });
 it('refuses a worker directory symlink escaping the owned root', () => {
   const outside = tmp('orch-linked-workers-');
