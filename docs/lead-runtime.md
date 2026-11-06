@@ -50,11 +50,13 @@ Each pass handles at most 100 events and attempts at most one dispatch; more
 work waits for another wake. Watcher and timer hints are combined so they do
 not launch overlapping passes. Quiet checks do not need a status message.
 
-The current dispatch runtime reserves one task for the lifetime of its saved
-state. That reservation remains after completion. The lead can harvest that
-result, but a second dispatch is blocked. It queues the next task and tells you
-the limitation rather than deleting the reservation or launching around it.
-A continuous sequence of worker launches needs a later dispatch change.
+The current dispatch runtime reserves one task until its verified completion
+event has been consumed and the event cursor and receipt are committed. It
+releases only the matching task claim after the supervisor's process group is
+gone and the invocation-bound launch and exit evidence is valid. A live group,
+unconsumed completion, or missing or corrupt evidence keeps the slot blocked.
+The receipt reports the completion and whether a separate approved dispatch
+can use the released slot; each next task needs its own approval.
 
 If you say you are leaving, the lead continues independent work already
 approved and saves decisions for you. On an explicit return, it gives one delta:
