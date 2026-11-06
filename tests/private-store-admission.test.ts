@@ -124,6 +124,10 @@ it("binding_uses_canonical_workspace_and_fixed_namespace", async () => {
   const aliasDirectory = partitionPaths(mappedBinding).directory;
   expect(aliasDirectory).toBe(partitionPaths(direct).directory);
   expect(aliasDirectory).toBe(join(dirname(aliasDirectory), createHash("sha256").update(canonical).digest("hex")));
+  const linked = join(seamHome, "linked-workspace");
+  symlinkSync(canonical, linked, "dir");
+  await expect(bindWorkspace(linked, "memory-v1", performance.now() + 5_000))
+    .rejects.toMatchObject({ code: "BAD_BINDING", message: "private storage request refused" });
   const { result, calls } = run("binding");
   // K1.02
   expect(result).toMatchObject({ kind: "bound", frozen: true, pathsFrozen: true });
@@ -157,7 +161,10 @@ it("binding_uses_canonical_workspace_and_fixed_namespace", async () => {
   expect([after.mode, after.ino, after.uid]).toEqual([before.mode, before.ino, before.uid]);
   expect(linkedHome.result.ancestorsAfter).toEqual(linkedHome.result.ancestorsBefore);
 });
-it("outside_values_cannot_select_store_authority", () => {
+it("outside_values_cannot_select_store_authority", async () => {
+  const { workspace } = setup();
+  await expect(bindWorkspace(workspace, "evil-v1", performance.now() + 5_000))
+    .rejects.toMatchObject({ code: "BAD_INPUT", message: "private storage request refused" });
   const { result, calls, home } = run("authority");
   // K1.03
   fixedFailure(result.rawSeam, "IO_UNAVAILABLE");
