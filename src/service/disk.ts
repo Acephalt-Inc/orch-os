@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statfsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { withLock } from '../lock.js';
 import type { Messages } from '../messages.js';
 import { identity, ownership, sameIdentity } from '../worker-ownership.js';
@@ -8,10 +8,19 @@ import { WakeWatch } from './wake.js';
 import type { Runner } from './scheduler.js';
 export type DiskOptions = { home: string; root: string; messages: Messages; reader: string; platform: NodeJS.Platform; runner: Runner; floorBytes: number; staleDays: number; mode: 'dry-run' | 'apply'; now?: () => number; diskFree?: () => number };
 type Row = { path: string; worktree?: string; action: 'KEEP' | 'DELETE' | 'WOULD_DELETE'; reason: string };
+const inside = (parent: string, child: string): boolean => {
+  const path = relative(parent, child);
+  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+};
 
 export class Disk {
   constructor(readonly options: DiskOptions) {}
   private git(path: string, args: string[]) { return this.options.runner('git', ['--no-optional-locks', '-C', path, ...args]); }
+  private ownedRoot(): string {
+    const root = realpathSync(this.options.root);
+    if (root !== resolve(this.options.root) || !inside(realpathSync(this.options.home), root)) throw new Error('worker root outside ORCH home or linked');
+    return root;
+  }
   private free(): number {
     const o = this.options;
     if (o.diskFree) return o.diskFree();
@@ -39,7 +48,9 @@ export class Disk {
     return Math.max(s.mtimeMs / 1000, ...(s.isDirectory() ? readdirSync(path).map(n => this.newest(join(path, n))) : []));
   }
   private inspect(name: string, now: number): string {
-    const o = this.options, dir = join(o.root, name), record = ownership(o.root)[name];
+    const o = this.options, dir = join(o.root, name);
+    if (!inside(this.ownedRoot(), realpathSync(dir))) throw new Error('worker directory outside worker root');
+    const record = ownership(o.root)[name];
     if (!record || record.directory.path !== resolve(dir) || !sameIdentity(record.directory)) throw new Error('unowned or replaced directory');
     const p = join(dir, 'worker.json');
     if (lstatSync(p).isSymbolicLink()) throw new Error('linked worker metadata');
@@ -59,9 +70,7 @@ export class Disk {
         if (typeof peer.workdir === 'string' && resolve(peer.workdir) === resolve(wt.path)) throw new Error('shared worktree');
       }
     }
-    // identity() above already holds wt.path to a canonical, unlinked directory. Git spells the same
-    // directory differently on Windows (C:/Users/runneradmin/... against C:\Users\RUNNER~1\...), so
-    // compare Git's paths by the file system's own name for the directory, not by spelling.
+    // Compare Git's Windows path spelling through the filesystem's canonical name.
     const target = realpathSync.native(wt.path);
     const sameDirectory = (p: string) => { try { return realpathSync.native(p) === target; } catch { return false; } };
     const list = this.git(wt.repo, ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain']);
@@ -80,6 +89,18 @@ export class Disk {
     let free: number;
     try { free = this.free(); if (!Number.isFinite(free) || free < 0) throw new Error('invalid free-space result'); }
     catch (e) { return { outcome: 'UNAVAILABLE', reason: String(e), directories: [] }; }
+    const finding = { ts: new Date(now * 1000).toISOString(), disk_free_bytes: free, floor_bytes: o.floorBytes, low_disk: free < o.floorBytes };
+    if (existsSync(o.root)) {
+      try { this.ownedRoot(); }
+      catch (e) {
+        const reason = String(e);
+        const directories: Row[] = readdirSync(o.root, { withFileTypes: true })
+          .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+          .map(entry => ({ path: join(o.root, entry.name), action: 'KEEP', reason }));
+        if (!preview) new WakeWatch(o.home, o.messages, o.reader, () => []).tick(undefined, finding);
+        return { outcome: 'UNAVAILABLE', reason, ...finding, directories };
+      }
+    }
     const apply = !preview && o.mode === 'apply';
     const report = () => {
       const directories: Row[] = [];
@@ -104,7 +125,6 @@ export class Disk {
       return directories;
     };
     const directories = apply && existsSync(o.root) ? withLock(o.root + '.maintenance.lock', report, { staleMs: Infinity }) : report();
-    const finding = { ts: new Date(now * 1000).toISOString(), disk_free_bytes: free, floor_bytes: o.floorBytes, low_disk: free < o.floorBytes };
     if (!preview) new WakeWatch(o.home, o.messages, o.reader, () => []).tick(undefined, finding);
     return { outcome: apply && o.platform === 'win32' ? 'UNAVAILABLE' : apply ? 'APPLIED' : 'DRY_RUN',
       ...(o.platform === 'win32' ? { cleanup: { outcome: 'UNAVAILABLE', reason: 'Windows orphan-process absence needs durable process-tree ownership' } } : {}), ...finding, directories };

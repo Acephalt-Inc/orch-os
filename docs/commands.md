@@ -564,6 +564,9 @@ Scheduling does not wake a sleeping machine; checks resume when the OS runs them
 `run disk` checks free space in the ORCH home volume and reports stale worker
 state directories as JSON. The default `disk_mode = "dry-run"` reports eligible
 paths without deleting them. Only `disk_mode = "apply"` enables removal.
+Cleanup accepts `[workers] root` only inside the ORCH home and refuses a worker
+directory whose resolved path escapes that root. An outside or linked root returns
+`UNAVAILABLE` with `KEEP` rows; no worker directory or worktree is removed.
 `run disk --dry-run` overrides apply and writes nothing, including wake state.
 A regular scheduled check writes wake state even when cleanup mode is dry-run.
 

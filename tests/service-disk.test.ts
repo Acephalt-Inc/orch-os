@@ -7,11 +7,11 @@ import { Workers } from '../src/workers.js';
 import { recordWorkerOwnership } from '../src/worker-ownership.js';
 import { Disk } from '../src/service/disk.js';
 import { WakeWatch, snapshot } from '../src/service/wake.js';
-import { useTmpHome } from './_helpers.js';
+import { tmp, useTmpHome } from './_helpers.js';
 const ctx = useTmpHome();
 const now = 2_000_000_000, old = now - 20 * 86400;
-function fixture(platform: NodeJS.Platform = 'darwin') {
-  const home = ctx.home, root = join(home, 'workers'), dir = join(root, 'w'), repo = join(home, 'repo');
+function fixture(platform: NodeJS.Platform = 'darwin', workerRoot?: string) {
+  const home = ctx.home, root = workerRoot ?? join(home, 'workers'), dir = join(root, 'w'), repo = join(home, 'repo');
   mkdirSync(dir, { recursive: true }); mkdirSync(repo);
   const git = (args: string[]) => {
     const r = spawnSync('git', args, { encoding: 'utf8' });
@@ -38,6 +38,33 @@ it('dry-run preserves all directories and apply removes only the verified candid
   expect(f.run('dry-run').directories).toEqual([{ path: f.dir, worktree: f.wt.path, action: 'WOULD_DELETE', reason: 'eligible' }]);
   expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
   expect(f.run().directories[0].action).toBe('DELETE');
+  expect(existsSync(f.dir)).toBe(false); expect(existsSync(f.wt.path)).toBe(false);
+});
+it('refuses an owned stale worker under a configured root outside ORCH home', () => {
+  const outside = tmp('orch-outside-workers-');
+  try {
+    const f = fixture('darwin', outside);
+    const result = f.run();
+    expect(result).toMatchObject({ outcome: 'UNAVAILABLE', directories: [{ path: f.dir, action: 'KEEP', reason: expect.stringContaining('outside ORCH home') }] });
+    expect(existsSync(f.dir)).toBe(true); expect(existsSync(f.wt.path)).toBe(true);
+    expect(existsSync(outside + '.maintenance.lock')).toBe(false);
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
+it('refuses a worker directory symlink escaping the owned root', () => {
+  const outside = tmp('orch-linked-workers-');
+  try {
+    const f = fixture();
+    const linkedDir = join(f.root, 'escape');
+    symlinkSync(outside, linkedDir, 'dir');
+    utimesSync(join(f.dir, 'stdout.log'), now, now);
+    const result = f.run();
+    expect(result.directories.find((row: { path: string }) => row.path === linkedDir)).toMatchObject({ action: 'KEEP', reason: expect.stringContaining('outside worker root') });
+    expect(existsSync(outside)).toBe(true); expect(existsSync(f.dir)).toBe(true);
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
+it('cleans an owned stale worker under the default ORCH worker root', () => {
+  const f = fixture();
+  expect(f.run()).toMatchObject({ outcome: 'APPLIED', directories: [{ path: f.dir, action: 'DELETE' }] });
   expect(existsSync(f.dir)).toBe(false); expect(existsSync(f.wt.path)).toBe(false);
 });
 it('explicit preview writes nothing even when config mode is apply', () => {

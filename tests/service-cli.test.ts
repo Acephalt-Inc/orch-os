@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { Messages } from "../src/messages.js";
-import { useTmpHome } from "./_helpers.js";
+import { tmp, useTmpHome } from "./_helpers.js";
 
 const ctx = useTmpHome();
 async function run(argv: string[], platform: NodeJS.Platform = "darwin") {
@@ -100,6 +100,17 @@ it.each(["darwin", "win32"] as const)("runs disk in the scheduled home and suppo
   expect(existsSync(join(home, "wake", "events.log"))).toBe(true);
   writeFileSync(join(home, "config.toml"), '[service]\ndisk_mode = "delete"\n');
   expect((await run(["service", "run", "disk", "--home", home], platform)).code).toBe(2);
+});
+it('refuses a configured disk worker root outside the scheduled home', async () => {
+  const outside = tmp('orch-cli-outside-workers-');
+  try {
+    mkdirSync(join(outside, 'w'));
+    writeFileSync(join(ctx.home, 'config.toml'), `[workers]\nroot = ${JSON.stringify(outside)}\n[service]\ndisk_mode = "apply"\n`);
+    const result = await run(['service', 'run', 'disk', '--home', ctx.home]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out)).toMatchObject({ outcome: 'UNAVAILABLE', directories: [{ path: join(outside, 'w'), action: 'KEEP' }] });
+    expect(existsSync(join(outside, 'w'))).toBe(true);
+  } finally { rmSync(outside, { recursive: true, force: true }); }
 });
 it.each(['health', 'wake-watch'])('rejects a preview for %s before any write', async job => {
   const result = await run(['service', 'run', job, '--once', '--dry-run']);
