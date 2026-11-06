@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, open, opendir, rename, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,7 +59,7 @@ const probes: Probe[] = [
 ];
 
 async function fixture(probe: Probe) {
-  const workspace = mkdtempSync(join(tmpdir(), "oo232-late-await-"));
+  const workspace = mkdtempSync(join(realpathSync(tmpdir()), "oo232-late-await-"));
   homes.push(workspace);
   const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5_000);
   const paths = partitionPaths(binding);

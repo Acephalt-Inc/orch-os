@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -22,7 +22,7 @@ describe("memory fact schema", () => {
     expect(pkg.files).not.toContain("docs/memory.md");
   });
   it.skipIf(process.platform === "win32")("uses the ruled 22-key fact with bounded nested objects", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
+    const workspace = mkdtempSync(join(realpathSync(tmpdir()), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
     expect(Object.keys(fact)).toHaveLength(22);
@@ -37,7 +37,7 @@ describe("memory fact schema", () => {
   });
 
   it.skipIf(process.platform === "win32")("refuses extra fact and time keys", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
+    const workspace = mkdtempSync(join(realpathSync(tmpdir()), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
     const codec = memoryCodec(binding);
@@ -49,7 +49,7 @@ describe("memory fact schema", () => {
   });
 
   it.skipIf(process.platform === "win32")("refuses a stored title carrying a bidi control even with a matching digest", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
+    const workspace = mkdtempSync(join(realpathSync(tmpdir()), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
     const codec = memoryCodec(binding);
@@ -66,7 +66,7 @@ describe("memory fact schema", () => {
   });
 
   it.skipIf(process.platform === "win32")("matches private store canonical bytes and hashes the complete nested record", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "memory-schema-"));
+    const workspace = mkdtempSync(join(realpathSync(tmpdir()), "memory-schema-"));
     const binding = await bindWorkspace(workspace, "memory-v1", performance.now() + 5000);
     const fact = makeFact(input, scopeFor(binding), id, sourceId, "2026-10-15T00:00:00.000Z");
     const { digest, ...unsigned } = fact;
