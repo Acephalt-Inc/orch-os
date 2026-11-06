@@ -11,18 +11,18 @@ import { Mailbox } from "./mailbox.js";
 import { parseToml } from "./toml.js";
 
 const TEMPLATE = fileURLToPath(new URL("../templates/handbook/everyday.md", import.meta.url));
-const BEGIN = "<!-- orch-os everyday: begin -->";
-const END = "<!-- orch-os everyday: end -->";
+const BEGIN = "<!-- orch-os simple: begin -->";
+const END = "<!-- orch-os simple: end -->";
 
 export function lfText(text: string): string { return text.replace(/\r\n?/g, "\n"); }
 
 function fail(io: IO, text: string): number { io.err(text + "\n"); return 2; }
 
-/** Handle `init --everyday`; validation is complete before the first write. */
-export function everydayInit(a: Args, io: IO): number {
-  const conflicts = ["force", "no_handbook", "compute", "people", "policy", "required_review", "max_workers"]
+/** Handle `init --simple`; validation is complete before the first write. */
+export function simpleInit(a: Args, io: IO): number {
+  const conflicts = ["force", "no_handbook", "compute", "people", "policy", "required_review", "max_workers", "everyday", "with_skills"]
     .filter((k) => a[k] !== null && a[k] !== undefined && a[k] !== false);
-  if (conflicts.length) return fail(io, `init: --everyday cannot be combined with --${conflicts[0].replaceAll("_", "-")}`);
+  if (conflicts.length) return fail(io, `init: --simple cannot be combined with --${conflicts[0].replaceAll("_", "-")}`);
   const home = C.orchHome();
   const config = C.configPath();
   let configText: string | null = null;
@@ -31,17 +31,17 @@ export function everydayInit(a: Args, io: IO): number {
     configText = readFileSync(config, "utf8");
     let parsed: Record<string, any>;
     try { parsed = parseToml(configText); }
-    catch { return fail(io, `init: existing config is not in everyday mode; fix it and add mode = "everyday" by hand, or use another ORCH_HOME`); }
-    if (parsed.orch?.mode !== "everyday") return fail(io, `init: existing config is not in everyday mode; add mode = "everyday" by hand, or use another ORCH_HOME`);
+    catch { return fail(io, `init: existing config is not in simple mode; fix it and add mode = "simple" by hand, or use another ORCH_HOME`); }
+    if (parsed.orch?.mode !== "simple") return fail(io, `init: existing config is not in simple mode; add mode = "simple" by hand, or use another ORCH_HOME`);
   }
   const dir = a.dir ? C.expand(a.dir) : join(home, "handbook");
-  const handbook = a.layout === "skills" ? join(dir, "everyday", "SKILL.md") : join(dir, "everyday.md");
-  if (/\r|\n/.test(handbook)) return fail(io, "init: the everyday handbook path must not contain a line break");
+  const handbook = a.layout === "skills" ? join(dir, "simple", "SKILL.md") : join(dir, "simple.md");
+  if (/\r|\n/.test(handbook)) return fail(io, "init: the simple handbook path must not contain a line break");
   if (configText !== null) {
     const parsed = parseToml(configText);
-    const configured = C.expand(parsed.handbook?.file ?? join(C.expand(parsed.handbook?.dir ?? join(home, "handbook")), "everyday.md"));
+    const configured = C.expand(parsed.handbook?.file ?? join(C.expand(parsed.handbook?.dir ?? join(home, "handbook")), "simple.md"));
     if (configured !== handbook)
-      return fail(io, `init: everyday handbook is already configured as ${configured}; remove it with \`rm ${config}\` before changing --dir or --layout`);
+      return fail(io, `init: simple handbook is already configured as ${configured}; remove it with \`rm ${config}\` before changing --dir or --layout`);
     configNeedsHandbookFile = parsed.handbook?.file === undefined;
   }
   const agentFile = join(process.cwd(), "CLAUDE.md");
@@ -51,7 +51,7 @@ export function everydayInit(a: Args, io: IO): number {
     if (!agentStat.isFile()) return fail(io, "init: CLAUDE.md must be a regular file");
     oldAgent = readFileSync(agentFile, "utf8");
     if ((oldAgent.split(BEGIN).length - 1) > (oldAgent.split(END).length - 1))
-      return fail(io, "init: CLAUDE.md has an everyday begin line without an end line");
+      return fail(io, "init: CLAUDE.md has a simple begin line without an end line");
   }
   const block = `${BEGIN}\nAt the start of every session, read \`${handbook}\` and follow it.\n${END}`;
   let newAgent = oldAgent;
@@ -64,7 +64,7 @@ export function everydayInit(a: Args, io: IO): number {
   mkdirSync(home, { recursive: true });
   if (configText === null) {
     const agents = D.installed();
-    configText = C.renderDefault(home, agents, agents[0]?.name, "everyday");
+    configText = C.renderDefault(home, agents, agents[0]?.name, "simple");
     if (a.dir) configText = configText.replace(`dir = ${JSON.stringify(join(home, "handbook"))}`, `dir = ${JSON.stringify(dir)}`);
     configText = configText.replace(`dir = ${JSON.stringify(dir)}`, `dir = ${JSON.stringify(dir)}\nfile = ${JSON.stringify(handbook)}`);
     writeFileSync(config, configText); io.out(`wrote ${config}\n`);
@@ -87,14 +87,14 @@ export function everydayInit(a: Args, io: IO): number {
 }
 
 /** Apply the mode-specific interpretation after doctor has collected its normal rows. */
-export function everydayDoctorRows(rows: [string, string, string][], cfg: Record<string, any> | null, dir: string): void {
+export function simpleDoctorRows(rows: [string, string, string][], cfg: Record<string, any> | null, dir: string): void {
   const mode = cfg?.orch?.mode;
-  if (mode !== undefined && mode !== "everyday") { rows.push(["FAIL", "mode", `unknown mode ${JSON.stringify(mode)}`]); return; }
-  if (mode !== "everyday") return;
-  const handbook = C.expand(cfg!.handbook?.file ?? join(dir, "everyday.md"));
+  if (mode !== undefined && mode !== "simple") { rows.push(["FAIL", "mode", `unknown mode ${JSON.stringify(mode)}`]); return; }
+  if (mode !== "simple") return;
+  const handbook = C.expand(cfg!.handbook?.file ?? join(dir, "simple.md"));
   let handbookStatus: [string, string] = existsSync(handbook)
     ? ["PASS", handbook]
-    : ["FAIL", `${handbook} is missing - run \`orch init --everyday\``];
+    : ["FAIL", `${handbook} is missing - run \`orch init --simple\``];
   const agentFile = join(process.cwd(), "CLAUDE.md");
   if (existsSync(agentFile)) {
     const text = readFileSync(agentFile, "utf8");
@@ -104,8 +104,8 @@ export function everydayDoctorRows(rows: [string, string, string][], cfg: Record
   }
   for (const row of rows) {
     if (row[1] === "handbook") row.splice(0, 3, handbookStatus[0], "handbook", handbookStatus[1]);
-    if (row[1] === "git" && row[0] === "FAIL") row.splice(0, 3, "SKIP", "git", "not needed in everyday mode");
-    if (row[1] === "gh (merge-gate live mode)" && row[0] === "SKIP") row[2] = "not needed in everyday mode";
-    if (row[1] === "merge repo" && row[0] === "SKIP") row[2] = "not needed in everyday mode";
+    if (row[1] === "git" && row[0] === "FAIL") row.splice(0, 3, "SKIP", "git", "not needed in simple mode");
+    if (row[1] === "gh (live GitHub commands)" && row[0] === "SKIP") row[2] = "not needed in simple mode";
+    if (row[1] === "merge repo" && row[0] === "SKIP") row[2] = "not needed in simple mode";
   }
 }

@@ -7,22 +7,33 @@ import { fileURLToPath } from "node:url";
 import { type Args, type CmdSpec, HelpRequested, parse, UsageError } from "./args.js";
 import * as C from "./config.js";
 import * as D from "./detect.js";
-import { everydayDoctorRows, everydayInit } from "./everyday.js";
+import { simpleDoctorRows, simpleInit } from "./everyday.js";
 import { Lease } from "./lease.js";
 import * as LD from "./load.js";
 import { LockLostError, LockTimeoutError } from "./lock.js";
 import { Mailbox } from "./mailbox.js";
 import { Mem, MemError } from "./mem.js";
+import { captureHook } from "./mem-capture.js";
 import * as M from "./mergegate.js";
 import { KINDS, MessageError, Messages, renderMessage, visible } from "./messages.js";
 import { HANDBOOK, targetFile, writeHandbook, type Layout } from "./handbook.js";
+import { type LeadDeps, leadSpec, runLead } from "./lead/cli.js";
+import { hostSpec, runHost } from "./host/install.js";
+import { runHook } from "./host/hooks.js";
 import * as P from "./profile.js";
 import * as RW from "./reviewwatch.js";
 import { dumps } from "./pyjson.js";
 import { TaskError, Tasks } from "./tasks.js";
 import { parseToml, TomlError } from "./toml.js";
+import { checkLatest, updateLine } from "./update.js";
 import { atomicWrite, defaultSession, isPlainObject, padEnd, sleep, sleepSync, which } from "./util.js";
 import { WorkerError, WorkerLimitError, Workers } from "./workers.js";
+import { ignoreClosedPipes } from "./closed-pipe.js";
+import { installSkill, shippedSkills, skillRows, skillsTarget, uninstallSkill } from "./skills.js";
+import { awakeCommandSpec } from "./service/awake-command.js";
+import type { AwakeRunner } from "./service/awake.js";
+import { serviceSpec, type ServiceDeps } from "./service/command.js";
+import { runSetup, setupSpec } from "./setup.js";
 
 export const VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")).version;
 
@@ -74,6 +85,7 @@ type Run = (a: Args, io: IO) => number | Promise<number>;
 
 const num = C.configNumber;
 const ConfigError = C.ConfigError;
+export const WINDOWS_WORKERS_UNAVAILABLE = "Windows support for workers and review watch is not available yet.";
 
 function lease(cfg: Record<string, any>): Lease {
   const l = cfg.lease ?? {};
@@ -107,7 +119,7 @@ function tasks(cfg: Record<string, any>): Tasks {
 
 function mem(cfg: Record<string, any>): Mem {
   const m = cfg.mem ?? {};
-  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1));
+  return new Mem(C.expand(m.dir ?? join(C.orchHome(), "mem")), num(m.index_max_lines, 200, "[mem] index_max_lines", 1), num(m.unverified_max_days, 90, "[mem] unverified_max_days", 1));
 }
 
 function handbookDir(cfg: Record<string, any>): string {
@@ -191,7 +203,7 @@ function askProfile(io: IO, found: string[]): Record<string, any> | null {
 }
 
 const cmdInit: Run = (a, io) => {
-  if (a.everyday) return everydayInit(a, io);
+  if (a.simple) return simpleInit(a, io);
   if (Boolean(a.compute) !== Boolean(a.people)) {
     eprintln(io, "init: --compute and --people go together: give both, or neither");
     return 2;
@@ -298,6 +310,11 @@ const cmdInit: Run = (a, io) => {
     if (wrote.length < rows.length) println(io, `kept ${rows.length - wrote.length} existing handbook file(s) in ${dir} (--force-handbook rewrites them)`);
     println(io, `boot: point each agent session at its role file, e.g. ${targetFile(dir, "lead-boot", layout)} (see docs/faq.md)`);
   }
+  if (a.everyday) println(io, "everyday skills: run `orch skills install` to add the skill pack to this workspace");
+  if (a.with_skills) {
+    const code = cmdSkillsInstall({ _path: ["orch", "skills", "install"], user: false, only: null, dry_run: false, force: false }, io);
+    if (code !== 0) return code;
+  }
   if (keptProblem) {
     // the kept block is unchanged byte for byte, and it is not usable: say so instead of "next: orch doctor"
     eprintln(io, `init: the kept [profile] cannot be used as it is: ${keptProblem}`);
@@ -328,6 +345,60 @@ const cmdAgents: Run = (a, io) => {
   return 0;
 };
 
+function selectedSkills(a: Args, io: IO): string[] | null {
+  const shipped = shippedSkills();
+  const selected = a.only === null ? shipped : [...new Set(String(a.only).split(",").map((name) => name.trim()))];
+  if (selected.some((name) => !shipped.includes(name))) {
+    eprintln(io, `skills: unknown skill in --only; choose from ${shipped.join(", ")}`);
+    return null;
+  }
+  return selected;
+}
+
+function skillsDestination(a: Args, io: IO): string | null {
+  if (a.user && a.scope === "workspace") {
+    eprintln(io, "skills: --user conflicts with --scope workspace");
+    return null;
+  }
+  return skillsTarget({ scope: a.user ? "user" : a.scope ?? "workspace", platform: a._platform });
+}
+
+const cmdSkillsInstall = (a: Args, io: IO): number => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${installSkill(name, target, Boolean(a.force), Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
+};
+
+const cmdSkillsStatus: Run = (a, io) => {
+  const target = skillsDestination(a, io);
+  if (!target) return 2;
+  const rows = skillRows(target);
+  if (a.json) println(io, JSON.stringify({ version: VERSION, skills: rows }));
+  else {
+    println(io, `skill pack ${VERSION}`);
+    for (const row of rows) println(io, `${row.name}: ${row.state}`);
+  }
+  return 0;
+};
+
+const cmdSkillsUninstall: Run = (a, io) => {
+  const selected = selectedSkills(a, io);
+  const target = skillsDestination(a, io);
+  if (!selected || !target) return 2;
+  let errors = 0;
+  for (const name of selected) {
+    try { println(io, `${name}: ${uninstallSkill(name, target, Boolean(a.dry_run))}`); }
+    catch (e: any) { eprintln(io, `${name}: ${e.message ?? e}`); errors++; }
+  }
+  return errors ? 1 : 0;
+};
+
 /** Is `p` a writable directory, or creatable under the nearest existing ancestor? */
 function dirUsable(p: string): boolean {
   let cur = p;
@@ -347,14 +418,25 @@ function dirUsable(p: string): boolean {
   }
 }
 
-const cmdDoctor: Run = (_a, io) => {
+const cmdDoctor: Run = (a, io) => {
   const rows: [string, string, string][] = [];
   const add = (ok: boolean, name: string, detail: string, optional = false) => {
     rows.push([ok ? "PASS" : optional ? "SKIP" : "FAIL", name, detail]);
   };
+  const findCommand = (name: string) => which(name, undefined, a._platform);
   const major = Number(process.versions.node.split(".")[0]);
-  add(major >= 20, "node>=20", process.versions.node);
-  add(process.platform !== "win32", "posix (process groups)", process.platform);
+  // the same floor as `engines.node` in package.json
+  add(major >= 22, "node>=22", process.versions.node);
+  try {
+    const skills = skillRows();
+    const installed = skills.filter((row) => row.state === "installed").length;
+    const modified = skills.filter((row) => row.state === "modified").length;
+    add(true, "skills", `${installed} installed/${skills.length} shipped, ${modified} modified${installed || modified ? "" : " (not installed)"}`);
+  } catch (e: any) {
+    add(true, "skills", `unavailable: ${e.message ?? e}`);
+  }
+  if (a._platform === "win32") add(true, "windows (no process groups)", "win32; workers and review watch are disabled");
+  else add(true, "posix (process groups)", process.platform);
   const p = C.configPath();
   let cfg: Record<string, any> | null = null;
   try {
@@ -417,22 +499,26 @@ const cmdDoctor: Run = (_a, io) => {
     const pb = handbookDir(cfg);
     const have = HANDBOOK.filter((n) => existsSync(targetFile(pb, n, "flat")) || existsSync(targetFile(pb, n, "skills")));
     add(have.length === HANDBOOK.length, "handbook", have.length === HANDBOOK.length ? pb : `${have.length}/${HANDBOOK.length} files in ${pb} - run \`orch init\``, true);
-    const git = which("git");
-    add(git !== null, "git", git ?? "not on PATH");
-    const gh = which("gh");
-    add(gh !== null, "gh (merge-gate live mode)", gh ?? "absent - fixtures still work", true);
+    const git = findCommand("git");
+    // git is used for worker worktrees only; workers do not run on Windows, so there it is optional
+    if (a._platform === "win32") add(git !== null, "git", git ?? "absent - only worker worktrees use it, and workers are not available on Windows", true);
+    else add(git !== null, "git", git ?? "not on PATH");
+    const gh = findCommand("gh");
+    add(gh !== null, "gh (live GitHub commands)", gh ?? "absent - fixtures still work", true);
     const repo = (cfg.merge ?? {}).repo ?? "";
     add(Boolean(repo), "merge repo", repo || "unset - pass --repo or use --fixture", true);
     const wcmd = ((cfg.workers ?? {}).command ?? [""])[0] ?? "";
-    add(Boolean(wcmd) && which(wcmd) !== null, "worker command",
-      wcmd ? which(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
-    const to = which("timeout") ?? which("gtimeout");
-    add(to !== null, "timeout (worker time limit)", to ?? "absent - workers run without a time limit", true);
+    add(Boolean(wcmd) && findCommand(wcmd) !== null, "worker command",
+      wcmd ? findCommand(wcmd) ?? `'${wcmd}' not on PATH - pass a command after --` : "none configured - use --agent or pass a command after --", true);
+    // Windows has a timeout.exe that only waits for a key press; it is not the worker time limit
+    const to = a._platform === "win32" ? null : findCommand("timeout") ?? findCommand("gtimeout");
+    add(to !== null, "timeout (worker time limit)", to ?? (a._platform === "win32" ? "not used - workers are not available on Windows" : "absent - workers run without a time limit"), true);
     const found = D.installed().map((x) => x.name);
-    add(found.length > 0, "agent CLIs", found.join(", ") || "none found (install one, then `orch init --force`)", true);
+    // detected on every run, never read from config.toml: the hint names a command that only reads
+    add(found.length > 0, "agent CLIs", found.join(", ") || `none found (this run looked for ${D.KNOWN.map((k) => k[0]).join(", ")}; \`orch agents\` lists each as found or absent)`, true);
     for (const [name, ag] of Object.entries<any>(cfg.agents ?? {}).sort(([x], [y]) => (x < y ? -1 : 1))) {
       const b = (ag.command ?? [""])[0] ?? "";
-      add(Boolean(b) && which(b) !== null, `agent ${name}`, b || "empty command", true);
+      add(Boolean(b) && findCommand(b) !== null, `agent ${name}`, b || "empty command", true);
     }
     const tier = LD.readState(loadPath(cfg)).tier;
     add(true, "load state", tier || "no sample yet (run `orch load`)");
@@ -449,7 +535,7 @@ const cmdDoctor: Run = (_a, io) => {
       for (const [ok, name, detail] of RW.doctorRows(cfg!, Date.now() / 1000)) add(ok, name, detail, true);
     });
   }
-  everydayDoctorRows(rows, cfg, cfg === null ? "" : handbookDir(cfg));
+  simpleDoctorRows(rows, cfg, cfg === null ? "" : handbookDir(cfg));
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [s, n, d] of rows) println(io, `${padEnd(s, 4)}  ${padEnd(n, w)}  ${d}`);
   const fails = rows.filter((r) => r[0] === "FAIL").length;
@@ -469,6 +555,23 @@ const cmdConfig: Run = (_a, io) => {
   println(io, `# resolved from ${C.configPath()}` + (existsSync(C.configPath()) ? "" : " (absent: defaults)"));
   println(io, dumps(cfg, 2));
   return 0;
+};
+
+/** The only caller of the registry check. One line on stdout; exit 0 for an answer, 1 without one. */
+const cmdUpdateCheck: Run = async (a, io) => {
+  const result = await checkLatest(VERSION, a._updateUrl);
+  try {
+    io.out(updateLine(VERSION, result) + "\n");
+  } catch {
+    // the line did not go out whole: say so where it can still be said, and fail
+    try {
+      io.err("orch update check: output failed\n");
+    } catch {
+      // no stream is left to say it on
+    }
+    return 1;
+  }
+  return result.kind === "unavailable" ? 1 : 0;
 };
 
 const cmdLease: Run = (a, io) => {
@@ -635,6 +738,10 @@ const cmdReview: Run = (a, io) => {
 
 /** `orch review watch`: 0 = reviewed, or (with --once / --dry-run) still waiting or dispatched; 1 = blocked, stale, error, timeout. */
 const cmdReviewWatch: Run = async (a, io) => {
+  if (a._platform === "win32") {
+    eprintln(io, WINDOWS_WORKERS_UNAVAILABLE);
+    return 2;
+  }
   const cfg = C.loadOrDefault();
   const prof = P.readProfile(cfg);
   if (!prof && a.tier) {
@@ -687,6 +794,10 @@ export function reviewStart(cfg: Record<string, any>, prof: P.Profile | null): (
 }
 
 const cmdWorker: Run = async (a, io) => {
+  if (a._platform === "win32" && (a._path[2] === "start" || a._path[2] === "stop")) {
+    eprintln(io, WINDOWS_WORKERS_UNAVAILABLE);
+    return 2;
+  }
   const cfg = C.loadOrDefault();
   const w = workers(cfg);
   try {
@@ -738,7 +849,8 @@ const cmdLoad: Run = (a, io) => {
   const path = loadPath(cfg);
   let st: Record<string, any>;
   try {
-    st = a.read ? LD.readState(path) : LD.step(cfg, path);
+    st = a.read ? LD.readState(path) : a._platform === "win32"
+      ? LD.step(cfg, path, LD.takeSample(cfg, a._platform)) : LD.step(cfg, path);
   } catch (e: any) {
     if (e instanceof SyntaxError) throw new ConfigError(`[load] renice_pattern is not a valid regular expression (${e.message})`);
     throw e;
@@ -851,6 +963,42 @@ const cmdMem: Run = (a, io) => {
   const m = mem(C.loadOrDefault());
   const action = a._path[2];
   try {
+    if (action === "capture") {
+      if (!a.from_hook) throw new MemError("capture requires --from-hook");
+      let input: unknown;
+      try {
+        const raw = io.stdin();
+        if (Buffer.byteLength(raw) > 16_384) throw new Error();
+        input = JSON.parse(raw);
+      } catch { throw new MemError("hook input must be valid JSON of at most 16 KB"); }
+      const e = captureHook(input, m, tasks(C.loadOrDefault()), { platform: a._platform });
+      println(io, `session draft ${e.name}: ${e.status}`);
+      return 0;
+    }
+    if (action === "accept" || action === "reject") {
+      const e = action === "accept" ? m.accept(a.name, a.title) : m.reject(a.name);
+      println(io, `${e.status} ${e.name}`);
+      return 0;
+    }
+    if (action === "lint") {
+      const rows = m.lint();
+      for (const r of rows) println(io, `${r.entry.name}: ${r.flags.join(", ")}`);
+      return rows.length ? 2 : 0;
+    }
+    if (action === "drafts") {
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      const rows = m.all().filter((e) => e.status === "draft").sort((a, b) => b.created_at.localeCompare(a.created_at) || a.name.localeCompare(b.name));
+      for (const e of rows) println(io, `${e.name} draft, unverified: ${clean(e.title ?? e.description, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
+    if (action === "recall") {
+      if (!a.boot) throw new MemError("recall requires --boot");
+      const { accepted, draft } = m.boot(a.limit ?? 8);
+      const clean = (s: string, max: number) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+      for (const e of accepted) println(io, `${clean(e.title ?? e.name, 120)} — ${clean(e.description, 180)} (${clean(e.created_at.slice(0, 10), 10)})`);
+      if (draft) println(io, `draft, unverified: ${clean(draft.title ?? draft.name, 120)} — ${clean(draft.description, 180)} (${clean(draft.created_at.slice(0, 10), 10)})`);
+      return 0;
+    }
     if (action === "add") {
       const text = a.message ?? (process.stdin.isTTY ? "" : safeStdin(io));
       const r = m.add(a.name, a.description, text, a.type ?? "note");
@@ -1029,6 +1177,56 @@ const cmdProfile: Run = (a, io) => {
   return showProfile(io, parseToml(next), false);
 };
 
+// ---- learning: its one input document ----------------------------------------------------------
+
+/** How long `orch learning` waits for standard input to end, in milliseconds: the wait of the module's own entry file. */
+const LEARNING_STDIN_DEADLINE_MS = 4500;
+
+/**
+ * All of standard input for `orch learning`, read as the module's own entry file reads it (that file runs a
+ * command when it is loaded, so it cannot be imported here): LIMIT over the cap, TIMEOUT at the deadline.
+ * At the cap or at the deadline the input is closed, so the process ends even when the other side never closes it.
+ */
+async function learningInput(): Promise<Uint8Array> {
+  const { LearningError, MAX_BYTES } = await import("./learning/schema.js");
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.off("error", onError);
+    };
+    // Give up on the input: stop listening and close it. Pausing is not enough, because a
+    // paused stream keeps reading ahead and an input that stays open would keep the process alive.
+    const abandon = (code: "TIMEOUT" | "LIMIT" | "INVALID_INPUT") => {
+      cleanup();
+      stdin.destroy();
+      reject(new LearningError(code));
+    };
+    const timer = setTimeout(() => abandon("TIMEOUT"), LEARNING_STDIN_DEADLINE_MS);
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BYTES) {
+        abandon("LIMIT");
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks));
+    };
+    const onError = () => abandon("INVALID_INPUT");
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+    stdin.resume();
+  });
+}
+
 // ---- the command tree -------------------------------------------------------------------------
 
 const opt = (dest: string, flags: string[], kind: "bool" | "str" | "int" | "float" | "list", help: string, extra: Partial<{ metavar: string; choices: string[] }> = {}) =>
@@ -1041,10 +1239,13 @@ export function buildTree(): CmdSpec<Run> {
     name: "orch",
     help: "ORCH-os: run several CLI coding agents as one team (lease, mailbox, messages, task claims, merge gate, workers, load governor, mem).",
     sub: [
+      serviceSpec(),
+      awakeCommandSpec(),
+      setupSpec((a, io) => runSetup(a, io, { tree: buildTree(), platform: a._platform })),
       {
         name: "init", help: "detect agent CLIs; write config.toml, the mailbox, and the role boot files + handbook", run: cmdInit,
         opts: [
-          opt("everyday", ["--everyday"], "bool", "set up notes, tasks and messages for everyday work"),
+          opt("simple", ["--simple"], "bool", "set up notes, tasks and messages in an ordinary folder without Git"),
           opt("no_agent_file", ["--no-agent-file"], "bool", "do not write CLAUDE.md in the current folder"),
           opt("force", ["--force"], "bool", "rewrite config.toml from defaults + fresh detection"),
           opt("agent", ["--agent"], "str", "default worker agent (default: first detected)"),
@@ -1058,11 +1259,46 @@ export function buildTree(): CmdSpec<Run> {
           opt("required_review", ["--required-review"], "str", "profile: weakest agent review that passes (no default)", { choices: P.STRENGTHS }),
           opt("max_workers", ["--max-workers"], "int", "profile: most workers running at once, an integer >= 1 (no default)", { metavar: "N" }),
           opt("no_profile", ["--no-profile"], "bool", "on a terminal, skip the profile questions and write no [profile]"),
+          opt("everyday", ["--everyday"], "bool", "show how to add the everyday skill pack"),
+          opt("with_skills", ["--with-skills"], "bool", "install the skill pack in this workspace"),
+        ],
+      },
+      {
+        name: "skills", help: "install or inspect the bundled skill pack",
+        sub: [
+          { name: "install", help: "copy bundled skills into .claude/skills", run: cmdSkillsInstall, opts: [
+            opt("user", ["--user"], "bool", "install in the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+            opt("force", ["--force"], "bool", "back up and replace modified skills"),
+          ] },
+          { name: "status", help: "show each bundled skill and its installed state", run: cmdSkillsStatus, opts: [
+            JSON_OPT,
+            opt("user", ["--user"], "bool", "inspect the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+          ] },
+          { name: "uninstall", help: "remove owned, unchanged bundled skills", run: cmdSkillsUninstall, opts: [
+            opt("user", ["--user"], "bool", "remove from the home skills directory"),
+            opt("host", ["--host"], "str", "target host", { choices: ["claude"] }),
+            opt("scope", ["--scope"], "str", "workspace or user", { choices: ["workspace", "user"] }),
+            opt("only", ["--only"], "str", "comma-separated skill names"),
+            opt("dry_run", ["--dry-run"], "bool", "show actions without writing files"),
+          ] },
         ],
       },
       { name: "agents", help: "list known agent CLIs: installed? configured?", run: cmdAgents, opts: [JSON_OPT] },
       { name: "doctor", help: "PASS/FAIL per prerequisite; exit 1 on any FAIL", run: cmdDoctor },
       { name: "config", help: "print the resolved configuration", run: cmdConfig },
+      leadSpec(),
+      hostSpec(),
+      { name: "hook", help: "run a Claude host hook with JSON input", pos: [{ dest: "name", choices: ["session-start", "pre-tool-guard", "stop-continue"] }] },
+      {
+        name: "update", help: "ask the npm registry for the latest version",
+        sub: [{ name: "check", help: "one request to the npm registry, one line; installs nothing, writes no file; exit 1 when unavailable", run: cmdUpdateCheck }],
+      },
       {
         name: "lease", help: "single-holder role lease", run: cmdLease,
         pos: [{ dest: "action", choices: ["status", "acquire", "renew", "release"] }],
@@ -1251,14 +1487,51 @@ export function buildTree(): CmdSpec<Run> {
           { name: "retire", help: "mark an entry retired (the file is kept) and record what supersedes it", run: cmdMem, pos: [{ dest: "name" }],
             opts: [opt("superseded_by", ["--superseded-by"], "str", "the entry that replaces it", { metavar: "NAME" }),
               opt("reason", ["--reason"], "str", "one line: why it no longer holds")] },
+          { name: "capture", help: "create an unverified session draft from Claude hook JSON on stdin", run: cmdMem,
+            opts: [opt("from_hook", ["--from-hook"], "bool", "read SessionEnd or PreCompact hook JSON")] },
+          { name: "accept", help: "accept a captured draft", run: cmdMem, pos: [{ dest: "name" }],
+            opts: [opt("title", ["--title"], "str", "short title for boot recall")] },
+          { name: "reject", help: "reject a captured draft permanently", run: cmdMem, pos: [{ dest: "name" }] },
+          { name: "drafts", help: "list unverified captured drafts without bodies", run: cmdMem },
+          { name: "recall", help: "compact boot recall of accepted notes and the newest draft", run: cmdMem,
+            opts: [opt("boot", ["--boot"], "bool", "print boot summary"), opt("limit", ["--limit"], "int", "accepted note limit (1-20)")] },
+          { name: "lint", help: "flag expired, superseded, invalid-date and stale unverified entries", run: cmdMem },
         ],
+      },
+      {
+        name: "resume", help: "a private continuation note for one workspace: save, show, forget (shown as unverified caller text)",
+        run: async (a) => (await import("./resume/command.js")).main(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "preference", help: "personal display preferences for one workspace: set, show, unset (response language, answer length)",
+        run: async (a) => (await import("./preferences/command.js")).runPreferenceCommand(a.argv),
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "knowledge", help: "synthetic demo; no service connected: looks up one fixed question in the built-in corpus",
+        run: async (a, io) => {
+          const { main: knowledge } = await import("./knowledge/command.js");
+          const { createDemoTransport } = await import("./knowledge/demo.js");
+          return knowledge(a.argv, io, { transport: createDemoTransport(), now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
+      },
+      {
+        name: "learning", help: "drafts only; nothing is applied: review, show, reject proposed display settings and quoted notes",
+        run: async (a, io) => {
+          const { main: learning } = await import("./learning/command.js");
+          return learning(a.argv, { read: learningInput, out: (s) => io.out(s), err: (s) => io.err(s) }, { now: () => new Date() });
+        },
+        pos: [{ dest: "argv", variadic: true }],
       },
     ],
   };
 }
 
 /** Run the CLI. Returns the exit code; never calls process.exit itself. */
-export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO): Promise<number> {
+export async function main(argv: string[] = process.argv.slice(2), io: IO = processIO,
+  runtime: { platform?: NodeJS.Platform; updateUrl?: string; service?: ServiceDeps; awake?: AwakeRunner } = {}): Promise<number> {
   argv = [...argv];
   let rest: string[] = [];
   // everything after the first `--` is a worker command, never parsed as options
@@ -1271,6 +1544,34 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     println(io, `orch ${VERSION}`);
     return 0;
   }
+  // `resume` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "resume") argv = ["resume", "--", ...argv.slice(1)];
+  // `preference` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "preference") argv = ["preference", "--", ...argv.slice(1)];
+  // `knowledge` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "knowledge") argv = ["knowledge", "--", ...argv.slice(1)];
+  // `learning` reads its own arguments: everything typed after the name reaches it unchanged, as plain words
+  if (argv[0] === "learning") argv = ["learning", "--", ...argv.slice(1)];
+  if (argv[0] === "memory") {
+    if (argv.length === 1 || argv[1] === "semantic") {
+      return (await import("./memory-semantic/command.js")).runSemanticCommand(argv.slice(1), io);
+    }
+    return (await import("./memory/command.js")).runMemoryCommand(argv.slice(1), io);
+  }
+  if (argv[0] === "vectors") {
+    try {
+      return await (await import("./vectors-local/command.js")).runVectorsCommand(argv.slice(1), io);
+    } catch {
+      io.err("vectors connect-local: REFUSED\n");
+      return 1;
+    }
+  }
+  // `orch lead ...` runs here, before any configuration is read (see src/lead/cli.ts).
+  if (argv[0] === "lead") {
+    return runLead(argv.slice(1), { ...(io === processIO ? {} : { out: io.out, err: io.err }), ...(runtime as { lead?: LeadDeps }).lead });
+  }
+  if (argv[0] === "host") return runHost(argv.slice(1), io);
+  if (argv[0] === "hook") return runHook(argv.slice(1), io);
   const tree = buildTree();
   let parsed;
   try {
@@ -1287,6 +1588,11 @@ export async function main(argv: string[] = process.argv.slice(2), io: IO = proc
     throw e;
   }
   const { args, cmd } = parsed;
+  args._platform = runtime.platform ?? process.platform;
+  args._service = runtime.service;
+  args._awake = runtime.awake;
+  // only a caller of main() can name another address (the tests' local registry); no option or variable does
+  args._updateUrl = runtime.updateUrl;
   args.cmd = rest;
   if (cmd.name === "add" && args._path[1] === "mem" && (args.description === null || args.description === undefined)) {
     eprintln(io, `usage: ${cmd.usage}\norch: error: the following arguments are required: --description`);
@@ -1328,7 +1634,42 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
-  main().then((code) => {
+  const autoAllowed = ["agents", "doctor"].includes(process.argv[2] ?? "")
+    || (process.argv[2] === "lease" && process.argv[3] === "status" && process.argv.length === 4);
+  ignoreClosedPipes();
+  const entryArgs = process.argv.slice(2);
+  const updateControl = entryArgs[0] === "update"
+    && ["off", "on", "status", "auto"].includes(entryArgs[1] ?? "");
+  (async () => {
+    if (!autoAllowed && !updateControl) return main();
+    const auto = await import("./update-auto.js");
+    const home = C.orchHome();
+    if (entryArgs[0] === "update" && entryArgs[1] === "off" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, false);
+      process.stdout.write("weekly update check: off\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "on" && entryArgs.length === 2) {
+      auto.setAutoUpdate(home, true);
+      process.stdout.write("weekly update check: on\n");
+      return 0;
+    }
+    if (entryArgs[0] === "update" && entryArgs[1] === "status" && entryArgs.length === 2) {
+      process.stdout.write(auto.statusText(home));
+      return 0;
+    }
+    if (entryArgs.join(" ") === "update auto --background") {
+      await auto.runAutoUpdate(home, VERSION);
+      return 0;
+    }
+    const code = await main();
+    if (autoAllowed) {
+      const notice = auto.consumeNotice(home);
+      if (notice) process.stderr.write(`${notice}\n`);
+      auto.scheduleAutoUpdate(fileURLToPath(import.meta.url), home);
+    }
+    return code;
+  })().then((code) => {
     process.exitCode = code;
   }, (e) => {
     // like v1.1's uncaught traceback: message on stderr, exit 1

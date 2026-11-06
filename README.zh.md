@@ -19,14 +19,32 @@ ORCH-os 协调同一仓库中的多个命令行编程代理。由租约确定的
 
 作者：[Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
+## 用 Claude Code 或 Codex 安装
+
+把本仓库的网址交给你的编程助手：在任意文件夹里打开 Claude Code 或 Codex，说“Install ORCH OS from https://github.com/Acephalt-Inc/orch-os”。助手会读 [AGENTS.md](AGENTS.md)（与 [CLAUDE.md](CLAUDE.md) 内容相同），在 macOS 或 Windows 上完成其余步骤：缺 Node.js 时先装上，从本仓库源码编译安装 ORCH-os，设置一个工作文件夹，用 `orch doctor` 检查，最后告诉你平时要用的一两条命令。
+
 ## 安装
 
-需要 Node.js 22 或更高版本（推荐 24 LTS），以及 macOS 或 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
+`orch lead boot` 获取或续租负责人租约并保存重启记录。`orch lead tick --approved` 使用持久游标检查一批事件。此首个切片尚不支持调度、唤醒助手、派发工作进程或记忆集成。详见[负责人运行命令](docs/lead-runtime.md)。
+
+需要 Node.js 22 或更高版本（推荐 24 LTS），支持 Windows 10 或 11、macOS 和 Linux。可以全局安装 `orch`，也可以用 `npx` 临时运行：
 
 ```sh
 npm i -g orch-os
 # 或：npx orch-os init
 ```
+
+也可以把下面这一句话粘贴给能在你机器上运行命令的编程助手：
+
+```text
+请严格按照 https://github.com/Acephalt-Inc/orch-os 仓库中的 docs/INSTALL-WITH-AGENT.md 一步一步在这台机器上安装 ORCH-os，文件要求停下时就停下并告诉我。
+```
+
+在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。详见 [docs/windows.md](docs/windows.md)。
+
+## 在普通文件夹中使用
+
+运行 `orch init --simple`，即可在不使用 Git 的文件夹里建立共享笔记、任务、消息和一本简明手册；随后运行 `orch doctor` 检查。`orch init --everyday` 只提示如何添加日常技能包；安装技能包请使用 `--with-skills`。
 
 ## 为什么选择 ORCH-os
 
@@ -157,6 +175,7 @@ orch worker list                            # 查看工作进程
 orch merge-gate 101 --fixture approved      # 使用离线样例试运行闸门
 orch load                                   # 采样机器负载
 orch mem search review                      # 搜索长期笔记
+orch lead install --workspace PATH --host claude  # 在新工作区创建负责人文本包
 ```
 
 完整参数和退出码见[命令参考](docs/commands.md)。
@@ -182,12 +201,17 @@ orch mem search review                      # 搜索长期笔记
 
 - [概念](docs/concepts.md) — 角色、租约、消息、认领、工作进程和笔记。
 - [命令](docs/commands.md) — 子命令、参数、退出码和配置。
+- [负责人文本包](docs/lead-install.md) — `orch lead install`、`status` 和 `uninstall`：把给负责人助手的说明文件放进一个新工作区。安装不会改动已存在的文件。已在 macOS 上实测；Windows 未验证。
 - [配置档](docs/profiles.md) — 声明的评审背景、`human-merge` 示例策略、每次判定报告的评审标签，以及如何迁移为已移除的内置策略表编写的配置档。
 - [常见问题](docs/faq.md) — Claude Code 与 Codex CLI 的设置、GitHub 身份和常见疑问。
 - [架构](docs/architecture.md) — 模块、本地状态文件和进程模型。
 - [迁移](docs/migration.md) — 从 v1.1 迁移到 v2。
 - [测试对应表](docs/tests-map.md) — v1.1 与 v2 测试的对应关系。
 - [演示](docs/DEMO.md) — 离线演示脚本。
+- [续接笔记](docs/resume.md) — `orch resume`：一个工作区一条私有续接笔记（保存、显示、忘记）。
+- [显示偏好](docs/preferences.md) — `orch preference`：为一个工作区明确设置回答语言或回答长度（设置、显示、取消）。
+- [知识查询演示](docs/knowledge.md) — `orch knowledge`：合成演示，在内置语料中查询两个固定问题；没有连接任何服务。
+- [学习草稿](docs/learning.md) — `orch learning`：根据标准输入的一份文档，生成显示设置建议和引用笔记的草稿（review、show、reject）；不会应用任何内容。
 
 ## 许可证
 

@@ -19,12 +19,14 @@ export function targetFile(dir: string, name: string, layout: Layout): string {
   return layout === "skills" ? `${dir}/${name}/SKILL.md` : `${dir}/${name}.md`;
 }
 
-export function writeHandbook(dir: string, layout: Layout = "flat", force = false): { file: string; action: "wrote" | "kept" }[] {
+export function writeHandbook(dir: string, layout: Layout = "flat", force = false, templateDir = TEMPLATE_DIR,
+  platform: NodeJS.Platform = process.platform): { file: string; action: "wrote" | "kept" }[] {
   return HANDBOOK.map((name) => {
     const file = targetFile(dir, name, layout);
     if (existsSync(file) && !force) return { file, action: "kept" as const };
     mkdirSync(file.slice(0, file.lastIndexOf("/")), { recursive: true });
-    writeFileSync(file, readFileSync(`${TEMPLATE_DIR}${name}.md`, "utf8"));
+    const text = readFileSync(`${templateDir}${name}.md`, "utf8");
+    writeFileSync(file, platform === "win32" ? text.replace(/\r\n?/g, "\n") : text);
     return { file, action: "wrote" as const };
   });
 }

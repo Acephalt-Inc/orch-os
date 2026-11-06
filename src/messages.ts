@@ -16,7 +16,7 @@
  * `acked` holds acked ids above it. Pending = addressed to the reader and not acked. Acks are
  * idempotent; a reader can ack only messages addressed to it. Reading never acks by itself.
  */
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { withLock } from "./lock.js";
@@ -77,7 +77,7 @@ export class Messages {
     return this.all().find((m) => m.id === id);
   }
 
-  send(from: string, to: string, kind: string, body: string, replyTo?: string | null, now?: Date): Message {
+  send(from: string, to: string, kind: string, body: string, replyTo?: string | null, now?: Date, id?: string): Message {
     const k = kind.toUpperCase();
     if (!(KINDS as readonly string[]).includes(k)) throw new MessageError(`unknown kind '${kind}'; use one of ${KINDS.join(", ")}`);
     if (!validName(from)) throw new MessageError(`bad sender '${from}': use letters, digits, . @ _ -`);
@@ -85,8 +85,17 @@ export class Messages {
     if (!body.trim()) throw new MessageError("empty message");
     if (Buffer.byteLength(body) > MAX_BODY) throw new MessageError(`message too long (limit ${MAX_BODY} bytes)`);
     if (k === "ANSWER" && !replyTo) throw new MessageError("an ANSWER needs --reply-to <QUESTION id>");
+    if (id !== undefined && !/^[a-zA-Z0-9._@-]+$/.test(id)) throw new MessageError("bad message id");
     mkdirSync(dirname(this.path), { recursive: true });
     return withLock(this.lock, () => {
+      const normalized = body.replace(/\s+$/, "");
+      if (id) {
+        const old = this.get(id);
+        if (old) {
+          if (old.from !== from || old.to !== to || old.kind !== k || old.body !== normalized || old.reply_to !== (replyTo ?? null)) throw new MessageError(`message id ${id} has different content`);
+          return old;
+        }
+      }
       if (replyTo) {
         const q = this.get(replyTo);
         if (!q) throw new MessageError(`--reply-to ${replyTo}: no such message`);
@@ -94,11 +103,12 @@ export class Messages {
       }
       // the highest valid seq, read under the lock (a foreign or torn last line cannot reset it)
       const seq = this.all().reduce((mx, m) => Math.max(mx, m.seq), 0) + 1;
-      const msg: Message = { seq, id: randomUUID(), ts: stamp(now), from, to, kind: k as Kind, reply_to: replyTo ?? null, body: body.replace(/\s+$/, "") };
+      const msg: Message = { seq, id: id ?? randomUUID(), ts: stamp(now), from, to, kind: k as Kind, reply_to: replyTo ?? null, body: normalized };
       // one write() of one line: readers never see half a message from a live writer
       // if an earlier writer died mid-line, start on a fresh line so this message stays readable
       const sep = endsWithNewline(this.path) ? "" : "\n";
-      appendFileSync(this.path, sep + dumps(msg) + "\n");
+      const fd = openSync(this.path, "a", 0o600);
+      try { writeSync(fd, sep + dumps(msg) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
       return msg;
     });
   }

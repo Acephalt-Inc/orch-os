@@ -118,7 +118,11 @@ class Parser {
           const n = e === "u" ? 4 : 8;
           const hex = this.s.slice(this.i, this.i + n);
           if (!new RegExp(`^[0-9A-Fa-f]{${n}}$`).test(hex)) this.err("bad unicode escape");
-          out += String.fromCodePoint(parseInt(hex, 16));
+          const codePoint = parseInt(hex, 16);
+          if (codePoint > 0x10FFFF || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+            this.err("bad unicode escape");
+          }
+          out += String.fromCodePoint(codePoint);
           this.i += n;
         } else this.err(`bad escape \\${e ?? ""}`);
       } else out += c;

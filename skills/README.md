@@ -1,42 +1,38 @@
-# ORCH-os skill pack (draft)
+# ORCH-os skill pack
 
-Status: **draft.** No `orch` command installs these files, and they are not part of the
-npm package. This release installs the role handbook that `orch init` writes
-(`lead-boot.md`, `worker-boot.md`, `review-boot.md`, `protocols.md`); that handbook is
-all a team needs. A skill here is an optional recipe a person chooses to use: copy its
-folder into your agent's skills directory by hand to try it.
+Install the bundled skills for Claude in a workspace or for your user account:
 
-These are agent skills for running a team of CLI coding agents with ORCH-os: what to do
-when the human leaves, returns or goes to sleep, how to fan one goal out, how to merge
-safely, how to keep research and decisions findable. None of them grants an agent any
-authority it did not already have, and none is a product mode or an installed service.
-Each skill is one folder with a `SKILL.md` (YAML frontmatter `name` + `description`,
-then the procedure) in the format Claude Code loads from
-`.claude/skills/<name>/SKILL.md`. Other agent CLIs can read the same files as plain
-Markdown.
+```sh
+orch skills install --host claude --scope workspace
+orch skills install --host claude --scope user
+orch skills status --host claude --scope workspace
+orch skills uninstall --host claude --scope workspace
+```
 
-They use ORCH-os primitives (`orch msg`, `orch mailbox`, `orch task`, `orch worker`,
-`orch merge-gate`, `orch mem`, `orch load`) and keep their own state under
-`$ORCH_HOME` (default `~/.orch`).
+Use `--dry-run` to preview changes and `--only away,back` to select skills when
+installing or uninstalling. `orch init --everyday` shows the install command;
+`orch init --everyday --with-skills` installs the pack in the current workspace.
+Claude Code loads workspace skills from `.claude/skills/<name>/SKILL.md` and user
+skills from `~/.claude/skills/<name>/SKILL.md`. The installer preserves user files;
+where replacement is authorized it makes a backup, and uninstall removes only
+installer-owned material. Skills are optional instructions, not services, and grant
+no extra authority.
 
-## The skills
-
-| Skill | Use it when | State it keeps |
-|---|---|---|
-| `away` | the human leaves and the team keeps working | `$ORCH_HOME/away.json` |
-| `back` | the human returns: one delta report and the queued decisions | reads `away.json`, archives it |
-| `sleep` | everything stops for the night; the morning restarts from a snapshot | `$ORCH_HOME/sleep.json` |
-| `caffeine` | the machine must stay awake while the team works unattended | `$ORCH_HOME/caffeine.pid` |
-| `night-shift` | overnight work limited to reversible, zero-cost tasks | `$ORCH_HOME/night.json` |
-| `insight` | reading material: teach it, then add only insight that survives a test | a pointer in `orch mem` |
-| `research-library` | research that must stay findable: a fixed folder contract plus an index | `$ORCH_HOME/research/` |
-| `record` | writing a durable trace of a decision, finding or incident | — |
-| `progress` | percent complete per project, from milestones with evidence | `$ORCH_HOME/progress.json` |
-| `orch-swarm` | one goal as parallel work: task graph, claims, evidence-based acceptance | `orch task` claims |
-| `serial-merge` | merging: one PR at a time, gate first, re-check after each | — |
-| `orch-advisor` | optional diagnosis recipe when a worker is stuck: a read-only diagnosis by a fresh agent, then test it by running | `$ORCH_HOME/advisor/` |
-| `product-demo-storyboard` | planning a 30–60 second product demo video | — |
-
-Pairs: `away` ↔ `back`; `sleep` ↔ the next morning's lead boot (the handbook's
-`lead-boot.md`); `caffeine` usually runs with `away` or `night-shift`; `insight` feeds
-`research-library`; `orch-swarm` may hand a stuck task to `orch-advisor`.
+| Skill | Use it when |
+|---|---|
+| `away` | work continues while the person is away |
+| `back` | the person returns and needs a delta report |
+| `caffeine` | a machine must stay awake for bounded work |
+| `daily-brief` | a ranked morning operating brief is needed |
+| `decision-inbox` | decisions need evidence and recommendations |
+| `insight` | material needs a teaching digest and tested insights |
+| `night-shift` | overnight work is restricted to reversible, zero-cost actions |
+| `ops-followup` | commitments and follow-up drafts need tracking |
+| `orch-advisor` | a reproduced problem needs independent diagnosis |
+| `orch-swarm` | one goal benefits from parallel task ownership |
+| `product-demo-storyboard` | a short product demo needs a storyboard |
+| `progress` | project milestones need an evidence-backed progress report |
+| `record` | a decision, finding, incident, or handoff needs a durable record |
+| `research-library` | research and its sources need a reusable archive |
+| `serial-merge` | reviewed PRs need a serial human-merge handoff |
+| `sleep` | the team should stop safely and save restart state |

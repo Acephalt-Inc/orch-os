@@ -1,6 +1,6 @@
 ---
 name: orch-advisor
-description: Optional diagnosis recipe. Ask a fresh agent, read-only, to diagnose a problem the working agent cannot solve. It returns a falsifiable five-section diagnosis that the working agent then tests by running. Use when a worker is repeatedly BLOCKED on the same kind of problem, reaches the retry limit its operator set, or reports "underdetermined", and for a single deep question (root cause, cost anomaly, what a check really verifies). Not for missing permission, money decisions, or a missing log or instrument.
+description: Use for an independent read-only diagnosis of a reproduced technical problem or a worker that has exhausted its configured retry limit. Exclude missing permissions, funding, and missing evidence.
 ---
 
 # /orch-advisor — an optional read-only diagnosis recipe

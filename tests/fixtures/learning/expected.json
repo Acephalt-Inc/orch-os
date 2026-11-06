@@ -1,0 +1,10 @@
+{
+  "frozen_now": "2026-10-13T12:00:00.000Z",
+  "revision": 1,
+  "draft_event_ids": ["check-dates", "short-answers"],
+  "lesson": "Check invoice dates before drafting a reminder.",
+  "setting": {"key":"answer-length","before":"normal","before_known":true,"expected_settings_revision":3,"after":"short"},
+  "setting_without_snapshot": {"key":"answer-length","before":null,"before_known":false,"expected_settings_revision":null,"after":"short"},
+  "revision_after_reject": 2,
+  "draft_event_ids_after_reject": ["check-dates"]
+}

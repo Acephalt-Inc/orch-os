@@ -19,30 +19,50 @@ ORCH-os helps several CLI coding agents work in one repository. A lease-held lea
 
 Author: [Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
+## Install with Claude Code or Codex
+
+Give this repository's URL to your coding agent: open Claude Code or Codex in any folder and say "Install ORCH OS from https://github.com/Acephalt-Inc/orch-os". The agent reads [AGENTS.md](AGENTS.md) (the same text as [CLAUDE.md](CLAUDE.md)) and does the rest on macOS or Windows: it installs Node.js if it is missing, builds ORCH-os from this source, sets up a workspace, checks it with `orch doctor`, and tells you the one or two commands you will use.
+
 ## Install
 
-Requires Node.js 22 or newer (24 LTS recommended) on macOS or Linux. Install the `orch` command globally, or run it once with `npx`:
+Requires Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or Linux. Install the `orch` command globally, or run it once with `npx`:
 
 ```sh
 npm i -g orch-os
-# or: npx orch-os init
+# or: npx orch-os setup
 ```
+
+Quick start: `npx orch-os setup` — [set up Claude Code in one command](docs/setup.md).
+
+Or paste this one sentence to a coding assistant that can run commands on your machine:
+
+```text
+Install ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.
+```
+
+On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
+
+Install the 16 [daily and operator skills](skills/README.md) for Claude Code with `orch skills install --host claude --scope workspace` (or `--scope user`); inspect or remove them with `orch skills status` and `orch skills uninstall` using the same scope. See the [skills command reference](docs/commands.md#orch-skills).
+Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher and optional health checks on macOS or Windows and inspect their scheduler state.
+Use [`orch awake`](docs/commands.md#orch-awake) to prevent idle system sleep until a deadline.
 
 ## Install with Claude Code
 
-This sets up shared notes, tasks, messages and one everyday handbook in the current folder.
+This sets up shared notes, tasks, messages and one simple handbook in the current folder.
 
 ```text
-Set up ORCH-os for everyday use in this folder. Run the steps in order and show me the output of each.
+Set up ORCH-os in simple mode in this folder. Run the steps in order and show me the output of each.
 1. Run `node --version`. If the command is missing or the version is below 22, stop and tell me to install Node.js 22 or newer from nodejs.org.
 2. Run `npm install -g orch-os`. If it fails, stop and show me the error line. Do not use sudo or an administrator shell.
-3. Run `orch init --everyday`, then `orch doctor`. If either prints `orch: error`, stop and show me that line.
+3. Run `orch init --simple`, then `orch doctor`. If either prints `orch: error`, stop and show me that line.
 4. If the last line is `doctor: PASS (0 required check(s) failed)`, show me that line, then read the file named on the `handbook:` line and follow it. If not, show me every line that starts with `FAIL` and stop.
 ```
 
 State lives under `~/.orch` (or `$ORCH_HOME`) and is shared by every folder of that user.
 
 ## Why ORCH-os
+
+The lead pack describes how Claude Code boots, arms its watcher and timer, and checks approved work while you are away. `orch lead boot` saves its place; `orch lead tick --approved` inspects events; an approved dispatch can launch another task after the previous completion is verified and consumed. Host wake must be verified in your session. See the [boot → wake → tick guide](docs/lead-runtime.md).
 
 One coding agent needs a prompt. A team of agents needs an operating layer: someone leads, work has one owner, messages are delivered and answered, a merge waits for a review by someone other than the author, and notes survive the session. ORCH-os provides that layer as local commands over plain files. You provide the agent accounts, and you make the final acceptance and merge decision.
 
@@ -108,6 +128,7 @@ The comment-based option is a process gate between cooperating agents, not a sec
 | Feature | Command or file |
 |---|---|
 | Add, search, and retire file-backed notes | `orch mem` |
+| Capture session drafts and review compact boot recall | `orch mem capture`, `orch mem recall --boot` ([guide](docs/commands.md#orch-mem)) |
 
 ### Policy and approvals
 
@@ -171,7 +192,11 @@ orch worker list                            # Show workers
 orch merge-gate 101 --fixture approved      # Try the gate with an offline fixture
 orch load                                   # Sample machine load
 orch mem search review                      # Search durable notes
+orch lead install --workspace PATH --host claude  # Create the lead text pack in a new workspace
+orch host install --workspace PATH --host claude  # Add permissions and continuation hooks; see docs/host.md
 ```
+
+See [Claude host permission presets](docs/host.md#permission-presets) for every allowed rule and its safety limits.
 
 Full flags and exit codes: [Command reference](docs/commands.md).
 
@@ -196,12 +221,17 @@ The commands above apply a few rules. Each row names the command that applies it
 
 - [Concepts](docs/concepts.md) — roles, leases, messages, claims, workers, and notes.
 - [Commands](docs/commands.md) — subcommands, flags, exit codes, and configuration.
+- [Lead pack](docs/lead-install.md) — `orch lead install`, `status` and `uninstall`: instruction files for a lead assistant in one new workspace. Install never changes a file that already exists. Measured on macOS; unverified on Windows.
 - [Profiles](docs/profiles.md) — declared review context, the `human-merge` example policy, the review label each verdict reports, and migrating a profile written for the removed built-in table.
 - [FAQ](docs/faq.md) — Claude Code and Codex CLI setup, GitHub identity, and common questions.
 - [Architecture](docs/architecture.md) — modules, local state files, and process model.
 - [Migration](docs/migration.md) — moving from v1.1 to v2.
 - [Test map](docs/tests-map.md) — correspondence between v1.1 and v2 tests.
 - [Demo](docs/DEMO.md) — a scripted offline walkthrough.
+- [Continuation notes](docs/resume.md) — `orch resume`: a private continuation note for one workspace (save, show, forget).
+- [Display preferences](docs/preferences.md) — `orch preference`: an explicit response language or answer length for one workspace (set, show, unset).
+- [Knowledge demo](docs/knowledge.md) — `orch knowledge`: a synthetic demo that looks up two fixed questions in a built-in corpus; no service is connected.
+- [Learning drafts](docs/learning.md) — `orch learning`: drafts of proposed display settings and quoted notes from one document on standard input (review, show, reject); nothing is applied.
 
 ## License
 

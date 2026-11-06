@@ -1,6 +1,6 @@
 # Command reference
 
-All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read-only commands use built-in defaults when the file does not exist yet. A malformed config gives exit 2 with a one-line message. Every command accepts `-h`/`--help`; a usage error exits 2.
+ORCH-os keeps its settings in `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`); `orch init` writes the file and `orch config` prints the values in effect. When the file does not exist yet, `doctor` reports that as a `FAIL  config` row and exits 1, `profile update` exits 2 and asks for `orch init`, and the other commands that read the file start from built-in defaults. `update check`, `resume`, `preference`, `knowledge` and `learning` do not read the file. Every command accepts `-h`/`--help` without reading the file; a usage error exits 2.
 
 | Environment variable | Effect |
 |---|---|
@@ -9,12 +9,16 @@ All commands read `$ORCH_HOME/config.toml` (default `~/.orch/config.toml`). Read
 | `ORCH_SESSION_ID` | Default `--session` for `lease`; second fallback for `--as` (then `user@host`) |
 | `ORCH_AGENT_DIRS` | Colon-separated dirs searched for agent CLIs after PATH; empty string = PATH only |
 
-Exit codes shared by all commands: `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
+Exit codes shared by all other commands (see the sections below for `resume`, `preference`, `knowledge` and `learning`): `0` ok · `1` a "no" answer (`doctor` FAIL, `merge-gate` BLOCKED, `mem search` no hits, `update check` unavailable) or an unexpected error · `2` usage, input or config error, including a lock that could not be taken within 30 s · `3` `BUSY` · `4` `NOT_HOLDER`, `EXPIRED`, `STALE_EPOCH` · `5` `UNVERIFIED` (read-back did not match, or the lock was lost).
+
+## orch setup
+
+`orch setup [--workspace PATH] [--preset coding|research|ops] [--scope workspace|user] [--yes] [--dry-run]` runs an ordered setup plan for Claude Code. It asks a few questions, reports missing capabilities, and keeps existing files under their installer's protection. See [Setup](setup.md) for defaults, steps, and exit codes.
 
 ## orch init
 
 ```text
-orch init [--everyday] [--no-agent-file] [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
+orch init [--simple] [--everyday] [--with-skills] [--no-agent-file] [--force] [--agent NAME] [--dir DIR] [--layout flat|skills] [--force-handbook] [--no-handbook]
           [--compute one|same-vendor|multi-vendor --people solo|team
            [--policy human-merge --required-review single-agent|cross-account|cross-vendor --max-workers N] | --no-profile]
 ```
@@ -23,8 +27,10 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 
 | Flag | Meaning |
 |---|---|
-| `--everyday` | Without questions, write an everyday-mode config, mailbox and only `everyday.md` (or `everyday/SKILL.md` with the skills layout), then maintain a three-line pointer in `CLAUDE.md` |
-| `--no-agent-file` | With `--everyday`, do not write `CLAUDE.md` |
+| `--simple` | Without questions, write a simple-mode config, mailbox and only `simple.md` (or `simple/SKILL.md` with the skills layout), then maintain a three-line pointer in `CLAUDE.md` |
+| `--everyday` | Print how to add the everyday skill pack |
+| `--with-skills` | Install the skill pack in this workspace |
+| `--no-agent-file` | With `--simple`, do not write `CLAUDE.md` |
 | `--force` | Rewrite `config.toml` from defaults plus fresh detection (mailbox, messages, tasks and notes are kept) |
 | `--agent NAME` | Make NAME the default worker agent. Exit 2, nothing written, if NAME was not detected |
 | `--dir DIR` | Write the handbook to DIR instead of `[handbook] dir` |
@@ -34,9 +40,40 @@ Detects agent CLIs, writes `config.toml` (unless it exists and `--force` is not 
 | `--compute V --people V --policy human-merge --required-review S --max-workers N` | Write a `[profile]` (see [orch profile](#orch-profile)) without asking. `--compute` and `--people` go together (either alone is exit 2), and the other three need them (exit 2 without). The policy, the review requirement and the worker limit have no default: when any of the three is missing, `init` writes no `[profile]` table and prints `no profile written from the flags: …` with the command that creates one. The detected agent CLIs fill `[profile.accounts]` (`acct1`, `acct2`, ...) as labels to edit |
 | `--no-profile` | On a terminal, skip the two profile questions and write no `[profile]` |
 
-Everyday setup refuses `--force`, `--no-handbook` and the profile selection flags. It also refuses a config that is not already in everyday mode, a non-regular `CLAUDE.md`, an unfinished everyday block, or a handbook path containing a line break. These checks happen before any file is written.
+Simple setup refuses `--force`, `--no-handbook`, `--everyday`, `--with-skills` and the profile selection flags. It also refuses a config that is not already in simple mode, a non-regular `CLAUDE.md`, an unfinished simple block, or a handbook path containing a line break. These checks happen before any file is written.
 
 **Profile questions.** When stdin is a terminal and `config.toml` is being written, `init` asks after detection: "How many agent accounts do you run agents on: one, several on one CLI, several across CLIs?" (`1`/`2`/`3`, default `1`) and "Solo, or with teammates?" (`solo`/`team`, default `solo`). These two answers are declared context: they select no rule. It then asks three questions that have no default: whether to select the `human-merge` policy (`yes`/`no`), the weakest agent review that passes (`1`/`2`/`3` for `single-agent`/`cross-account`/`cross-vendor`), and the most workers running at once (a whole number, 1 or more). Three unusable answers to any question, `no` to the policy, or end of input write no profile, and `init` prints `no profile written: …` with the command that creates one. When stdin is not a terminal, `init` asks nothing and writes exactly the config it wrote before profiles existed. `--force` keeps an existing `[profile]` byte for byte (unless a complete set of the five profile flags replaces it). If the kept profile cannot be used, for example because it was written for the removed built-in table, `init --force` still keeps it byte for byte, prints the refusal with what to set on stderr, does not print `next: orch doctor`, and exits 2. When `config.toml` exists and `--force` is not given, `--compute`/`--people` is exit 2 and the file is not touched: use `orch profile update`.
+
+## orch skills
+
+```text
+orch skills install --host claude [--scope workspace|user] [--only NAME,...] [--dry-run] [--force]
+orch skills status --host claude [--scope workspace|user] [--json]
+orch skills uninstall --host claude [--scope workspace|user] [--only NAME,...] [--dry-run]
+```
+
+Installs the [bundled skills](../skills/README.md) where Claude Code discovers them:
+`<workspace>/.claude/skills/<name>/SKILL.md`, or `~/.claude/skills/<name>/SKILL.md`
+for user scope. The default host is `claude` and the default scope is `workspace`.
+`--user` remains an alias for `--scope user`; use the same scope for all three commands.
+
+Install keeps existing skills by default. `--force` moves a modified skill to
+`<name>.bak-<unique>/original` before installing a fresh copy; the backup stays on disk. Each new
+installation records ownership and its content fingerprint. Status compares each
+copy with the bundled version and reports `installed`, `modified`, or `missing`.
+Existing copies without an ownership record count as `modified` and are preserved;
+use `--force` to back them up and install an owned copy.
+Uninstall removes only owned copies whose contents still match their installation
+record. It keeps user edits, added files, unowned copies, and backups. Symbolic
+links are refused. `--dry-run` reports planned actions without writing anything.
+`--only` selects a comma-separated subset; other skills stay untouched.
+If installation fails partway through, any partial destination and backup are
+preserved for inspection; the command reports an error instead of removing them.
+Uninstall rechecks a copy after moving it into a reserved temporary directory.
+If it changed during removal, the command keeps that directory and reports its path.
+
+`orch init --everyday` prints the install hint; adding `--with-skills` installs the
+pack in the current workspace. Skill instructions grant no additional authority.
 
 ## orch agents
 
@@ -54,13 +91,15 @@ orch doctor
 
 One row per check: `PASS`, `FAIL` (required) or `SKIP` (optional). Exit 0 when no required check fails, else 1.
 
-In everyday mode, missing `git`, `gh` and merge-repository settings say `not needed in everyday mode` and are skipped. The everyday handbook passes when present and otherwise points to `orch init --everyday`; any other `[orch] mode` value is a `FAIL mode` row.
+In simple mode, missing `git`, `gh` and merge-repository settings say `not needed in simple mode` and are skipped. The simple handbook passes when present and otherwise points to `orch init --simple`; any other `[orch] mode` value is a `FAIL mode` row.
 
 | Check | Required |
 |---|---|
-| Node.js ≥ 20, POSIX platform, config readable, state dir writable, lease lockable, mailbox writable, sections configured, messages dir, task registry, mem dir, `git` on PATH | yes |
-| handbook files present, `gh`, merge repo set, worker command on PATH, `timeout`/`gtimeout`, agent CLIs found, each `[agents.*]` binary present | no (SKIP) |
-| load state | informational |
+| `node>=22`, `config`, `state dir writable`, `lease lockable`, `mailbox`, `mailbox sections`, `messages`, `task registry`, `mem` | yes everywhere |
+| `posix (process groups)`, `git` | yes on macOS and Linux |
+| `windows (no process groups)` | yes on Windows |
+| `handbook`, `gh (live GitHub commands)`, `merge repo`, `worker command`, `timeout (worker time limit)`, `agent CLIs`, each `agent NAME` | no (SKIP) |
+| `load state` | informational |
 | profile rows (only when `config.toml` has a `[profile]` table) | `profile` FAIL when the table is invalid or was written for the removed built-in table (no `policy` key); every other profile row is `PASS` or `SKIP` |
 
 With a `[profile]`, doctor adds one row per profile check. A missing capability is a `SKIP` row that says what is off, for example `SKIP  profile accounts  same-vendor declared, but only one account is listed in [profile.accounts]; no review can grade above single-agent until a second account is added`. A missing capability never lowers the rule. The rows are `profile` (the selected policy, the declared compute and people, and the accounts), `profile accounts`, `profile vendors`, `profile vendor NAME` (a CLI found or an `[agents.NAME]` configured), `profile teammates`, `profile teammate reviews` (`gh` and `[merge] repo`), `profile reviewers` (only when `required_review` is above `single-agent`: agents on at least two accounts, or two vendors) and `profile agents` (`[agents.*]` names without an account in `[profile.agents]`). Without a `[profile]`, doctor prints the same rows as before.
@@ -68,6 +107,24 @@ With a `[profile]`, doctor adds one row per profile check. A missing capability 
 ## orch config
 
 Prints the resolved configuration as JSON, with the file it came from.
+
+## orch update check
+
+```text
+orch update check
+```
+
+Asks the npm registry once which version of `orch-os` it offers as `latest`, compares it with the installed version, and prints one line on stdout. This manual check runs only when you type it; the weekly background check may also contact the registry after an allowlisted stateful command. It installs nothing, writes no file and starts no process. It does not load `config.toml`. It takes no option other than `--help`, and ORCH-os defines no environment variable for it; the proxy variables `HTTP_PROXY`, `HTTPS_PROXY` and `NODE_USE_ENV_PROXY` do not reroute the request.
+
+The request is one `GET https://registry.npmjs.org/orch-os/latest`. A redirect is not followed. From before the connection is opened to the end of the reply there is one deadline of 800 ms, and a reply body over 128 KiB is refused. Versions are compared as semantic versions: a pre-release is lower than its release, and build metadata is ignored.
+
+| Line (`X` is the installed version, `Y` the offered one) | Exit |
+|---|---|
+| `update check: newer version available: installed X, latest Y (nothing was installed)` | 0 |
+| `update check: no newer version: installed X, latest Y` | 0 |
+| `update check: unavailable (REASON); installed X` | 1 |
+
+`REASON` is one of `timeout`, `redirect`, `status N`, `content type`, `too large`, `invalid JSON`, `no version`, `invalid version`, `connection failed`. An unavailable line never names an offered version. If stdout cannot be written, the exit code is not 0.
 
 ## orch lease
 
@@ -272,6 +329,12 @@ Takes one sample, advances the tier and prints `load tier=... load_ratio=... swa
 orch mem add NAME -d DESCRIPTION [-t TYPE] [-m BODY]     # body from -m or stdin (optional)
 orch mem search [TERM ...] [-t TYPE] [--all] [--json]
 orch mem retire NAME (--superseded-by NEW | --reason TEXT)
+orch mem capture --from-hook                           # Claude hook JSON on stdin
+orch mem accept ID [--title TEXT]
+orch mem reject ID
+orch mem drafts
+orch mem recall --boot [--limit N]
+orch mem lint
 ```
 
 | Subcommand | Does |
@@ -279,6 +342,10 @@ orch mem retire NAME (--superseded-by NEW | --reason TEXT)
 | `add` | Writes `mem/NAME.md` and regenerates `INDEX.md`. NAME is letters, digits, `_ . @ -` (not `INDEX`, no leading dot). The description is one non-empty line. TYPE is one word (default `note`; for example `rule`, `lesson`, `fact`, `reference`). An existing NAME gives exit 2. At or over `[mem] index_max_lines` the entry is still written and a warning goes to stderr. |
 | `search` | Active entries whose name, description, type or body contain every term (case-insensitive), oldest first. `--all` includes retired entries. Exit 1 when nothing matches. |
 | `retire` | Sets `status: retired`, `retired_at`, and `superseded_by` and/or `retired_reason` in the file, and drops it from the index. The file is kept. The successor must exist and be active. |
+
+`capture --from-hook` reads Claude `SessionEnd` or `PreCompact` JSON with `session_id`, `transcript_path`, and optional `cwd`. Wire that command to those hooks; the hook passes its JSON on stdin. The hook input is limited to 16 KB and the transcript to 8 MB. It keeps the first ten top-level user text requests from the JSONL transcript, up to 500 characters per request, with a 180-character summary and at most 30 open task ID/status rows. If `cwd` is supplied, it reads only `next_step` from the private resume note and labels it unverified. A new capture fails if that workspace cannot be read safely. Captured text is unverified and may include material the user pasted into a request. The session ID is hashed in the draft name; the raw ID and transcript path are not stored. A repeated hook returns the same draft, accepted note, or rejected tombstone without reopening those sources.
+
+Drafts and rejected entries stay out of normal search and `INDEX.md`; `search --all` includes them. `drafts` lists all pending drafts without bodies, newest first. `accept` activates a draft and records its UTC verification date. `reject` clears the captured description, title, and body but keeps the session hash and rejected state so another hook cannot recreate it. `recall --boot` prints only compact titles, descriptions, and dates for up to eight newest accepted entries (up to 20 with `--limit`), plus one newest draft marked `draft, unverified`. It never prints note bodies. Retired, rejected, expired, superseded, and old unverified entries are excluded. `lint` returns 2 when it finds expired or invalid dates, supersession, or active entries or drafts older than `[mem] unverified_max_days` (default 90) without a verification date; otherwise it returns 0.
 
 ## orch profile
 
@@ -311,6 +378,74 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 
 `update` changes only the `[profile]`, `[profile.accounts]` and `[profile.agents]` tables. The new tables replace the old ones in place (appended after one blank line when there were none); comments and blank lines just above the next table stay, and every other byte of `config.toml` is kept. The new tables use the file's line endings (CRLF when its first line ends in CRLF). The result is validated and read back before it is written: a bad value, or a profile that is not written as plain tables, is exit 2 with nothing written. Creating a profile needs `--compute`, `--people`, `--policy`, `--required-review` and `--max-workers`: no value is filled in for you, and a missing one is exit 2 with nothing written. Removing something that is not there is exit 2. `--dry-run` prints the new tables instead.
 
+## orch host and orch hook
+
+`orch host install|status|uninstall --workspace PATH --host claude` manages Claude settings, permission presets and a marked working agreement. Choose `--preset coding|research|ops`, `--scope workspace|user`, or preview changes with `--dry-run`. `orch hook session-start|pre-tool-guard|stop-continue` reads a Claude event from stdin. See [host.md](host.md) for the permission lists, ownership rules, context record and hook contracts.
+
+## orch resume
+
+```text
+orch resume save --workspace PATH --expected-revision N
+orch resume show --workspace PATH
+orch resume forget --workspace PATH --expected-revision N
+```
+
+One private continuation note per workspace; `save` reads the note, one JSON object, from stdin. [resume.md](resume.md) describes the note, where it is stored and what is refused. `orch resume` does not load `config.toml`. It reads its own arguments: `orch resume --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Saved, shown or forgotten. `show` also exits 0 when there is no note |
+| `2` | Invalid arguments, an invalid note, or a note that did not arrive on stdin in time |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the note store cannot be used |
+
+## orch preference
+
+```text
+orch preference set KEY VALUE --workspace PATH --expected-revision N
+orch preference show --workspace PATH
+orch preference unset KEY --workspace PATH --expected-revision N
+```
+
+Personal display preferences for one workspace: `response-language` (`en` or `zh`) and `answer-length` (`short` or `normal`). [preferences.md](preferences.md) describes what the settings are and are not, where they are stored and what is refused. `orch preference` does not load `config.toml`. It reads its own arguments: `orch preference --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | Set, shown or unset |
+| `2` | Invalid arguments, or a key or value other than the ones above |
+| `3` | `--expected-revision` is not the current revision |
+| `4` | The workspace or the settings store cannot be used |
+
+## orch knowledge
+
+```text
+orch knowledge query --connection demo --question-id invoice-terms|approval-threshold
+```
+
+A synthetic demo; no service is connected. It looks up one of two fixed questions in a corpus that is compiled into the program and prints the stored passage with its citation as one JSON line. [knowledge.md](knowledge.md) describes the arguments, the output and the limits. `orch knowledge` does not load `config.toml`. It reads its own arguments: `orch knowledge --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The passage and its citation, or the help, were printed |
+| `1` | No passage was printed; stderr holds `{"status":"ERROR","code":"<code>"}` |
+| `2` | The arguments were refused; stderr holds `{"status":"ERROR","code":"USAGE"}` |
+
+## orch learning
+
+```text
+orch learning review < DOCUMENT
+orch learning show < DOCUMENT
+orch learning reject ID --expected-revision N < DOCUMENT
+```
+
+Drafts only; nothing is applied, and there is no accept or apply command. Each command reads one JSON document from stdin and prints one JSON line on stdout: `review` writes the drafts again from the events of the document, `show` prints the drafts, and `reject` removes one draft and keeps its ID as a marker. [learning.md](learning.md) describes the document, the errors and the limits. `orch learning` does not load `config.toml`. It reads its own arguments: `orch learning --help` prints the usage without the leading `orch`. Its exit codes are its own:
+
+| Exit | Meaning |
+|---|---|
+| `0` | The document or the drafts were printed |
+| `1` | `CONFLICT`, `STALE`, `NOT_FOUND`, `LIMIT` or `TIMEOUT`; stderr holds `{"code":"<code>","status":"ERROR"}` |
+| `2` | `USAGE` or `INVALID_INPUT`; stderr holds the same object with that code |
+
 ## Config keys
 
 | Key | Default | Meaning |
@@ -339,3 +474,114 @@ Nothing is derived from the number of accounts or vendors. A review strength the
 | `[profile.agents] NAME = ID` | none | The account each agent (or GitHub login, in `github` mode) runs on. Names compare case-insensitively |
 
 The profile must be written as `[profile]`, `[profile.accounts]` and `[profile.agents]` tables with plain keys: a dotted key (`accounts.a1 = ...`), an inline table (`accounts = { ... }`) or `profile...` keys outside those tables are config errors. An unknown key in `[profile]` is a config error (exit 2 from the commands that read the profile: `merge-gate`, `worker start`, `profile`; a `FAIL` row in `doctor`).
+
+## orch update on, off, status and auto
+
+`orch update on` enables the weekly background check; `orch update off` disables it. The default is on, and `ORCH_AUTO_UPDATE=0` forces it off. `orch update status` shows the effective switch and check state. `orch update auto --background` runs a due check without installing anything.
+
+After `agents`, `lease status` or `doctor`, a due check may run in a detached process. Checks occur at most once every seven days. The next allowlisted command prints a pending availability notice once to stderr. The updater installs nothing. Installation and package rollback are deferred; any later installer must back up only `config.toml`, keep the last two backups and never copy or restore live team state.
+
+
+## orch service
+
+```text
+orch service install [--dry-run]
+orch service status [--dry-run]
+orch service uninstall [--dry-run]
+orch service run wake-watch [--home PATH] [--once]
+orch service run health [--home PATH] [--once]
+```
+
+`install` registers and starts a per-user wake watcher: a LaunchAgent under
+`~/Library/LaunchAgents` on macOS, or an interactive-user Task Scheduler task on
+Windows. The action runs the installed Node executable and ORCH CLI by absolute
+path. Keep that installation available while the job is installed. Linux returns
+`UNAVAILABLE` and exits 1. No administrator account is required.
+
+`status` queries the OS for each supported job. A definition file alone never
+means a job is loaded. Results are JSON with `loaded`, `lastRun`, `lastExit`, and
+`nextRun`; unavailable fields are `null`. A long-running watcher has no periodic
+next run. macOS exposes the last exit code through `launchctl print`; Windows
+runtime metadata comes from `Get-ScheduledTaskInfo`. Query failures are reported.
+
+`uninstall` requires the ownership record under `$ORCH_HOME/service` and checks
+both the generated definition and the OS job before removal. Changed or foreign
+jobs are preserved. Windows stops the verified task instance before deleting
+the task. Failed operations retain ownership records so they can be retried;
+reinstall also retries starting a registered Windows task. A changed label prefix identifies a different job; restore the original
+prefix to uninstall the previous job. Reinstall after moving the Node or ORCH
+installation only after uninstalling the existing job.
+
+`--dry-run` on install or uninstall prints the plan without writing files or
+changing the scheduler. Status is always read-only. Configuration is optional:
+
+```toml
+[service]
+wake_watch = true
+health = false
+deadman_seconds = 3600
+label_prefix = "org.orch"
+reader = "lead"
+poll_seconds = 5
+```
+
+Set `wake_watch = false` to skip watcher installation. Set `health = true` to
+install the health job, which runs at load and every 30 minutes. Status includes
+both jobs; uninstall removes owned jobs even after they are disabled in config.
+Use `uninstall` to stop installed jobs. Daily disk maintenance remains a follow-up;
+`disk = true` makes installation return `UNAVAILABLE`.
+
+`run wake-watch` follows the existing addressed message store, using `[messages]`
+paths and `[workers] root` when configured. It appends one JSON line per addressed
+QUESTION, BLOCKED, or DONE message, and per stopped worker run, to
+`$ORCH_HOME/wake/events.log`. Broadcasts follow the same reader rules as `orch msg`.
+It leaves the reader's inbox acknowledgements alone. Existing stopped workers are
+logged on first observation; runs created and replaced entirely between polls
+cannot be observed. A separate durable cursor and event IDs prevent duplicates
+across restarts, including interruption after appending but before saving the
+cursor. Corrupt state or replaced files stop the watcher for inspection.
+
+`--once` processes one poll, which is useful for inspection and testing. The
+foreground watcher otherwise runs until stopped; the OS job starts it at login.
+Logs are local and contain message bodies. Updates replace a synced log snapshot
+atomically before advancing the cursor. Rotation and repair of corrupt state
+are follow-ups; preserve the ownership file, cursor, and log together. Windows
+retries a failed watcher three times at one-minute intervals, then waits for the
+next login. This does not wake a sleeping machine or inhibit idle sleep.
+
+
+`run health` runs one check and writes `$ORCH_HOME/wake/health.json`. It reads the
+existing `[lease] path` heartbeat (default `$ORCH_HOME/lease.json`), lists unanswered
+QUESTION IDs addressed directly to the configured reader, records free disk bytes,
+and counts running workers with the watcher's existing worker reader. Inbox
+acknowledgements do not resolve questions; an ANSWER linked by `reply_to` does.
+It does not renew the lease or acknowledge messages. Missing heartbeat data is stale.
+
+When heartbeat age exceeds `deadman_seconds`, health appends one `DEADMAN` JSON
+line to the same wake event log. The shared lock, cursor, and event IDs prevent
+duplicates across restarts and interrupted cursor writes. A fresh heartbeat check
+ends the stale period; a later stale period produces a new alert. Keep health.json
+with the wake ownership record, cursor, and log when moving or repairing state.
+Scheduling does not wake a sleeping machine; checks resume when the OS runs them.
+
+## orch awake
+
+```text
+orch awake on [--until HH:MM | --hours N] [--dry-run]
+orch awake off [--dry-run]
+orch awake status
+```
+
+`on` prevents idle system sleep for eight hours by default. `--hours` accepts a
+positive number up to 8760. `--until` uses the next occurrence of local clock time,
+including tomorrow when today's time has passed. macOS runs `caffeinate -i -t`;
+Windows runs a PowerShell child using `SetThreadExecutionState` until the deadline.
+Linux returns typed `UNAVAILABLE` and exits 1.
+
+The PID, process creation time, command identity, and deadline are recorded in
+`$ORCH_HOME/service/awake.json`. `off` verifies the recorded process before sending
+a stop request, then verifies exit before removing the record. Changed identity
+or unavailable evidence preserves the record and process for inspection. If exit
+is still pending, retry `off`. After a deadline, use `off` to clear the expired
+record before starting again. Existing records require `off` before another `on`.
+These commands return JSON. Dry runs write nothing and start or stop no processes.

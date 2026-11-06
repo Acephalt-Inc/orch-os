@@ -22,12 +22,11 @@
  * approvals do not count. This is a process gate between cooperating agents, not a security
  * boundary: anyone holding the account's token can post a review comment.
  */
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ConfigError } from "./config.js";
 import { dumps } from "./pyjson.js";
-import { isPlainObject, validName, which } from "./util.js";
+import { isPlainObject, runResolved, validName, which } from "./util.js";
 
 export interface CheckRow {
   sha: string;
@@ -334,8 +333,7 @@ export function liveFields(source: ReviewSource = "github", files = false): stri
 export function fetchLive(pr: string, repo: string, source: ReviewSource = "github", files = false): unknown {
   if (!which("gh")) throw new Error("live mode needs the GitHub CLI `gh` (or use --fixture)");
   if (!repo) throw new Error("no repo: set [merge] repo in config.toml or pass --repo owner/name");
-  const out = spawnSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json",
-    liveFields(source, files)], { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
+  const out = runGh(["pr", "view", String(pr), "--repo", repo, "--json", liveFields(source, files)]);
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || "gh pr view failed");
   const info = JSON.parse(out.stdout);
@@ -358,9 +356,20 @@ export function allFiles(repo: string, number: unknown): { path: string }[] | nu
   }
 }
 
+/**
+ * Start `gh` without a shell string. On Windows the path `which` resolved is what starts: a
+ * bare name would be looked up in the current directory before PATH, and a .cmd file cannot
+ * be started directly (runResolved gives it the fixed cmd.exe invocation).
+ */
+function runGh(args: string[]) {
+  const bin = process.platform === "win32" ? which("gh") : "gh";
+  if (!bin) throw new Error("the GitHub CLI `gh` was not found on PATH");
+  return runResolved(bin, args, { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
+}
+
 /** Run `gh` without a shell; its stdout, or an Error with its stderr. */
 export function gh(args: string[]): string {
-  const out = spawnSync("gh", args, { encoding: "utf8", timeout: 60_000, maxBuffer: GH_MAX_BUFFER });
+  const out = runGh(args);
   if (out.error) throw out.error;
   if (out.status !== 0) throw new Error((out.stderr || "").trim() || `gh ${args[0]} ${args[1]} failed`);
   return out.stdout;

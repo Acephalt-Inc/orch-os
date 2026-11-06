@@ -2,7 +2,7 @@
 
 ## Shape
 
-ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, Node.js ≥ 22) behind one command, `orch`. Every invocation is a short-lived process: load the config, take a lock where needed, change one file atomically, print a result, exit with a meaningful code. There is no daemon, socket or database. Shared state is a handful of plain files under `$ORCH_HOME` (default `~/.orch`) that any agent, script or human can inspect.
+ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, Node.js ≥ 22) behind one command, `orch`. Most commands load the config, take a lock where needed, change files atomically, print a result, and exit. `orch service run wake-watch` stays in the foreground; `orch service install` registers it with the per-user OS scheduler on macOS or Windows. Shared state is a handful of plain files under `$ORCH_HOME` (default `~/.orch`) that any agent, script or human can inspect.
 
 ```text
                  agents / terminals / cron
@@ -38,7 +38,7 @@ ORCH-os is one TypeScript package (`orch-os`, compiled with `tsc` to `dist/`, No
 | `load.ts` | Portable sampling, tier state machine with hysteresis, optional renice | `load.json` |
 | `mem.ts` | One file per entry, frontmatter, generated capped index, retire | `mem/*.md`, `mem/INDEX.md` |
 | `handbook.ts` | Writes `templates/handbook/*` to the target dir (flat or skills layout) | `handbook/` |
-| `everyday.ts` | Sets up everyday mode and interprets its doctor rows | `config.toml`, mailbox, handbook, `CLAUDE.md` |
+| `everyday.ts` | Sets up simple mode and interprets its doctor rows | `config.toml`, mailbox, handbook, `CLAUDE.md` |
 | `pyjson.ts` | JSON text in the exact layout v1.1 wrote | none |
 
 ## The lock
@@ -113,7 +113,7 @@ All deployment-specific values live in `config.toml`. Read-only commands work be
 ## Left out on purpose
 
 - **The agent loop.** Tools, permissions, context and sessions belong to the agent CLI.
-- **A scheduler.** Run `orch load`, `orch msg watch` or periodic checks from cron, systemd timers or any other scheduler.
+- **A general scheduler.** `orch service` manages the optional wake-watch job on macOS and Windows. Other recurring commands need an external scheduler; health, disk maintenance, and a Linux adapter remain follow-ups.
 - **Merging.** `merge-gate` only answers whether a merge is allowed.
-- **Network services.** Nothing listens on a port. Only live `merge-gate` calls out, through `gh`.
+- **Network services.** Nothing listens on a port. Live `merge-gate` reads the pull request through `gh`. `review approve`, `review changes` and `review reject` post one comment through `gh` unless `--dry-run` is given, and read the head commit through `gh` first when `--head` is not given. `review watch` reads the pull request and its checks through `gh` and, unless `--dry-run` is given, starts a reviewer command when a review is due. `orch update check` makes one request to the npm registry when you type it. The default-on weekly background check may also contact the registry after `agents`, `lease status` or `doctor`; it installs nothing. `worker start` starts the worker command, and `load` runs `[load] temp_command` when it is set (not on Windows). ORCH-os does not limit what a reviewer command, a worker command or `temp_command` sends over the network.
 - **Windows.** Workers rely on POSIX process groups and signals.

@@ -10,19 +10,25 @@ decides scope, never merges, and never approves its own change. Run the steps in
 
 ## 0. Name yourself and check your role
 
+Replace `<agent-name>` with your worker name, for example `w1`.
+
 ```sh
-export ORCH_AGENT=w1              # your worker name; each worker has its own
-orch lease status                 # if the holder is you, you are in the wrong boot file
+export ORCH_AGENT=<agent-name>          # optional when typing commands in one terminal
+orch lease status --session <agent-name>                 # if the holder is you, you are in the wrong boot file
 ```
+
+A coding assistant must not rely on the export because each command starts in a fresh shell.
 
 ## 1. Catch up (read only)
 
 ```sh
-cat "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md"   # standing rules and lessons
-orch msg read                                  # answers and instructions addressed to you
+if [ -f "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md" ]; then cat "${ORCH_HOME:-$HOME/.orch}/mem/INDEX.md"; fi   # standing rules and lessons
+orch msg read --as <agent-name>                                  # answers and instructions addressed to you
 orch task list                                 # anything you still hold?
 git worktree list                              # your unfinished work on disk
 ```
+
+The index file does not exist until the first `orch mem add`.
 
 A task you still hold from an earlier session is your first job: resume it, or release it
 and tell the lead why.
@@ -30,7 +36,7 @@ and tell the lead why.
 ## 2. Claim before you work
 
 ```sh
-orch task claim <task-id>
+orch task claim <task-id> --as <agent-name>
 ```
 
 | Exit | Meaning | What you do |
@@ -42,7 +48,7 @@ orch task claim <task-id>
 For long tasks, renew before the claim runs out:
 
 ```sh
-orch task renew <task-id> --expected-epoch <epoch>
+orch task renew <task-id> --as <agent-name> --expected-epoch <epoch>
 ```
 
 `STALE_EPOCH`, `NOT_HOLDER` or `EXPIRED` means the task is no longer yours: stop, keep your
@@ -50,7 +56,7 @@ changes on your branch, and tell the lead.
 
 ## 3. Work
 
-- Work in your own worktree and branch (`orch worker start ... --worktree` gives you one),
+- Work in your own worktree and branch (`orch worker start <agent-name> ... --worktree` gives you one),
   never on the default branch and never in another worker's directory.
 - Stay inside the brief. If you cannot tell whether something is inside your scope,
   authority or budget, treat it as outside: stop and ask with a `QUESTION`.
@@ -60,8 +66,8 @@ changes on your branch, and tell the lead.
   not `DONE`.
 
 ```sh
-orch msg send QUESTION --to lead -m "parser-fix: the brief says keep the old flag; the new parser cannot. Drop it or keep a shim?"
-orch msg watch --count 1          # wait for the answer
+orch msg send QUESTION --as <agent-name> --to lead -m "parser-fix: the brief says keep the old flag; the new parser cannot. Drop it or keep a shim?"
+orch msg watch --as <agent-name> --count 1          # wait for the answer
 ```
 
 ## 4. Report DONE with evidence, then release
@@ -76,8 +82,8 @@ A `DONE` report is something another agent can check without trusting you. It co
 5. anything the reviewer should look at first.
 
 ```sh
-orch msg send DONE --to lead -m "$(cat report.md)"
-orch task release <task-id> --expected-epoch <epoch>
+orch msg send DONE --as <agent-name> --to lead -m "$(cat report.md)"
+orch task release <task-id> --as <agent-name> --expected-epoch <epoch>
 ```
 
 Post the report the moment the task is finished; do not wait for the lead to ask.

@@ -11,20 +11,24 @@ was reviewed. Run the steps in order.
 
 ## 0. Name yourself
 
+Replace `<agent-name>` with your reviewer name, for example `r1`.
+
 ```sh
-export ORCH_AGENT=r1
+export ORCH_AGENT=<agent-name>          # optional when typing commands in one terminal
 ```
+
+A coding assistant must not rely on the export because each command starts in a fresh shell.
 
 You may not review a change you wrote, and a review from the change's own author never
 counts: `orch merge-gate` ignores it. If all agents share one code-host account, the
 reviewer needs its own account or app identity, or the team uses review comments: record
-your verdict with `orch review approve|changes|reject <pr> --as $ORCH_AGENT --head <sha>`.
+your verdict with `orch review approve|changes|reject <pr> --as <agent-name> --head <sha>`.
 
 ## 1. Pick up the review and pin the head
 
 ```sh
-orch msg read                                   # which change, from whom
-orch task claim review-<pr>                     # one reviewer per review task
+orch msg read --as <agent-name>                                   # which change, from whom
+orch task claim review-<pr> --as <agent-name>                     # one reviewer per review task
 gh pr view <pr> --json headRefOid,author        # the commit you are about to review
 ```
 
@@ -67,8 +71,8 @@ head commit. Re-review the new commits and approve again if they are sound.
 ## 5. Report and release
 
 ```sh
-orch msg send DONE --to lead -m "review <pr> at <head>: APPROVED | CHANGES REQUESTED; <findings or 'none'>; checked: <commands and results>"
-orch task release review-<pr>
+orch msg send DONE --as <agent-name> --to lead -m "review <pr> at <head>: APPROVED | CHANGES REQUESTED; <findings or 'none'>; checked: <commands and results>"
+orch task release review-<pr> --as <agent-name>
 ```
 
 ## Rules that do not bend

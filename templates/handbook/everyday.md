@@ -1,6 +1,6 @@
 ---
-name: everyday
-description: A short guide for everyday work with ORCH-os.
+name: simple
+description: A short guide for simple work with ORCH-os.
 ---
 
 ## At the start of every session

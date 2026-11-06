@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HANDBOOK, TEMPLATE_DIR } from "../src/handbook.js";
 import { parseToml } from "../src/toml.js";
@@ -8,6 +9,24 @@ import { run, useTmpHome } from "./_helpers.js";
 
 describe("InitHandbookV2", () => {
   const ctx = useTmpHome();
+
+  it("test_plain_init_writes_no_skills", async () => {
+    const [code, out] = await run("init");
+    expect(code).toBe(0);
+    expect(out).not.toContain("everyday skills:");
+    expect(existsSync(join(process.cwd(), ".claude", "skills"))).toBe(false);
+    const [everydayCode, everydayOut] = await run("init", "--everyday");
+    expect(everydayCode).toBe(0);
+    expect(everydayOut).toContain("orch skills install");
+    expect(existsSync(join(process.cwd(), ".claude", "skills"))).toBe(false);
+  });
+
+  it("--everyday keeps the skill-pack hint without writing a handbook", async () => {
+    const [code, out] = await run("init", "--everyday", "--no-handbook", "--no-profile");
+    expect(code).toBe(0);
+    expect(out).toContain("everyday skills: run `orch skills install`");
+    expect(existsSync(join(ctx.home, "handbook"))).toBe(false);
+  });
 
   it("init_writes_the_four_handbook_files_flat", async () => {
     const [code, out] = await run("init");
@@ -74,7 +93,7 @@ describe("InitHandbookV2", () => {
     const [code, out] = await run("config");
     expect(code).toBe(0);
     const [head, ...rest] = out.split("\n");
-    expect(head).toBe(`# resolved from ${ctx.home}/config.toml`);
+    expect(head).toBe(`# resolved from ${join(ctx.home, "config.toml")}`);
     expect(JSON.parse(rest.join("\n")).lease.min_seconds).toBe(60);
   });
 });

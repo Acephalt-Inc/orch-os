@@ -83,6 +83,8 @@ export interface StartOptions {
   env?: Record<string, string>;
   /** most workers running at once ([profile] max_workers); null or absent = no limit */
   limit?: number | null;
+  /** Lead dispatch fences its lease and claim after worker preflight, immediately before spawn. */
+  beforeSpawn?: () => void;
 }
 
 export class Workers {
@@ -220,6 +222,7 @@ export class Workers {
     let fe = -1;
     let pid: number | undefined;
     try {
+      opts.beforeSpawn?.();
       fin = openSync(opts.task ? opts.task : "/dev/null", "r");
       fo = openSync(`${d}/stdout.log`, "a");
       fe = openSync(`${d}/stderr.log`, "a");

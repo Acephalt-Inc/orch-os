@@ -126,6 +126,25 @@ command = ["/bin/cat"]
       expect(() => parseToml(bad), bad).toThrow(TomlError);
     }
   });
+
+  it.each([
+    ["UFFFFFFFF", "\\UFFFFFFFF"],
+    ["U00110000", "\\U00110000"],
+    ["uD800", "\\uD800"],
+    ["uDFFF", "\\uDFFF"],
+  ])("rejects_invalid_unicode_escape_%s_with_TomlError", (_name, escape) => {
+    const parse = () => parseToml(`a = "${escape}"`);
+    expect(parse).toThrow(TomlError);
+    expect(parse).toThrow("bad unicode escape (at line 1)");
+  });
+
+  it.each([
+    ["U0001F600", "\\U0001F600", "😀"],
+    ["u00E9", "\\u00E9", "é"],
+    ["U0010FFFF", "\\U0010FFFF", String.fromCodePoint(0x10FFFF)],
+  ])("accepts_valid_unicode_escape_%s", (_name, escape, value) => {
+    expect(parseToml(`a = "${escape}"`).a).toBe(value);
+  });
 });
 
 describe("PyJsonV2", () => {

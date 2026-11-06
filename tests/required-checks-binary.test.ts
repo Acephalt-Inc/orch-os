@@ -3,9 +3,9 @@
 // against deterministic API fixtures. The developer checkout is never built, cleaned or packed here.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { ROOT } from "./_helpers.js";
+import { fakeNodeBin, ROOT, WINDOWS } from "./_helpers.js";
 import { candidate, pack, plantRetired } from "./_pack.js";
 import { HEAD, prData, scenarios, type Scenario } from "./fixtures/required-checks.js";
 
@@ -17,9 +17,12 @@ const packDirs: string[] = [];
 // config and tokens below were set in process.env.
 const packEnvironment = (): NodeJS.ProcessEnv => copy.env;
 
+// `orch review watch` is refused on Windows (docs/windows.md): the watch half of a test runs on macOS and Linux only.
+const WATCH = !WINDOWS;
+
 const invoke = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], {
   cwd: ROOT, encoding: "utf8", timeout: 15_000,
-  env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}:${process.env.PATH}`, FAKE_GH_FIXTURE: data, FAKE_GH_LOG: log },
+  env: { ...process.env, ORCH_HOME: home, PATH: `${join(base, "bin")}${delimiter}${process.env.PATH}`, FAKE_GH_FIXTURE: data, FAKE_GH_LOG: log },
 });
 function config(required: unknown = ["CI/test"], requireCi = true) {
   const value = JSON.stringify(required);
@@ -82,8 +85,11 @@ beforeAll(async () => {
       }
     }
     cli = join(base, "package", "dist", "cli.js");
-    const extracted = spawnSync("tar", ["-xzf", tarball, "-C", base], { encoding: "utf8" });
-    expect(extracted.status, extracted.stderr).toBe(0);
+    if (WINDOWS) copy.run("tar", ["-xzf", tarball, "-C", base]); // the helper picks the tar that reads Windows paths
+    else {
+      const extracted = spawnSync("tar", ["-xzf", tarball, "-C", base], { encoding: "utf8" });
+      expect(extracted.status, extracted.stderr).toBe(0);
+    }
   } finally {
     if (observer.exitCode === null && observer.signalCode === null) {
       const stopped = new Promise<void>(resolve => observer.once("exit", () => resolve()));
@@ -93,7 +99,7 @@ beforeAll(async () => {
   }
   mkdirSync(join(base, "bin"));
   // This gh double returns the requested jq projection of raw REST shapes, not injected hosts.
-  writeFileSync(join(base, "bin", "gh"), `#!${process.execPath}\n` + String.raw`
+  fakeNodeBin(join(base, "bin"), "gh", String.raw`
 import * as fs from "node:fs";
 const a = process.argv.slice(2), f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
 fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(a) + "\n");
@@ -113,7 +119,7 @@ else if (a[0] === "api" && a.some(x => x.endsWith("/check-runs"))) {
   if (f.workflow_runs === null) { console.log(JSON.stringify([11, "CI"])); console.error("HTTP 403: workflow list unreadable"); process.exit(1); }
   lines(f.workflow_runs.map(r => [r.check_suite_id, r.name]));
 } else { console.error("unexpected gh call " + JSON.stringify(a)); process.exit(9); }
-`, { mode: 0o755 });
+`);
 });
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
@@ -174,6 +180,7 @@ describe("RequiredChecksPackedBinary", () => {
       expect(gate.stdout).toContain(s.gateGreen ? "=> PASS" : "=> BLOCKED");
       if (s.gateReason) expect(gate.stdout).toContain(s.gateReason);
     }
+    if (!WATCH) return;
     const args = ["review", "watch", "7", "--task", "gating", "--force"];
     // Blocked cases exercise the real dispatch path; controls preview without launching a worker.
     const watch = invoke(...args, ...(s.watchGreen ? ["--dry-run"] : ["--once"]));
@@ -198,6 +205,7 @@ describe("RequiredChecksPackedBinary", () => {
     const gate = invoke("merge-gate", "7", "--json");
     expect(gate.status, gate.stderr).toBe(1);
     expect(JSON.parse(gate.stdout).unmet_checks).toEqual({ "CI/test": "SKIPPED" });
+    if (!WATCH) return;
     const watch = invoke("review", "watch", "7", "--task", "gating", "--once", "--json");
     expect(watch.status, watch.stdout + watch.stderr).toBe(0);
     expect(JSON.parse(watch.stdout)).toMatchObject({ outcome: "WAITING", ci: "not-passed" });
@@ -205,7 +213,7 @@ describe("RequiredChecksPackedBinary", () => {
     expect(existsSync(join(home, "workers"))).toBe(false);
   });
 
-  it("250 workflow runs join through the paginated API contract", () => {
+  it.skipIf(process.platform === "win32")("250 workflow runs join through the paginated API contract", () => {
     const s = { ...scenarios[4], workflows: Array.from({ length: 250 }, (_, i): [number, string] => [i, i === 11 || i === 12 ? "CI" : `other-${i}`]) };
     fixture(s);
     const result = invoke("review", "watch", "7", "--task", "gating", "--dry-run");
@@ -213,7 +221,7 @@ describe("RequiredChecksPackedBinary", () => {
     expect(result.stdout).toContain("ci=green => DISPATCHED");
   });
 
-  it("required suite appears only after workflow row 200", () => {
+  it.skipIf(process.platform === "win32")("required suite appears only after workflow row 200", () => {
     // Adapter contract against the fake gh (not live GitHub pagination): the two suites that can
     // supply CI/test are rows 211 and 241 of the workflow-run list.
     const all = Array.from({ length: 250 }, (_, i): [number, string] => i === 210 ? [11, "CI"] : i === 240 ? [12, "CI"] : [1000 + i, `other-${i}`]);
@@ -278,6 +286,7 @@ describe("RequiredChecksPackedBinary", () => {
       expect(JSON.parse(json.stdout).required_checks).toEqual(required);
       expect(JSON.parse(json.stdout).unmet_checks).toEqual({ "Lint/lint": "SKIPPED", "Docs/build": "ABSENT" });
     }
+    if (!WATCH) return;
     const names = "Lint/lint=WORKFLOW_UNKNOWN, Docs/build=ABSENT";
     const sentence = "WORKFLOW_UNKNOWN means a same-name check could not be joined to a workflow";
     const text = invoke("review", "watch", "7", "--task", "gating", "--once");
@@ -304,7 +313,7 @@ describe("RequiredChecksPackedBinary", () => {
   it.each(["\"lint\"", "false", "[1]", "{}", "[\"\"]", "[\"  \"]"])("malformed config %s exits 2 in both commands", (value) => {
     fixture(scenarios[4]);
     writeFileSync(join(home, "config.toml"), `[merge]\nrequired_checks = ${value}\n`);
-    for (const args of [["merge-gate", "7", "--fixture", join(home, "pr.json")], ["review", "watch", "7", "--task", "gating", "--once"]]) {
+    for (const args of [["merge-gate", "7", "--fixture", join(home, "pr.json")], ...(WATCH ? [["review", "watch", "7", "--task", "gating", "--once"]] : [])]) {
       const result = invoke(...args);
       expect(result.status).toBe(2);
       expect(result.stderr).toContain("required_checks");

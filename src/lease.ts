@@ -10,7 +10,7 @@
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { withLock } from "./lock.js";
+import { withLock, type LockOptions } from "./lock.js";
 import { dumps } from "./pyjson.js";
 import { atomicWrite, isPlainObject } from "./util.js";
 
@@ -18,6 +18,7 @@ export type LeaseAction = "status" | "acquire" | "renew" | "release";
 export const LEASE_ACTIONS: LeaseAction[] = ["status", "acquire", "renew", "release"];
 
 export interface LeaseRunOptions {
+  lockOptions?: LockOptions;
   leaseSeconds?: number | null;
   force?: boolean;
   expectedEpoch?: number | null;
@@ -159,6 +160,6 @@ export class Lease {
       }
       r.status = action === "acquire" ? "ACQUIRED" : "RENEWED";
       return [0, r];
-    });
+    }, opts.lockOptions);
   }
 }

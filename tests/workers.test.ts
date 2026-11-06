@@ -8,7 +8,7 @@ import { groupAlive, WorkerError, Workers } from "../src/workers.js";
 import { sleep } from "../src/util.js";
 import { useTmpHome, waitFor } from "./_helpers.js";
 
-describe("WorkersTest", () => {
+describe.skipIf(process.platform === "win32")("WorkersTest", () => {
   const ctx = useTmpHome();
   const workers = () => new Workers(parseToml(C.renderDefault(ctx.home)), `${ctx.home}/workers`, `${ctx.home}/load.json`);
 
@@ -62,7 +62,7 @@ function git(cwd: string, ...args: string[]): string {
   return r.stdout.trim();
 }
 
-describe("WorktreeV2", () => {
+describe.skipIf(process.platform === "win32")("WorktreeV2", () => {
   const ctx = useTmpHome();
   const setup = () => {
     const repo = `${ctx.home}/repo`;

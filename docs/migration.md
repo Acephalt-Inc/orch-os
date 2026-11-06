@@ -20,7 +20,7 @@ v2 is a rewrite of the same tool in TypeScript for Node.js ≥ 20. The five v1.1
 | Lock | `fcntl.flock` on `<file>.lock` | atomic `mkdir` of `<file>.lock.d`, with stale-lock breaking and a 30 s timeout ([architecture.md](architecture.md#the-lock)) |
 | Lock wait | blocks until free | gives up after 30 s: exit 2 |
 | `lease release` | no epoch check | optional `--expected-epoch` |
-| `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=20`, `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |
+| `doctor` rows | `python>=3.11`, `posix (flock, process groups)` | `node>=22` (`node>=20` in 2.0.0 through 2.1.0), `posix (process groups)`, plus `messages`, `task registry`, `mem`, `handbook` |
 | `worker start` | runs in `--workdir` | also `--worktree`, `--branch`, `--base` |
 | `worker stop` | stops the process group | also removes a clean worktree it created; `--keep-worktree` |
 | `init` | config, mailbox | also the handbook: `--dir`, `--layout`, `--force-handbook`, `--no-handbook` |

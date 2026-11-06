@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import * as M from "../src/mergegate.js";
 import { Lease } from "../src/lease.js";
 import { Tasks } from "../src/tasks.js";
-import { fakeBin, keepEnv, ROOT, run, tmp, useTmpHome } from "./_helpers.js";
+import { fakeBin, keepEnv, ROOT, run, testPath, tmp, useTmpHome } from "./_helpers.js";
 
 const OK = M.loadFixture("approved") as Record<string, any>;
 const HEAD: string = OK.headRefOid;
@@ -180,7 +180,7 @@ describe("ReviewCli", () => {
   let bins = "";
   beforeEach(() => {
     bins = tmp("orch-gh-");
-    process.env.PATH = `${bins}:/usr/bin:/bin`;
+    process.env.PATH = testPath(bins);
     process.env.ORCH_TEST_OUT = join(bins, "argv.txt");
     // fake gh: records its argv one per line, prints $ORCH_TEST_JSON (if set) as the PR data
     fakeBin(bins, "gh", 'printf "%s\\n" "$@" > "$ORCH_TEST_OUT"; [ -n "$ORCH_TEST_JSON" ] && cat "$ORCH_TEST_JSON"; exit 0');
@@ -300,7 +300,8 @@ describe("ReviewCli", () => {
     expect(ghArgv().at(-1)).toBe("author,headRefOid,reviews,labels,statusCheckRollup,comments");
   });
 
-  it("review_command_posts_the_review_line", async () => {
+  // the fake gh is a .cmd file on Windows, and cmd.exe cannot carry the line breaks of a `-m` body (docs/windows.md)
+  it.skipIf(process.platform === "win32")("review_command_posts_the_review_line", async () => {
     const [c1, o1] = await run("review", "approve", "5", "--as", "r1", "--head", HEAD, "--dry-run");
     expect([c1, o1]).toEqual([0, `ORCH-REVIEW APPROVE ${HEAD} by r1\n`]);
     const [c2, o2] = await run("review", "changes", "5", "--as", "r1", "--head", HEAD, "--repo", "o/n", "-m", "tests missing");

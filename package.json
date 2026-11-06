@@ -1,6 +1,6 @@
 {
   "name": "orch-os",
-  "version": "2.0.1",
+  "version": "2.3.0",
   "description": "Run several CLI coding agents as one team: role lease, mailbox, addressed messages, task claims, review-based merge gate, detached workers with git worktrees, load governor, long-lived notes.",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Winnicent Zuo, Acephalt Inc. <winnicent.zuo@acephalt.com>",
@@ -18,8 +18,17 @@
   },
   "files": [
     "dist/",
+    "skills/",
     "fixtures/",
     "templates/",
+    "docs/INSTALL-WITH-AGENT.md",
+    "docs/knowledge.md",
+    "docs/learning.md",
+    "docs/preferences.md",
+    "docs/resume.md",
+    "docs/lead-runtime.md",
+    "docs/host.md",
+    "docs/setup.md",
     "README.md",
     "README.zh.md",
     "LICENSE",
@@ -33,7 +42,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
