@@ -19,26 +19,22 @@ ORCH-os helps several CLI coding agents work in one repository. A lease-held lea
 
 Author: [Winnicent Zuo](https://www.linkedin.com/in/winnicent-zuo/)
 
-## Install with Claude Code or Codex
-
-Give this repository's URL to your coding agent: open Claude Code or Codex in any folder and say "Install ORCH OS from https://github.com/Acephalt-Inc/orch-os". The agent reads [AGENTS.md](AGENTS.md) (the same text as [CLAUDE.md](CLAUDE.md)) and does the rest on macOS or Windows: it installs Node.js if it is missing, builds ORCH-os from this source, sets up a workspace, checks it with `orch doctor`, and tells you the one or two commands you will use.
-
 ## Install
 
-Requires Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or Linux. Install the `orch` command globally, or run it once with `npx`:
+Paste this one sentence into Claude Code or Codex. On macOS or Windows 11 it installs ORCH-os, or updates an older install to the latest published version, keeps any existing ORCH-os settings, and ends by checking the result with `orch --version` and `orch doctor`:
+
+```text
+Install or update ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.
+```
+
+To do the same by hand: ORCH-os needs Node.js 22 or newer (24 LTS recommended) on Windows 10 or 11, macOS, or Linux. Install or update the `orch` command globally, or run it once with `npx`:
 
 ```sh
-npm i -g orch-os
+npm install --global orch-os@latest
 # or: npx orch-os setup
 ```
 
-Quick start: `npx orch-os setup` — [set up Claude Code in one command](docs/setup.md).
-
-Or paste this one sentence to a coding assistant that can run commands on your machine:
-
-```text
-Install ORCH-os on this machine by following docs/INSTALL-WITH-AGENT.md from https://github.com/Acephalt-Inc/orch-os step by step, and stop and tell me whenever it says to stop.
-```
+Quick start after installing: `orch setup` — [set up Claude Code in one command](docs/setup.md).
 
 On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 

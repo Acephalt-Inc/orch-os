@@ -20,6 +20,7 @@ type Verdict = "PASSED" | "KILLED" | "INVALID";
 type Result = { verdict: Verdict; detail: string };
 type Edit = { file: string; from?: string; to?: string; remove?: true };
 const NODE_STEP = "guide_node_step_installs_a_missing_node_and_changes_no_older_one";
+const GROUPS = "guide_has_two_command_groups_that_install_or_update_and_end_with_version_and_doctor";
 /** Runs the guide's command in a POSIX shell, so it is skipped on Windows, and so is its row. */
 const INSTALLED_CHECK = "guide_installed_check_answers_on_a_fresh_prefix_and_on_a_used_one";
 const NOT_RUN_LINE = "     - **Not run by the authors.** The install command below has not been run by the authors of this guide. What it installs, and every result this case names after it, is unverified until the user's machine shows it.\n";
@@ -70,7 +71,10 @@ function mutate(name: string, edits: Edit[], expected: RegExp): Result {
     if (!/AssertionError/.test(t.failure) || !expected.test(t.failure)) return { verdict: "INVALID", detail: `the named test failed, but not on the row's assertion\n${t.failure}` };
     return { verdict: "KILLED", detail: t.failure.split("\n")[0] };
   } finally {
-    for (const [file, bytes] of saved) writeFileSync(join(copy, file), bytes);
+    for (const [file, bytes] of saved) {
+      writeFileSync(join(copy, file), bytes);
+      expect(readFileSync(join(copy, file)), `${file}: restored byte-for-byte after mutation`).toEqual(bytes);
+    }
   }
 }
 
@@ -155,22 +159,28 @@ describe("DoctorInstallEntryMutations", () => {
       /file changes and process starts during orch agents: expected \[ \{ kind: 'process', …\(2\) \} \] to deeply equal \[\]/);
   });
 
-  it("mutation_guide_install_unpinned", () => {
-    row("guide_install_commands_pin_the_package_version",
-      [{ file: GUIDE, from: `\`npm install --global orch-os@${VERSION}\``, to: "`npm install --global orch-os`" }],
-      /package-manager commands in the guide: expected \[ 'command -v brew', …\(7\) \] to deeply equal \[ 'command -v brew', …\(7\) \]/);
+  it("mutation_guide_install_drops_the_latest_tag", () => {
+    row("guide_install_commands_name_the_latest_published_version",
+      [{ file: GUIDE, from: "`npm install --global orch-os@latest`", to: "`npm install --global orch-os`" }],
+      /package-manager commands in the guide: expected \[ 'command -v brew', …\(9\) \] to deeply equal \[ 'command -v brew', …\(9\) \]/);
   });
 
-  it("mutation_package_version_moves_and_the_guide_does_not", () => {
-    row("guide_install_commands_pin_the_package_version",
-      [{ file: "package.json", from: `"version": "${VERSION}"`, to: '"version": "99.0.0"' }],
-      /package-manager commands in the guide: expected \[ 'command -v brew', …\(7\) \] to deeply equal \[ 'command -v brew', …\(7\) \]/);
+  it("mutation_guide_version_step_names_a_fixed_release", () => {
+    row("guide_install_commands_name_the_latest_published_version",
+      [{ file: GUIDE, from: "9. `orch --version` must print `orch ` followed by exactly the latest version from step 2.", to: `9. \`orch --version\` must print \`orch ${VERSION}\`.` }],
+      /version outputs the guide expects: expected \[ .+ \] to be null/);
+  });
+
+  it("mutation_windows_version_step_drops_powershell_notice_allowance", () => {
+    row("guide_version_lookup_accepts_one_bare_version_and_named_npm_notices",
+      [{ file: GUIDE, from: ' or "npm.cmd : npm notice"', to: "" }],
+      /Windows 11: PowerShell-prefixed npm notice: expected/);
   });
 
   it("mutation_guide_introduction_names_another_version", () => {
-    row("guide_install_commands_pin_the_package_version",
-      [{ file: GUIDE, from: `a first install of \`orch-os@${VERSION}\``, to: "a first install of `orch-os@0.0.1`" }],
-      /every orch-os@VERSION spec in the guide: expected \[ '0\.0\.1', '.+' \] to deeply equal \[ '.+' \]/);
+    row("guide_install_commands_name_the_latest_published_version",
+      [{ file: GUIDE, from: "a new install of the latest published `orch-os`", to: "a new install of `orch-os@0.0.1`" }],
+      /every orch-os@VERSION spec in the guide: expected \[ '0\.0\.1', 'latest' \] to deeply equal \[ 'latest' \]/);
   });
 
   it("mutation_guide_removed_from_package_files", () => {
@@ -179,24 +189,36 @@ describe("DoctorInstallEntryMutations", () => {
       /docs files in the tarball: expected .* to deeply equal .*/);
   });
 
-  it("mutation_guide_home_check_no_longer_stops", () => {
-    row("guide_has_two_command_groups_that_refuse_first_and_end_with_version_and_doctor",
-      [{ file: GUIDE, from: " If it prints the directory, stop: an ORCH-os home already exists there.", to: "" }],
-      /macOS: the home check tells the assistant to stop: expected false to be true/);
+  it("mutation_guide_home_check_stops_instead_of_keeping_the_home", () => {
+    row(GROUPS,
+      [{ file: GUIDE, from: "If it prints the directory, a home exists: keep it as it is and skip step 8.", to: "If it prints the directory, stop: an ORCH-os home already exists there." }],
+      /macOS: the home check keeps an existing home: expected ' checks for an ORCH-os home\. If it pr…' to contain 'a home exists: keep it as it is and s…'/);
+  });
+
+  it("mutation_guide_update_allows_a_downgrade", () => {
+    row(GROUPS,
+      [{ file: GUIDE, from: "5. `orch.cmd --version` runs only for an update; on a new install, go to step 6. It must print `orch ` and a version. If that version is the latest version from step 2, ORCH-os is already up to date: skip step 7. If it is lower than the latest version, go on. If it is higher, or the output has another form, stop: this guide does not downgrade.", to: "5. `orch.cmd --version` runs only for an update; on a new install, go to step 6. It must print `orch ` and a version. If that version is the latest version from step 2, ORCH-os is already up to date: skip step 7. Otherwise go on." }],
+      /Windows 11: the version check tells the assistant to stop: expected false to be true/);
+  });
+
+  it("mutation_guide_update_install_gains_force", () => {
+    row(NODE_STEP,
+      [{ file: GUIDE, from: "`npm install --global orch-os@latest`", to: "`npm install --global --force orch-os@latest`" }],
+      /macOS: commands that add sudo, --force or a PATH edit: expected \[ .+ \] to deeply equal \[\]/);
   });
 
   it("mutation_guide_ends_with_init_instead_of_doctor", () => {
-    row("guide_has_two_command_groups_that_refuse_first_and_end_with_version_and_doctor",
-      [{ file: GUIDE, from: "8. `orch doctor` must end", to: "8. `orch init` must end" }],
-      /macOS: steps in order: expected \[ Array\(8\) \] to deeply equal \[ Array\(8\) \]/);
+    row(GROUPS,
+      [{ file: GUIDE, from: "10. `orch doctor` must end", to: "10. `orch init` must end" }],
+      /macOS: steps in order: expected \[ 'node', 'latest', 'installed', …\(7\) \] to deeply equal \[ 'node', 'latest', 'installed', …\(7\) \]/);
   });
 
   it.skipIf(process.platform === "win32")("mutation_guide_installed_check_restored_to_npm_ls", () => {
     row(INSTALLED_CHECK,
       [{
         file: GUIDE,
-        from: '2. `ls -d "$(npm root --global)/orch-os"` must fail with `No such file or directory` for a path that ends in `/node_modules/orch-os`. If it prints a directory, stop',
-        to: "2. `npm ls --global --depth=0` must not list an `orch-os` package. If it does, stop",
+        from: '3. `ls -d "$(npm root --global)/orch-os"` decides the case.',
+        to: "3. `npm ls --global --depth=0` decides the case.",
       }],
       /prefix with no lib directory: answer of the already-installed check: expected 'npm error code ENOENT \(exit 254\)' to be 'not installed'/);
   });
@@ -250,9 +272,9 @@ describe("DoctorInstallEntryMutations", () => {
   });
 
   it("mutation_windows_label_removed", () => {
-    row("guide_labels_every_windows_step_unverified",
-      [{ file: GUIDE, from: "**Unverified on Windows.** The steps in this group have not been run on a Windows machine. ", to: "" }],
-      /the Windows 11 group opens with the unverified label: expected false to be true/);
+    row("guide_labels_the_windows_group_with_what_was_run",
+      [{ file: GUIDE, from: "**Run on Windows Server 2022, not on Windows 11.** ", to: "" }],
+      /the Windows 11 group opens with the label that says what was run: expected false to be true/);
   });
 
   it("mutation_readme_sentence_points_at_another_file", () => {
