@@ -118,10 +118,16 @@ export class Disk {
             const wt = this.inspect(e.name, now);
             if (apply) {
               // Starts share this lock. Re-read identities, metadata, process and git evidence before removal.
+              const directory = ownership(o.root)[e.name]?.directory;
               this.inspect(e.name, now);
               const m = JSON.parse(readFileSync(join(row.path, 'worker.json'), 'utf8'));
               const r = this.git(m.worktree.repo, ['worktree', 'remove', '--', wt]);
               if (r.code !== 0) throw new Error('worktree removal refused');
+              const recorded = ownership(o.root)[e.name]?.directory;
+              if (!directory || !recorded || recorded.path !== directory.path || recorded.dev !== directory.dev ||
+                  recorded.ino !== directory.ino || recorded.birth !== directory.birth || !sameIdentity(directory)) {
+                throw new Error('unowned or replaced directory');
+              }
               rmSync(row.path, { recursive: true });
             }
             row.worktree = wt; row.action = apply ? 'DELETE' : 'WOULD_DELETE'; row.reason = 'eligible';

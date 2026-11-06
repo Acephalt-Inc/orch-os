@@ -50,6 +50,15 @@ it('refuses an owned stale worker under a configured root outside ORCH home', ()
     expect(existsSync(outside + '.maintenance.lock')).toBe(false);
   } finally { rmSync(outside, { recursive: true, force: true }); }
 });
+it('refuses cleanup through a symlinked configured worker root', () => {
+  const f = fixture();
+  const linked = join(f.home, 'linked-workers');
+  symlinkSync(f.root, linked, 'dir');
+  const result = new Disk({ ...f.options, root: linked }).tick();
+  expect(result).toMatchObject({ outcome: 'UNAVAILABLE', directories: [{ action: 'KEEP', reason: expect.stringContaining('linked') }] });
+  expect(existsSync(f.dir)).toBe(true);
+  expect(existsSync(f.wt.path)).toBe(true);
+});
 it('skips an owned stale worker whose worktree is outside the ORCH-home worktree area', () => {
   const outside = tmp('orch-outside-worktrees-');
   try {
@@ -85,6 +94,34 @@ it('cleans an owned stale worker under the default ORCH worker root', () => {
   const f = fixture();
   expect(f.run()).toMatchObject({ outcome: 'APPLIED', directories: [{ path: f.dir, action: 'DELETE' }] });
   expect(existsSync(f.dir)).toBe(false); expect(existsSync(f.wt.path)).toBe(false);
+});
+it('preserves a replacement worker directory swapped during Git removal', () => {
+  const f = fixture();
+  const runner = f.options.runner;
+  f.options.runner = (cmd, args) => {
+    const result = runner(cmd, args);
+    if (cmd === 'git' && args.includes('worktree') && args.includes('remove')) {
+      rmSync(f.dir, { recursive: true });
+      mkdirSync(f.dir);
+      writeFileSync(join(f.dir, 'valuable'), 'keep');
+    }
+    return result;
+  };
+  const result = f.run();
+  expect(result.directories[0]).toMatchObject({ action: 'KEEP', reason: expect.stringContaining('unowned or replaced directory') });
+  expect(readFileSync(join(f.dir, 'valuable'), 'utf8')).toBe('keep');
+});
+it('preserves worker directory when ownership marker disappears during Git removal', () => {
+  const f = fixture();
+  const runner = f.options.runner;
+  f.options.runner = (cmd, args) => {
+    const result = runner(cmd, args);
+    if (cmd === 'git' && args.includes('worktree') && args.includes('remove')) rmSync(join(f.root, '.ownership.json'));
+    return result;
+  };
+  const result = f.run();
+  expect(result.directories[0]).toMatchObject({ action: 'KEEP', reason: expect.stringContaining('unowned or replaced directory') });
+  expect(existsSync(f.dir)).toBe(true);
 });
 it('explicit preview writes nothing even when config mode is apply', () => {
   const f = fixture();

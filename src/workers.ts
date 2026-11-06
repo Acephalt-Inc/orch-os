@@ -223,7 +223,7 @@ export class Workers {
     } else if (opts.branch || opts.base) {
       throw new WorkerError("--branch and --base need --worktree");
     }
-    recordWorkerOwnership(this.root, name, created, wt);
+    recordWorkerOwnership(realpathSync(this.root), name, created, wt);
     let argv = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
     const to = which("timeout") ?? which("gtimeout");
     if (minutes > 0 && to) argv = [to, String(Math.trunc(minutes * 60)), ...argv];

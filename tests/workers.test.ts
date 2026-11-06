@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import * as C from "../src/config.js";
@@ -26,6 +26,17 @@ describe.skipIf(process.platform === "win32")("WorkersTest", () => {
     await sleep(200);
     expect(w.list()[0].state).toBe("STOPPED");
     expect(readFileSync(log, "utf8")).toContain("hello w1");
+  });
+
+  it("starts with a symlinked configured worker root", async () => {
+    const target = `${ctx.home}/real-workers`;
+    const linked = `${ctx.home}/linked-workers`;
+    mkdirSync(target);
+    symlinkSync(target, linked, "dir");
+    const w = new Workers(parseToml(C.renderDefault(ctx.home)), linked, `${ctx.home}/load.json`);
+    w.start("linked", { command: ["sleep", "30"], workdir: ctx.home, minutes: 0 });
+    expect(JSON.parse(readFileSync(`${target}/.ownership.json`, "utf8")).workers.linked.directory.path).toBe(`${target}/linked`);
+    expect(["TERMINATED", "KILLED"]).toContain((await w.stop("linked")).result);
   });
 
   it("test_high_load_blocks_start_unless_forced", async () => {
