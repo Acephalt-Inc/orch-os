@@ -18,6 +18,8 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { withLock } from "./lock.js";
+import { recordWorkerOwnership } from "./worker-ownership.js";
 import { configNumber } from "./config.js";
 import * as loadmod from "./load.js";
 import { dumps } from "./pyjson.js";
@@ -133,7 +135,7 @@ export class Workers {
     const repo = realOrResolve(top.out.trim());
     const root = this.worktreeRoot();
     mkdirSync(root, { recursive: true });
-    const path = `${realOrResolve(root)}/${name}`;
+    const path = resolve(realOrResolve(root), name);
     const br = branch || `${this.cfg.worktree_branch_prefix ?? "orch/"}${name}`;
     if (git(["check-ref-format", "--branch", br], repo).code !== 0) throw new WorkerError(`bad branch name '${br}'`);
     if (br.startsWith("-")) throw new WorkerError(`bad branch name '${br}'`);
@@ -141,9 +143,13 @@ export class Workers {
       throw new WorkerError(`--base ${base}: not a commit in ${repo}`);
     }
     const list = git(["worktree", "list", "--porcelain"], repo);
-    const registered = list.out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => realOrResolve(l.slice(9)));
     if (existsSync(path)) {
-      if (!registered.includes(path)) throw new WorkerError(`${path} exists but is not a worktree of ${repo}`);
+      // Git and the configured root may spell one directory differently (Windows short names, letter
+      // case): compare by the file system's own name for the directory, not by spelling.
+      const target = realpathSync.native(path);
+      const sameDirectory = (p: string) => { try { return realpathSync.native(p) === target; } catch { return false; } };
+      const registered = list.out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
+      if (!registered.some(sameDirectory)) throw new WorkerError(`${path} exists but is not a worktree of ${repo}`);
       const cur = git(["rev-parse", "--abbrev-ref", "HEAD"], path).out.trim();
       return { path, repo, branch: cur || null, created: false };
     }
@@ -204,6 +210,11 @@ export class Workers {
     if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new WorkerError(`workdir is not a directory: ${wd}`);
     const probe = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
     if (!which(probe[0])) throw new WorkerError(`worker command not found on PATH: ${probe[0]}`);
+    return withLock(this.root + ".maintenance.lock", () => {
+    const current = this.pid(name);
+    if (current && pidAlive(current)) throw new WorkerError(`worker ${name} already running (pid ${current})`);
+    if (current && groupAlive(current)) throw new WorkerError(`worker ${name}: processes of its last run are still running (group ${current})`);
+    const created = !existsSync(d);
     mkdirSync(d, { recursive: true });
     let wt: Worktree | null = null;
     if (opts.worktree) {
@@ -212,6 +223,7 @@ export class Workers {
     } else if (opts.branch || opts.base) {
       throw new WorkerError("--branch and --base need --worktree");
     }
+    recordWorkerOwnership(realpathSync(this.root), name, created, wt);
     let argv = tmpl.map((a) => String(a).replaceAll("{name}", name).replaceAll("{workdir}", wd));
     const to = which("timeout") ?? which("gtimeout");
     if (minutes > 0 && to) argv = [to, String(Math.trunc(minutes * 60)), ...argv];
@@ -248,6 +260,7 @@ export class Workers {
     if (wt) meta.worktree = wt;
     writeFileSync(`${d}/worker.json`, dumps(meta, 1));
     return meta;
+    }, { staleMs: Infinity });
   }
 
   list(): { name: string; pid: number | null; state: string }[] {

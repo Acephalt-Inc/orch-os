@@ -1,16 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli.js";
 import { Messages } from "../src/messages.js";
-import { useTmpHome } from "./_helpers.js";
+import { tmp, useTmpHome } from "./_helpers.js";
 
 const ctx = useTmpHome();
 async function run(argv: string[], platform: NodeJS.Platform = "darwin") {
   let out = "", err = "";
   const calls: unknown[] = [];
   const code = await main(argv, { out: (s) => { out += s; }, err: (s) => { err += s; }, stdin: () => "" }, {
-    platform, service: { userHome: join(ctx.home, "user"), uid: 42, user: "operator", runner: (cmd: string, args: string[]) => { calls.push([cmd, args]); return { code: 1, out: "", err: "not found" }; } },
+    platform, service: { diskFree: () => 1000, userHome: join(ctx.home, "user"), uid: 42, user: "operator", runner: (cmd: string, args: string[]) => { calls.push([cmd, args]); return { code: 1, out: "", err: "not found" }; } },
   } as never);
   return { code, out, err, calls };
 }
@@ -32,13 +32,13 @@ describe("service CLI", () => {
     expect(JSON.parse(r.out).reason).toBe("Scheduler is unavailable on this platform");
     expect(readdirSync(ctx.home)).toEqual([]); expect(r.calls).toEqual([]);
   });
-  it("honors job disabling and refuses the deferred disk job", async () => {
+  it("honors job disabling and includes the disk job", async () => {
     writeFileSync(join(ctx.home, "config.toml"), "[service]\nwake_watch = false\n");
     const r = await run(["service", "install"]);
     expect(r.code).toBe(0); expect(existsSync(join(ctx.home, "service"))).toBe(false);
     expect(JSON.parse(r.out).reason).toBe("Scheduler disabled");
     writeFileSync(join(ctx.home, "config.toml"), "[service]\ndisk = true\n");
-    expect((await run(["service", "install"])).out).toContain("UNAVAILABLE");
+    expect((await run(["service", "install", "--dry-run"])).out).toContain(".disk");
     expect((await run(["service", "status"])).out).toContain("STATUS");
     expect((await run(["service", "uninstall", "--dry-run"])).out).toContain("DRY_RUN");
     writeFileSync(join(ctx.home, "config.toml"), '[service]\nwake_watch = "false"\n');
@@ -86,4 +86,33 @@ it('reports DRY_RUN when only health is enabled', async () => {
   expect(JSON.parse(r.out).outcome).toBe('DRY_RUN');
   expect(JSON.parse(r.out).plans).toHaveLength(1);
   expect(readdirSync(ctx.home)).toEqual(['config.toml']);
+});
+
+it.each(["darwin", "win32"] as const)("runs disk in the scheduled home and supports a write-free preview on %s", async platform => {
+  const home = join(ctx.home, "scheduled"); mkdirSync(home);
+  writeFileSync(join(home, "config.toml"), '[service]\ndisk = true\ndisk_mode = "apply"\ndisk_floor_bytes = 1\ndisk_stale_days = 7\n');
+  const preview = await run(["service", "run", "disk", "--home", home, "--dry-run"], platform);
+  expect(preview.code).toBe(0); expect(JSON.parse(preview.out).outcome).toBe("DRY_RUN");
+  expect(readdirSync(home)).toEqual(["config.toml"]);
+  const result = await run(["service", "run", "disk", "--home", home], platform);
+  expect(result.code).toBe(platform === "win32" ? 1 : 0); expect(JSON.parse(result.out).low_disk).toBe(false);
+  if (platform === "win32") expect(JSON.parse(result.out).cleanup.outcome).toBe("UNAVAILABLE");
+  expect(existsSync(join(home, "wake", "events.log"))).toBe(true);
+  writeFileSync(join(home, "config.toml"), '[service]\ndisk_mode = "delete"\n');
+  expect((await run(["service", "run", "disk", "--home", home], platform)).code).toBe(2);
+});
+it('refuses a configured disk worker root outside the scheduled home', async () => {
+  const outside = tmp('orch-cli-outside-workers-');
+  try {
+    mkdirSync(join(outside, 'w'));
+    writeFileSync(join(ctx.home, 'config.toml'), `[workers]\nroot = ${JSON.stringify(outside)}\n[service]\ndisk_mode = "apply"\n`);
+    const result = await run(['service', 'run', 'disk', '--home', ctx.home]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out)).toMatchObject({ outcome: 'UNAVAILABLE', directories: [{ path: join(outside, 'w'), action: 'KEEP' }] });
+    expect(existsSync(join(outside, 'w'))).toBe(true);
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+});
+it.each(['health', 'wake-watch'])('rejects a preview for %s before any write', async job => {
+  const result = await run(['service', 'run', job, '--once', '--dry-run']);
+  expect(result.code).toBe(2); expect(readdirSync(ctx.home)).toEqual([]);
 });

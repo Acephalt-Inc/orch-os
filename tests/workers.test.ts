@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Internal-Use-1.0.0 OR LicenseRef-PolyForm-Noncommercial-1.0.0
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import * as C from "../src/config.js";
 import { parseToml } from "../src/toml.js";
@@ -15,6 +16,7 @@ describe.skipIf(process.platform === "win32")("WorkersTest", () => {
   it("test_start_list_stop", async () => {
     const w = workers();
     w.start("w1", { command: ["sh", "-c", "echo hello {name}; sleep 30"], workdir: ctx.home, minutes: 1 });
+    expect(JSON.parse(readFileSync(`${ctx.home}/workers/.ownership.json`, "utf8")).workers.w1.directory.path).toBe(`${ctx.home}/workers/w1`);
     expect(w.list()[0].state).toBe("RUNNING");
     const log = `${ctx.home}/workers/w1/stdout.log`;
     await waitFor(() => readFileSync(log, "utf8").includes("hello"));
@@ -24,6 +26,17 @@ describe.skipIf(process.platform === "win32")("WorkersTest", () => {
     await sleep(200);
     expect(w.list()[0].state).toBe("STOPPED");
     expect(readFileSync(log, "utf8")).toContain("hello w1");
+  });
+
+  it("starts with a symlinked configured worker root", async () => {
+    const target = `${ctx.home}/real-workers`;
+    const linked = `${ctx.home}/linked-workers`;
+    mkdirSync(target);
+    symlinkSync(target, linked, "dir");
+    const w = new Workers(parseToml(C.renderDefault(ctx.home)), linked, `${ctx.home}/load.json`);
+    w.start("linked", { command: ["sleep", "30"], workdir: ctx.home, minutes: 0 });
+    expect(JSON.parse(readFileSync(`${target}/.ownership.json`, "utf8")).workers.linked.directory.path).toBe(`${target}/linked`);
+    expect(["TERMINATED", "KILLED"]).toContain((await w.stop("linked")).result);
   });
 
   it("test_high_load_blocks_start_unless_forced", async () => {
@@ -241,5 +254,25 @@ describe.skipIf(process.platform === "win32")("WorktreeV2", () => {
     const r = await w.stop("w10", 5000, true);
     expect(r.worktree).toContain("--keep-worktree");
     expect(existsSync(`${root}/w10`)).toBe(true);
+  });
+});
+
+// Git and the configured root can spell one directory differently (Windows short names, letter case on
+// case-insensitive file systems); the reuse check must compare the directory, not the spelling.
+const caseInsensitive = existsSync(tmpdir().toUpperCase()) && existsSync(tmpdir().toLowerCase());
+describe.runIf(caseInsensitive)("WorktreeSpelling", () => {
+  const ctx = useTmpHome();
+  it("an_existing_worktree_is_attached_when_the_root_is_spelled_differently", () => {
+    const repo = `${ctx.home}/repo`;
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "trunk");
+    writeFileSync(`${repo}/a.txt`, "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "first");
+    mkdirSync(`${ctx.home}/worktrees`);
+    git(repo, "worktree", "add", "-q", "-b", "mine", `${ctx.home}/worktrees/w3`);
+    const w = new Workers({ workers: { worktree_root: `${ctx.home}/WORKTREES` } }, `${ctx.home}/workers`, `${ctx.home}/load.json`);
+    expect(w.prepareWorktree("w3", repo)).toMatchObject({ created: false, branch: "mine" });
+    expect(git(repo, "worktree", "list")).not.toContain("orch/w3");
   });
 });

@@ -39,7 +39,7 @@ Quick start after installing: `orch setup` — [set up Claude Code in one comman
 On Windows, install, init, doctor, memory, tasks, messages, agent discovery, and profiles work in PowerShell and cmd without a POSIX shell. Windows support for workers and review watch is not available yet; until then `worker start`, `worker stop`, and `review watch` refuse with one clear message. See [docs/windows.md](docs/windows.md).
 
 Install the 16 [daily and operator skills](skills/README.md) for Claude Code with `orch skills install --host claude --scope workspace` (or `--scope user`); inspect or remove them with `orch skills status` and `orch skills uninstall` using the same scope. See the [skills command reference](docs/commands.md#orch-skills).
-Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher and optional health checks on macOS or Windows and inspect their scheduler state.
+Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher and optional health and daily disk checks on macOS or Windows and inspect their scheduler state.
 Use [`orch awake`](docs/commands.md#orch-awake) to prevent idle system sleep until a deadline.
 
 ## Why ORCH-os
