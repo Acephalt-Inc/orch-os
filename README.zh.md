@@ -38,6 +38,10 @@ npm install --global orch-os@latest
 
 在 Windows 上，安装、初始化、诊断、记忆、任务、消息、代理发现和配置档案均可在 PowerShell 与 cmd 中运行，无需 POSIX shell。Windows 的工作进程和审查监视支持尚未提供；在此之前，`worker start`、`worker stop` 和 `review watch` 会用一条清晰消息拒绝运行。详见 [docs/windows.md](docs/windows.md)。
 
+## 在普通文件夹中使用
+
+运行 `orch init --simple`，即可在不使用 Git 的文件夹里建立共享笔记、任务、消息和一本简明手册；随后运行 `orch doctor` 检查。`orch init --everyday` 只提示如何添加日常技能包；安装技能包请使用 `--with-skills`。
+
 ## 为什么选择 ORCH-os
 
 一个编码代理只需要一段提示词。一组代理需要一个运行层：有人负责，每项工作只有一个归属者，消息能送达并得到回复，合并要等作者以外的人评审，笔记在会话结束后仍然保留。ORCH-os 用一组操作本地纯文件的命令提供这一层。代理账号由你提供，最终是否接受和合并由你决定。

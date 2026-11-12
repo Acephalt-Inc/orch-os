@@ -42,6 +42,20 @@ Install the 16 [daily and operator skills](skills/README.md) for Claude Code wit
 Use [`orch service`](docs/commands.md#orch-service) to install a per-user wake watcher and optional health and daily disk checks on macOS or Windows and inspect their scheduler state.
 Use [`orch awake`](docs/commands.md#orch-awake) to prevent idle system sleep until a deadline.
 
+## Install with Claude Code
+
+This sets up shared notes, tasks, messages and one simple handbook in the current folder.
+
+```text
+Set up ORCH-os in simple mode in this folder. Run the steps in order and show me the output of each.
+1. Run `node --version`. If the command is missing or the version is below 22, stop and tell me to install Node.js 22 or newer from nodejs.org.
+2. Run `npm install -g orch-os`. If it fails, stop and show me the error line. Do not use sudo or an administrator shell.
+3. Run `orch init --simple`, then `orch doctor`. If either prints `orch: error`, stop and show me that line.
+4. If the last line is `doctor: PASS (0 required check(s) failed)`, show me that line, then read the file named on the `handbook:` line and follow it. If not, show me every line that starts with `FAIL` and stop.
+```
+
+State lives under `~/.orch` (or `$ORCH_HOME`) and is shared by every folder of that user.
+
 ## Why ORCH-os
 
 The lead pack describes how Claude Code boots, arms its watcher and timer, and checks approved work while you are away. `orch lead boot` saves its place; `orch lead tick --approved` inspects events; an approved dispatch can launch another task after the previous completion is verified and consumed. Host wake must be verified in your session. See the [boot → wake → tick guide](docs/lead-runtime.md).
